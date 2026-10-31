@@ -52,7 +52,7 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 ## Gates (every PR)
 
 Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
+One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
 
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, `pnpm lint` (or the repo's lint), with no new failures against main.
 2. `review-loop`: DeepSeek and Muse in parallel, then Astra consolidates; Claude takes the final call, Sol fixes once, Claude verifies and approves. Decline nits with a reason.

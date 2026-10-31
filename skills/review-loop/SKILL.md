@@ -13,7 +13,7 @@ triaged.
 ## The sequence
 
 Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
+One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
 
 1. **Panel.** DeepSeek and Muse (`review panel`) review the change in
    parallel, each as its own subagent. Their findings do not go to Sol.
@@ -39,10 +39,12 @@ In a plan: `cm brief <n> <r>` prints the panel briefs and where to save each
 reply; `cm brief <n> <r> gate-after-panel` builds Astra's brief from them;
 `cm review <n> <r>` records the round and applies the gates.
 
-"deep review" is the orchestrator's call for risky changes (auth, permissions,
-payments, data loss, concurrency, migrations) or a fix that changed behavior
-beyond its finding: a second parallel round on the fixed change. "sol loop":
-Sol reviews alone, up to 3 rounds. A model or round count the user names wins.
+One round only: DeepSeek and Muse in parallel, Astra consolidates once, Sol
+fixes once, the orchestrator verifies every fix itself (rerun tests, read the
+diff) and approves. No second panel round, even for risky changes: the user
+found two rounds too slow (2026-10-31). For risky areas the orchestrator reruns
+the critical tests itself before approving. "sol loop": Sol reviews alone, up to
+3 rounds. A model or round count the user names wins.
 
 ## Rules
 

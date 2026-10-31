@@ -124,7 +124,7 @@ own `--port`). Without it, `cm` uses whichever plan was initialised last.
 ### 3. Each PR item
 
 Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
+One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
 
 Work phase by phase. Inside a phase, PRs that touch disjoint files can run in
 parallel, each in its own worktree. Never switch the main checkout's branch.
@@ -154,8 +154,8 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
      the final call; `cm implement <n> <findings.md>` writes Sol's brief, Sol
      runs as a subagent, then `cm implemented <n>`; the orchestrator verifies
      each fix; `cm approve <n> <ledger.md>`.
-   - Deep review (risky areas, orchestrator's call): `cm review <n> 2` on the
-     fixed change before approving.
+   - No second review round: for risky areas the orchestrator reruns the
+     critical tests itself before approving.
    If Astra returns an exact `VERDICT: APPROVE` with no blocker or should,
    that is the approval itself, while the change stays unchanged. After
    fixes, `cm approve` requires that round and a complete resolution ledger.
