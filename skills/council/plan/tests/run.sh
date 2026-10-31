@@ -505,17 +505,72 @@ expect 0 ship 1
 [ "$(cat "$S/state/pr1")" = 'merged #1' ]
 [ "$(cat "$S/state/pr1.head")" = "$(git --git-dir="$T/origin.git" rev-parse 'refs/heads/council/repo-plan-1')" ]
 echo 'ok extra: verdict, untracked hash, proof binding and complete local ship'
+# One-off (adhoc) plan: the full-send path, with the parallel review round.
+unset COUNCIL_STATE
+bash "$CM" init --adhoc --repo "$T/repo" --gh test/repo --gate true --bot-review '' >/dev/null
+export COUNCIL_PLAN=repo-adhoc
+A=$(bash "$CM" path)
+[ "$(basename "$A")" = repo-adhoc ]
+python3 - "$A/config.json" <<'PYCODE'
+import json,sys
+c=json.load(open(sys.argv[1])); assert c['adhoc'] is True and c['planFile'].endswith('adhoc-plan.md')
+PYCODE
+expect 1 new 1
+printf 'Fix the file\nChange file once.\n' > "$T/task.md"
+expect 0 new 1 "$T/task.md"
+grep -q '^### \[ \] PR 1 — Fix the file$' "$A/adhoc-plan.md"
+AW=$(python3 - "$A/config.json" <<'PY'
+import json,sys
+c=json.load(open(sys.argv[1])); print(c['worktrees']+'/'+c['slug']+'-1')
+PY
+)
+echo adhoc-change >> "$AW/file"
+echo 'report' > "$A/runs/pr1.report"
+# All three in parallel: one dissenting panel member blocks approval but the gate verdict is recorded.
+export FAKE_OUTPUT='VERDICT: APPROVE' FAKE_DISSENT=1
+expect 0 review 1 1
+[ ! -e "$A/state/pr1.approval" ]
+read -r _ _ verdict < "$A/state/pr1.gate"; [ "$verdict" = CHANGES ]
+for job in pr1-rev1-gate pr1-rev1-0-fake-panel-a pr1-rev1-1-fake-panel-b; do [ -s "$A/runs/$job.out" ]; done
+unset FAKE_DISSENT
+# All three approve cleanly: the round itself is the approval.
+expect 0 review 1 2
+read -r _ reviewer _ < "$A/state/pr1.approval"; [ "$reviewer" = fake-reviewer ]
+# A finding from any member of the parallel round needs a ledger line before orchestrator approval.
+export FAKE_OUTPUT=$'VERDICT: CHANGES\nS1 [should] file:1 parallel bug'
+expect 0 review 1 3
+echo adhoc-fix >> "$AW/file"
+echo 'pr1-rev3-gate:S1 fixed: verified' > "$T/adhoc-ledger.md"
+expect 12 approve 1 "$T/adhoc-ledger.md"
+printf 'pr1-rev3-gate:S1 fixed: verified\npr1-rev3-0-fake-panel-a:S1 fixed: same bug\npr1-rev3-1-fake-panel-b:S1 declined: duplicate\n' > "$T/adhoc-ledger.md"
+expect 0 approve 1 "$T/adhoc-ledger.md"
+echo adhoc-proof > "$A/runs/pr1.proof"
+expect 0 verify 1
+echo 'fix: adhoc' > "$A/runs/pr1.title"; echo 'adhoc body' > "$A/runs/pr1.body"
+expect 0 ship --no-merge 1
+[ "$(cat "$A/state/pr1")" = 'ready #1' ]
+[ -d "$AW" ]
+git --git-dir="$T/origin.git" log -1 --format=%B refs/heads/council/repo-adhoc-1 | grep -q '^One-off PR 1\.$'
+echo 'ok: adhoc plan, parallel review round, orchestrator ledger and ship --no-merge'
+# pstack's model rule is generated from models.md with every pstack role.
+python3 "$(dirname "$CM")/pstack_models.py" "$(dirname "$CM")/../../../models.md" "$T/pstack-models.md"
+for role in 'feature, refactoring' bug-fix perf-issue hillclimb 'judgment and prose' 'hardest tasks' 'how explorer' 'why investigators' 'reflect tooling' 'how explainer' 'why synthesizer' 'reflect judgment, divergent, synthesizer' 'arena runners' 'arena cross-judge pool' 'architect runners' 'interrogate reviewers' 'swarm workers'; do
+  grep -q "^$role: " "$T/pstack-models.md" || { echo "FAIL: pstack role $role missing"; exit 1; }
+done
+echo 'ok: pstack model rule generated from models.md covers every pstack role'
+unset COUNCIL_PLAN
+export COUNCIL_STATE=$S
 python3 - "$(dirname "$CM")" <<'PYCODE'
 from pathlib import Path
 import sys
 plan=Path(sys.argv[1])
-policy=('Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.',
-        '"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.')
+policy=('Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.',
+        '"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.')
 for path in (plan/'cm.sh', plan.parent/'SKILL.md',
              plan.parent.parent/'review-loop/SKILL.md', plan.parent.parent/'sid-mode/SKILL.md'):
     text=path.read_text()
     assert all(line in text for line in policy), path
     assert 'Stop early only if a round returns nothing but nits.' not in text, path
 PYCODE
-echo 'ok: review instructions agree on default, light review and sol loop rounds'
+echo 'ok: review instructions agree on the parallel round, deep review and sol loop'
 echo 'All plan-runner tests passed.'

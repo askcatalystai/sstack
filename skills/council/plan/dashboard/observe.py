@@ -153,7 +153,7 @@ def transcript_path():
 def collect():
     transcript = transcript_path()
     session_id = transcript.stem
-    phases, items = parse_plan((REPO/PLAN).read_text())
+    phases, items = parse_plan(Path(CONFIG.get('planFile') or REPO/PLAN).read_text())
     # Phase worktrees tick the plan only when a phase finishes; their own status is fresher.
     pipe = pipeline_state()
     for item in items:

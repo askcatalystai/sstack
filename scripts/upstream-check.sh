@@ -26,6 +26,6 @@ report() {
     fi
   done
 }
-report tstack https://github.com/t3dotgg/tstack 10b2bf0
+report tstack https://github.com/t3dotgg/tstack 7de017b
 report pstack https://github.com/cursor/plugins 4dd1d05
 exit 0

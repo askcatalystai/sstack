@@ -25,6 +25,8 @@ for dir in "$HOME/.claude/skills" "$HOME/.claude_2/skills" "$HOME/.codex/skills"
 done
 for dir in "$HOME/.claude/rules" "$HOME/.claude_2/rules"; do
   mkdir -p "$dir"; ln -sfn "$S/models.md" "$dir/sidstack-models.md"
+  # pstack reads its per-role models from this rule; generate it so models.md stays the one source.
+  python3 "$S/skills/council/plan/pstack_models.py" "$S/models.md" "$dir/pstack-models.md"
 done
 for dir in "$HOME/.claude/agents" "$HOME/.claude_2/agents" "$HOME/.config/opencode/agents"; do
   mkdir -p "$dir"; [ -d "$P/agents" ] && for a in "$P"/agents/*.md; do ln -sfn "$a" "$dir/$(basename "$a")"; done

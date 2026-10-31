@@ -1,42 +1,42 @@
 ---
 name: review-loop
-description: Review a change in a fixed sequence (DeepSeek and Muse twice, Astra once), then Sol fixes everything once, before the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
+description: Review a change in one parallel round (Astra, DeepSeek, Muse); Claude takes the final call, Sol fixes once, Claude approves, then the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
 ---
 
 # review-loop
 
 Make your change more correct before filing a PR. Models come from
-`~/.local/share/sidstack/models.md`. Reviews come first; Sol changes nothing
-until Astra has reviewed.
+`~/.local/share/sidstack/models.md`. Reviews come first; Sol changes nothing until
+the round is in and Claude has triaged it.
 
 ## The sequence
 
-Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
-"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 
-1. **Panel round 1**: DeepSeek and Muse (`review panel`), in parallel, full
-   review of the change.
-2. **Panel round 2**: DeepSeek and Muse again, in parallel, on the same code
-   plus the combined round-1 ledger. Each one confirms or rejects every finding
-   (with evidence) and adds what both missed. No code changes between rounds.
-3. **Astra** (`reviewer`, low), **one pass**, on the change plus the checked
-   ledger. This is the gate: it gives the verdict and its own findings.
-4. **Sol fixes once**, through the orchestrator: every accepted blocker and
-   should from all three reviewers in one brief. The orchestrator declines nits
-   and findings it disproved, with a reason in the ledger.
-5. **The orchestrator verifies every fix** against the ledger (diff, checks,
-   a focused test where the finding needs one) and records the approval for the
-   fixed change. Astra does not run again unless a fix changed behavior beyond
-   its finding.
-6. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
-   `babysit-pr` / `cm.sh bot-review` handle its findings the same way.
+1. **One parallel round.** Astra (`reviewer`, low), DeepSeek and Muse
+   (`review panel`) review the same change at the same time. In a council plan:
+   `cm review <n> 1` (mode `all`). A panel member that times out is noted, not
+   waited on; Astra failing stops the round.
+2. **The orchestrator takes the final call.** Claude (Opus) reads every
+   finding, checks it against the code, and keeps a ledger: each blocker and
+   should is accepted, or declined with a reason. Claude also reviews the diff
+   itself for slop: dead code, needless guards, comments that restate code,
+   names that lie, anything a reviewer missed.
+3. **Sol fixes once**: every accepted finding in one brief.
+4. **The orchestrator verifies each fix** (diff, checks, a focused test where
+   the finding needs one) and records the approval for the fixed change
+   (`cm approve <n> <ledger.md>` in a plan).
+5. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
+   `babysit-pr` / `cm bot-review` handle its findings the same way.
 
-If Astra approves with no blocker or should open, step 4 is skipped and the
-approval stands as is.
+If all three approve with no blocker or should, the round itself is the
+approval and steps 3 and 4 are skipped.
 
-"light review" (the user's words, routine changes): panel round 1 only, then
-Astra, then Sol once. "sol loop": Sol reviews alone, up to 3 rounds. A model or
-round count the user names for the run wins.
+"deep review" is the orchestrator's call for risky changes (auth, permissions,
+payments, data loss, concurrency, migrations) or a fix that changed behavior
+beyond its finding: a second parallel round on the fixed change. "sol loop":
+Sol reviews alone, up to 3 rounds. A model or round count the user names wins.
 
 ## Rules
 
@@ -46,7 +46,6 @@ round count the user names for the run wins.
   secrets or customer data (Muse trains on requests).
 - A panel member that times out or errors is noted in the ledger and the
   sequence continues; it is not waited on again.
-- Stop early (skip to Astra) only if round 1 returns nothing but nits.
 - Reviewers must not start subagents or reviewers.
 - Keep one ledger across all rounds: id, source (DeepSeek/Muse/Astra/bot),
   round, severity, outcome. Never guess usage.

@@ -49,25 +49,33 @@ for the session wins.
 
 ## Steps
 
-1. **Finish the change.** Complete the goal from the user's request with the
-   smallest change that works. Fix the case that happened, not every case
-   that could. Work in a worktree on a new branch; never switch the main
-   checkout's branch.
-2. **Prove it.** Get proof for every change you made. See "Proof".
-3. **Get feedback.** Use the `review-loop` skill (the configured reviewer).
-   Then run the deploy gate if the repo has one (`cm.sh gate check`, or the
-   commands the deploy runs).
-4. **File the PR** with the `file-pr` skill. Rebase onto the latest default
-   branch first. Add one short line to the description that says how you proved
-   the change.
-5. **Babysit the PR** with the `babysit-pr` skill. Fix real findings and CI
-   failures. Get proof for each fix before you push it.
-6. **Merge** when the merge gate passes.
-7. **Clean up.** Delete the PR's worktree and local branch.
-8. **Report** in your final message: the PR link, the merge commit, your proof,
+Every full send runs through the plan runner, so the gates are enforced in
+code. `cm` is `~/.local/share/sidstack/skills/council/plan/cm.sh`; the one-off
+plan is `<repo>-adhoc` (create it once with `cm init --adhoc --repo <dir>
+--gate '<the commands the deploy runs>'`), and every call below is
+`COUNCIL_PLAN=<repo>-adhoc cm ...`. Pick the next free PR number from
+`cm status`.
+
+1. **Brief.** Write `task.md`: the user's goal in their words, the smallest
+   change that meets it, and the acceptance check. `cm new <n> task.md`.
+2. **Code.** `cm implement <n>` (Sol). For a trivial change Claude may edit the
+   worktree itself instead.
+3. **Review.** `cm review <n> 1`: Astra, DeepSeek and Muse in one parallel round
+   (see `review-loop`). Claude triages every finding and takes the final call,
+   then `cm implement <n> findings.md` once and verifies each fix, then
+   `cm approve <n> ledger.md`. Skip the fix pass if all three approved cleanly.
+4. **Prove it.** Run the real thing (see "Proof") and write
+   `runs/pr<n>.proof`; `cm verify <n>`.
+5. **Ship.** Write `runs/pr<n>.title` and `runs/pr<n>.body` (`file-pr` style;
+   one line on how you proved it). `cm ship <n>`: commit, lease push, deploy
+   gate, PR, PR-bot review, gate again on the latest base, squash-merge,
+   worktree removed. Exit codes tell you what to fix (see `council`).
+6. **Fix bot findings** the same way: Claude triages, Sol fixes once, Claude
+   verifies, `cm approve`, `cm verify`, `cm ship <n>` again.
+7. **Report** in your final message: the PR link, the merge commit, your proof,
    and each decision you made for the user.
 
-Stay active from step 1 to step 8. If you end your turn while checks or bots are
+Stay active from step 1 to step 7. If you end your turn while checks or bots are
 pending, the work stops, because nobody will prompt you again. Wait with the
 watcher from `babysit-pr`, so something wakes you when the PR changes. In T3
 Code that is `watch_pull_request`. If you stop before the merge, call

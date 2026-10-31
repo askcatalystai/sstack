@@ -25,7 +25,7 @@ def record(state, kind, round_number, paths):
 def validate(state, gate_round, ledger):
     history = json.loads(state.read_text()) if state.exists() else []
     gate = next((i for i in range(len(history)-1, -1, -1)
-                 if history[i]['kind'] == 'gate' and history[i]['round'] == gate_round), None)
+                 if history[i]['kind'] in ('gate', 'all') and history[i]['round'] == gate_round), None)
     if gate is None or any(r['kind'] == 'panel' for r in history[gate+1:]):
         raise ValueError('a gate round must run after the latest panel round')
     resolutions = set(re.findall(

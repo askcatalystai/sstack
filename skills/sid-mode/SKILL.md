@@ -16,7 +16,7 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 - **Claude (orchestrator)** reads, plans, briefs, reviews every diff line by line, runs the checks, tests in the real app, files and merges PRs, and reports. Claude doesn't take a subagent's summary on trust: read the diff, rerun the checks outside the subagent's sandbox.
 - **Implementer** (Sol) writes the code, one PR per brief, in its own worktree. Never commits or pushes.
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
-- **Reviews** run through `review-loop` in a fixed order: DeepSeek and Muse two rounds each (in parallel; round 2 cross-checks round 1), then Astra (low) once as the gate. Sol changes nothing until Astra has reviewed, then fixes all accepted findings in one pass; the orchestrator verifies each fix.
+- **Reviews** run through `review-loop`: one parallel round of Astra (low), DeepSeek and Muse. Claude takes the final call on every finding and on slop, Sol fixes all accepted findings once, Claude verifies each fix and approves.
 - **PR bot** (Codex GitHub bot) reviews every PR. Merge waits for its review of the head commit.
 - **Council** (four seats) for plans, contested designs and UX reviews, through `council`.
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it in memory if it's lasting.
@@ -40,7 +40,7 @@ From sidstack (these replace pstack's babysit, shipping, autopilot, orchestrate 
 
 - **Ship one change**: `full-send` (merge) or `full-stop` (stop at ready).
 - **Plan to completion**: `council` ("council plan"). Research with the council, write the plan from `skills/council/plan/todo-template.md`, then work it with `cm.sh` and the progress board.
-- **Review a diff**: `review-loop` (Astra by default; "sol loop" still works and uses Sol).
+- **Review a diff**: `review-loop` (one parallel round; "sol loop" uses Sol alone).
 - **PRs**: `file-pr`, `babysit-pr`, `leaving-pr-comments`.
 - **Someone else's work**: `takeover`; **old PR**: `modernize`.
 - **Session pickup**: read the prior transcript (`~/.claude/projects/` and `~/.claude_2/projects/`), the plan file, the board state and the worktrees before acting. Treat the handoff as context, not proof.
@@ -50,11 +50,11 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 
 ## Gates (every PR)
 
-Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
-"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, `pnpm lint` (or the repo's lint), with no new failures against main.
-2. `review-loop`: DeepSeek ×2 and Muse ×2, then Astra ×1, then Sol fixes once; the orchestrator verifies each fix and records the approval. Decline nits with a reason. Light review (when the user asks): one panel round, Astra, Sol once.
+2. `review-loop`: Astra, DeepSeek and Muse in one parallel round; Claude takes the final call, Sol fixes once, Claude verifies and approves. Decline nits with a reason.
 3. Behavioural verification before the PR: run covering tests with pass counts; for UI, run the app in a browser and save a screenshot. Green mocked tests alone are not proof. Write `runs/pr<n>.proof`, then `cm verify <n>` to bind it to the current change. Edits require fresh gate approval and verification.
 4. The deploy gate: main plus the branch, fresh install, lint, typecheck, and the builds the deploy runs (`cm.sh gate check`).
 5. Open the PR (`file-pr`), wait for the PR bot (`cm.sh bot-review`), fix real P0/P1 and real P2 bugs, resolve the rest with a reason.

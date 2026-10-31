@@ -4,16 +4,20 @@
 #   cm.sh init <plan.md> [--repo DIR] [--gh owner/repo] [--title T] [--gate-dir DIR] [--gate "CMDS"]
 #                        [--reviewer MODEL] [--implementer MODEL|claude] [--effort LEVEL] [--implementer-effort LEVEL] [--reviewer-effort LEVEL] [--trailer "Co-Authored-By: ..."] [--port N]
 #                        [--bot-review LOGIN] [--bot-timeout SECONDS]
+#   cm.sh init --adhoc --repo DIR [--gh owner/repo] [--title T] [--gate "CMDS"] [--port N]
+#                                      one-off PRs without a plan file (slug <repo>-adhoc); full send / full stop use it
 #   cm.sh use <slug>                   make another initialised plan current
-#   cm.sh new <n>                      worktree + branch for plan PR <n>, from origin/<default>
+#   cm.sh new <n> [task.md]            worktree + branch for PR <n>, from origin/<default>; adhoc plans need task.md
 #   cm.sh implement <n> [extra.md...]    Codex implementer (config implementer) writes the change in the worktree
 #   cm.sh stop <n> [reason]            mark a PR stopped (not active) and close its running jobs
 #   cm.sh adopt <n>                   explicitly take over the current origin branch SHA
 #   cm.sh verify <n>                  bind runs/pr<n>.proof to the current change
 #   cm.sh stop-job <id>               stop one job process group
-#   cm.sh review <n> <round> [panel|gate]           read-only review of the uncommitted change (needs runs/pr<n>.report);
+#   cm.sh review <n> <round> [all|panel|gate]  read-only review of the uncommitted change (needs runs/pr<n>.report);
+#                                      all (default): gate reviewer and every panel member in parallel, one round
 #   cm.sh approve <n> <ledger.md>      bind orchestrator resolutions to the fixed change
-#   cm.sh ship <n>                     commit, push, gate, open the PR, gate again, merge, remove the worktree
+#   cm.sh ship [--no-merge] <n>        commit, push, gate, open the PR, bot review, gate again, merge, remove the worktree
+#                                      (--no-merge stops after a clean bot review with state "ready")
 #                                      (needs runs/pr<n>.title and runs/pr<n>.body)
 #   cm.sh bot-review <pr> [head-sha]   wait for the GitHub review bot (config botReview) to finish on the head commit;
 #                                      exit 0 clean, 6 unresolved findings (printed), 7 failed or timed out
@@ -24,8 +28,8 @@
 #
 # With more than one plan, name yours on every call: COUNCIL_PLAN=<slug> cm.sh <command> (slug: printed by init).
 # State lives in ~/.local/state/council/<slug>/ (current plan: ~/.local/state/council/current).
-# Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
-# "light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+# Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+# "deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 # Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification, 11 unowned branch, 12 incomplete resolution ledger or missing gate round.
 # Gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused, 9 head moved.
 set -u
@@ -36,8 +40,12 @@ die() { echo "cm: $*" >&2; exit 1; }
 cmd=${1:-}; shift || true
 
 if [ "$cmd" = init ]; then
-  plan=${1:?plan file}; shift
-  repo=$(git -C "$(dirname "$(readlink -f "$plan")")" rev-parse --show-toplevel) || die "plan is not in a git repo"
+  adhoc=false
+  if [ "${1:-}" = --adhoc ]; then adhoc=true; plan=""; repo=""; shift
+  else
+    plan=${1:?plan file}; shift
+    repo=$(git -C "$(dirname "$(readlink -f "$plan")")" rev-parse --show-toplevel) || die "plan is not in a git repo"
+  fi
   models=$(python3 "$SKILL/models.py" "${SIDSTACK_MODELS:-$HOME/.local/share/sidstack/models.md}") || die "cannot read models.md"
   model_field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]][0][sys.argv[3]])' "$models" "$1" "$2"; }
   # Defaults follow ~/.local/share/sidstack/models.md: Sol implements, Astra reviews, the Codex GitHub bot gates merges.
@@ -52,19 +60,31 @@ if [ "$cmd" = init ]; then
   rev_effort=${rev_effort:-${effort:-$(model_field reviewer effort)}}
   [ -n "$gh" ] || gh=$(cd "$repo" && gh repo view --json nameWithOwner -q .nameWithOwner) || die "pass --gh owner/repo"
   [ -n "$gate" ] || die "pass --gate with the commands the deploy runs (install, typecheck, builds)"
-  relplan=$(realpath --relative-to="$repo" "$plan")
-  slug=$(basename "$repo")-$(basename "$relplan" .md | tr 'A-Z_ ' 'a-z--')
+  if [ "$adhoc" = true ]; then
+    [ -n "$repo" ] || die "--adhoc needs --repo DIR"
+    repo=$(git -C "$repo" rev-parse --show-toplevel) || die "--repo is not a git repo"
+    # A repo path that never exists keeps the plan exclusions harmless; the board reads planFile.
+    relplan=.sidstack-adhoc-plan.md; slug=$(basename "$repo")-adhoc
+  else
+    relplan=$(realpath --relative-to="$repo" "$plan")
+    slug=$(basename "$repo")-$(basename "$relplan" .md | tr 'A-Z_ ' 'a-z--')
+  fi
   S=$ROOT/$slug; mkdir -p "$S/runs" "$S/state" "$S/dashboard"
+  plan_file=""
+  if [ "$adhoc" = true ]; then
+    plan_file=$S/adhoc-plan.md
+    [ -s "$plan_file" ] || printf '# %s one-off PRs\n\n## Phase 1 — One-off\n\n' "${title:-$(basename "$repo")}" > "$plan_file"
+  fi
   base=$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||'); base=${base:-main}
-  python3 - "$S/config.json" "$repo" "$gh" "$relplan" "$title" "$base" "$slug" "$gate_dir" "$gate" "$reviewer" "$implementer" "$effort" "$trailer" "$port" "$impl_effort" "$rev_effort" "$bot" "$bot_timeout" "$models" "$pinned" <<'EOF'
+  python3 - "$S/config.json" "$repo" "$gh" "$relplan" "$title" "$base" "$slug" "$gate_dir" "$gate" "$reviewer" "$implementer" "$effort" "$trailer" "$port" "$impl_effort" "$rev_effort" "$bot" "$bot_timeout" "$models" "$pinned" "$plan_file" <<'EOF'
 import json,os,sys
-out,repo,gh,plan,title,base,slug,gate_dir,gate,reviewer,implementer,effort,trailer,port,impl_effort,rev_effort,bot,bot_timeout,models,pinned=sys.argv[1:]
+out,repo,gh,plan,title,base,slug,gate_dir,gate,reviewer,implementer,effort,trailer,port,impl_effort,rev_effort,bot,bot_timeout,models,pinned,plan_file=sys.argv[1:]
 models=json.loads(models)
 old=json.load(open(out)) if os.path.exists(out) else {}
 json.dump({"repo":repo,"gh":gh,"plan":plan,"title":title or None,"base":base,"slug":slug,
   "worktrees":os.path.join(os.path.dirname(repo),os.path.basename(repo)+"-wt"),"gateDir":gate_dir,"gate":gate,
   "modelsPinned":pinned == "true","reviewerProvider":models["reviewer"][0]["provider"],"implementerProvider":models["implementer"][0]["provider"],"reviewPanel":models["review panel"],"hardestTasks":models["hardest tasks"][0],
-  "reviewer":reviewer,"implementer":implementer,"effort":effort,**({"implementerEffort":impl_effort} if impl_effort else {}),**({"reviewerEffort":rev_effort} if rev_effort else {}),"trailer":trailer,"port":int(port),"botReview":bot or None,"botTimeout":int(bot_timeout),"transcript":old.get("transcript")},open(out,"w"),indent=1)
+  "reviewer":reviewer,"implementer":implementer,"effort":effort,**({"implementerEffort":impl_effort} if impl_effort else {}),**({"reviewerEffort":rev_effort} if rev_effort else {}),"trailer":trailer,"port":int(port),"botReview":bot or None,"botTimeout":int(bot_timeout),"transcript":old.get("transcript"),**({"planFile":plan_file,"adhoc":True} if plan_file else {})},open(out,"w"),indent=1)
 EOF
   ln -sfn "$S" "$ROOT/current"
   echo "initialised $slug -> $S"; exit 0
@@ -214,7 +234,16 @@ case $cmd in
 path) echo "$S";;
 
 new)
-  n=${1:?plan PR number}; W=$(wt "$n")
+  n=${1:?plan PR number}; task=${2:-}; W=$(wt "$n")
+  if [ -n "$task" ]; then
+    [ -s "$task" ] || die "task file $task is empty or missing"
+    cp -- "$task" "$S/runs/pr$n.task"
+    pf=$(conf planFile)
+    if [ -n "$pf" ] && ! grep -q "^### \[.\] PR $n " "$pf"; then
+      { printf '### [ ] PR %s — %s\n' "$n" "$(head -1 "$task" | sed 's/^#* *//')"; tail -n +2 "$task"; echo; } >> "$pf"
+    fi
+  elif [ "$(conf adhoc)" = True ]; then die "adhoc PRs need a task file: cm new $n task.md"
+  fi
   clear_evidence "$n"
   rm -f "$S/state/pr$n.gate" "$S/state/pr$n.reviews.json"
   git -C "$R" fetch -q origin "$BASE"
@@ -308,7 +337,7 @@ approve)
   echo "PR $n orchestrator approval bound to current change (gate round $gate_round)";;
 
 review)
-  n=${1:?plan PR number} r=${2:?round}; mode=${3:-gate}; W=$(wt "$n"); P=$S/runs/pr$n-rev$r.prompt
+  n=${1:?plan PR number} r=${2:?round}; mode=${3:-all}; W=$(wt "$n"); P=$S/runs/pr$n-rev$r.prompt
   [ -s "$S/runs/pr$n.report" ] || die "write the implementer report to $S/runs/pr$n.report first"
   impl=$(conf implementer); [ "${impl:-claude}" = claude ] && job "pr$n-implement" "$n" implement anthropic claude "$(effort_for implementer)" done "$S/runs/pr$n.report"
   setst "$n" "review round $r"
@@ -323,14 +352,20 @@ review)
     echo; echo "=== Implementer report ==="; cat "$S/runs/pr$n.report"
     [ "$r" -gt 1 ] && [ -f "$S/runs/pr$n-rev$((r-1)).out" ] && { echo; echo "=== Earlier findings (verify they are fixed) ==="; cat "$S/runs/pr$n-rev$((r-1)).out"; }
   } > "$P"
-  [[ $mode = panel || $mode = gate ]] || die "review mode must be panel or gate"
+  [[ $mode = panel || $mode = gate || $mode = all ]] || die "review mode must be all, panel or gate"
   before=$(change_hash "$n") || exit 1
   rm -f "$S/state/pr$n.approval" "$S/state/pr$n.gate"
-  if [ "$mode" = panel ]; then
-    pids=(); ids=()
-    while IFS=$'\t' read -r provider model effort slug; do
-      id=pr$n-rev$r-$slug; ids+=("$id")
-      "$SKILL/dashboard/run-job.sh" "$id" "$n" review "$provider" "$model" "$effort" "$W" "$S/runs/$id.out" "$S/runs/$id.log" -- "$P" &
+  if [ "$mode" = panel ] || [ "$mode" = all ]; then
+    pids=(); ids=(); gate_pid=""
+    if [ "$mode" = all ]; then
+      # The gate reviewer runs in the same round as the panel, in parallel.
+      model=$(conf reviewer)
+      "$SKILL/dashboard/run-job.sh" "pr$n-rev$r-gate" "$n" review "$(conf reviewerProvider)" "$model" "$(effort_for reviewer)" "$W" "$S/runs/pr$n-rev$r-gate.out" "$S/runs/pr$n-rev$r-gate.log" -- "$P" &
+      gate_pid=$!
+    fi
+    while IFS=$'\t' read -r p_provider p_model p_effort p_slug; do
+      id=pr$n-rev$r-$p_slug; ids+=("$id")
+      "$SKILL/dashboard/run-job.sh" "$id" "$n" review "$p_provider" "$p_model" "$p_effort" "$W" "$S/runs/$id.out" "$S/runs/$id.log" -- "$P" &
       pids+=("$!")
     done < <(python3 - "$S/config.json" <<'EOF'
 import json,re,sys
@@ -340,13 +375,24 @@ for i, m in enumerate(json.load(open(sys.argv[1]))['reviewPanel']):
 EOF
 )
     : > "$S/runs/pr$n-rev$r.out"
-    failed=0; approved=1
+    failed=0; approved=1; panel_failed=0
     for i in "${!pids[@]}"; do
-      wait "${pids[$i]}" || failed=1
+      # In an all round a panel member that fails is noted, not waited on again; the gate decides.
+      if ! wait "${pids[$i]}"; then
+        approved=0
+        if [ "$mode" = all ]; then panel_failed=1; echo "cm: panel member ${ids[$i]} failed; noted" >&2; else failed=1; fi
+      fi
       out=$S/runs/${ids[$i]}.out
       python3 "$SKILL/reviews.py" clean "$out" || approved=0
       cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
     done
+    if [ "$mode" = all ]; then
+      ids+=("pr$n-rev$r-gate")
+      wait "$gate_pid" || failed=1
+      out=$S/runs/pr$n-rev$r-gate.out
+      python3 "$SKILL/reviews.py" clean "$out" || approved=0
+      cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
+    fi
   else
     ids=("pr$n-rev$r")
     model=$(conf reviewer)
@@ -376,15 +422,15 @@ EOF
   elif [ "$before" != "$(change_hash "$n")" ]; then
     setst "$n" "needs-attention: change moved during review"; exit 1
   else
-    if [ "$mode" = gate ]; then
+    if [ "$mode" = gate ] || [ "$mode" = all ]; then
       python3 "$SKILL/reviews.py" record "$S/state/pr$n.reviews.json" "$mode" "$r" "${outputs[@]}" || exit 1
     fi
-    if [ "$mode" = gate ] && grep -qxE 'VERDICT: (APPROVE|CHANGES)' "$out"; then
+    if { [ "$mode" = gate ] || [ "$mode" = all ]; } && grep -qxE 'VERDICT: (APPROVE|CHANGES)' "$out"; then
       verdict=CHANGES; [ "$approved" = 1 ] && verdict=APPROVE
       printf '%s %s %s\n' "$before" "$r" "$verdict" > "$S/state/pr$n.gate"
     fi
     if [ "$approved" = 1 ]; then
-      [ "$mode" = gate ] && printf '%s %s %s\n' "$before" "$model" "$r" > "$S/state/pr$n.approval"
+      { [ "$mode" = gate ] || [ "$mode" = all ]; } && printf '%s %s %s\n' "$before" "$model" "$r" > "$S/state/pr$n.approval"
       setst "$n" "$mode approved round $r"
     else setst "$n" "changes round $r"; fi
   fi
@@ -407,7 +453,7 @@ bot-review)
     [ $el -ge "$limit" ] && { echo "bot review not finished on ${head:0:8} after ${limit}s (last: ${sha:0:8} $status)"; exit 7; }
     # Nudge once if the bot has not picked up the head commit after 5 minutes.
     [ -z "$poked" ] && [ $el -ge 300 ] && [ "$sha" != "$head" ] && { [ -z "$n" ] || active "$n"; gh pr comment "$pr" --repo "$GH" --body "@codex review" >/dev/null; poked=1; }
-    sleep 20
+    sleep 15
   done
   open=$(python3 "$SKILL/bot_review.py" open "$GH" "$pr" "$bot") || { echo "could not read review threads"; exit 7; }
   if [ -z "$open" ]; then echo "bot review clean on ${head:0:8}"; exit 0; fi
@@ -458,6 +504,7 @@ gate)
   echo "merged #$pr onto ${main:0:8}";;
 
 ship)
+  no_merge=false; [ "${1:-}" = --no-merge ] && { no_merge=true; shift; }
   n=${1:?plan PR number}; W=$(wt "$n") b=$(br "$n")
   # Serialize staging and commits without blocking cm stop.
   exec 6>"$S/state/pr$n.ship.lock"; flock 6
@@ -478,7 +525,7 @@ ship)
     done < <(cd "$W" && find . -maxdepth 4 -name node_modules -type l -print0)
     [ "$(change_hash "$n" staged)" = "$approved" ] || { echo "cm: staged change differs from approval" >&2; exit 8; }
     active "$n"
-    { cat "$S/runs/pr$n.title"; echo; echo "PR $n in $PLAN."; t=$(conf trailer); [ -n "$t" ] && { echo; echo "$t"; }; } > "$S/runs/pr$n.msg"
+    { cat "$S/runs/pr$n.title"; echo; if [ "$(conf adhoc)" = True ]; then echo "One-off PR $n."; else echo "PR $n in $PLAN."; fi; t=$(conf trailer); [ -n "$t" ] && { echo; echo "$t"; }; } > "$S/runs/pr$n.msg"
     before=$(git -C "$W" rev-parse HEAD)
     active "$n"
     git -C "$W" commit -q -F "$S/runs/pr$n.msg" || { shipst "$n" "needs-attention: commit failed"; die "commit failed"; }
@@ -536,6 +583,7 @@ ship)
   [ $rc = 6 ] && { shipst "$n" "needs-attention: bot findings on #$pr (fix and ship again, or resolve the threads)"; exit 6; }
   [ $rc = 0 ] || { shipst "$n" "needs-attention: bot review did not finish on #$pr"; exit 7; }
   shipst "$n" "opened #$pr: bot review clean"
+  if [ "$no_merge" = true ]; then shipst "$n" "ready #$pr"; echo "ready #$pr (not merged)"; exit 0; fi
   for i in 1 2 3; do active "$n"; "$0" gate merge "$pr" "$b" "$head" "$n"; rc=$?; active "$n"; [ $rc = 4 ] || [ $rc = 1 ] && [ $i -lt 3 ] && continue; break; done
   if [ $rc = 0 ]; then shipst "$n" "merged #$pr"; active "$n"; git -C "$R" worktree remove --force "$W"; active "$n"; git -C "$R" branch -D "$b" >/dev/null 2>&1; echo "merged #$pr"
   else shipst "$n" "needs-attention: merge rc=$rc for #$pr"; exit $rc; fi;;

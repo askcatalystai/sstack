@@ -33,10 +33,15 @@ Verification swarms stay on `swarm workers`. Keep a panel's families distinct, s
 
 ## Cursor-only features
 
-- Bugbot → the `pr bot` (Codex GitHub bot). Its threads are ordinary review threads.
-- Cursor Automations, cloud agents' dashboards → skip with one line: `Skipped here: <step>. <reason>.`
-- `deslop`, `control-ui`, `control-cli` (from `cursor-team-kit`) → not installed. Use `unslop` for prose; drive UIs with the T3 preview tools or the project's `verify-*` skill.
-- `~/.cursor/rules/pstack-models.mdc` → `models.md` here (and `~/.claude/rules/sidstack-models.md`, a link to it).
+| pstack step | Here |
+| --- | --- |
+| Bugbot (start, wait, triage) | The `pr bot`: `cm bot-review <pr> <head> <n>` waits for it; its threads are ordinary review threads, triaged the same way. |
+| `deslop` before commit | Prose: the `unslop` skill. Code: Claude Code's built-in `simplify`, then Claude's own read of the diff for dead code, needless guards and comments that restate code. |
+| `control-ui` (drive a browser or Electron UI) | In T3: `preview_open`, `preview_act`, `preview_snapshot` (screenshot with `save=true` for proof). Outside T3: the `browse` skill. The project's `verify-*` skill first if it has one. |
+| `control-cli` (drive a CLI or TUI) | Run the command directly and keep its output as proof. |
+| `swarm` workers | Parallel `delegate_task` calls on the `swarm workers` role in `models.md`, one per partition, then one merged report. |
+| Task model slugs, `pstack-models.mdc` | `models.md` roles. `install.sh` writes `~/.claude/rules/pstack-models.md` from it, so pstack skills read your roles directly. Don't edit that file by hand. |
+| Cursor Automations, cloud-agent dashboards | Skip with one line: `Skipped here: <step>. <reason>.` |
 
 ## Paths
 

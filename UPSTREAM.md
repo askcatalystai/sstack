@@ -1,6 +1,8 @@
 # Upstream
 
-Copied from [tstack](https://github.com/t3dotgg/tstack) at commit `10b2bf0`:
+Copied from [tstack](https://github.com/t3dotgg/tstack), upstream base `7de017b`
+(main). The local checkout also had three unpublished commits on top
+(`bc811cd`, `9cd1960`, `10b2bf0`); their changes are already in sidstack.
 
 - full-send
 - full-stop

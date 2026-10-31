@@ -28,7 +28,9 @@ cannot prevent automatic merging, report the blocker before proceeding.
 
 ## Stop at the gate
 
-Use full-send's merge gate as the readiness check. Replace its merge and
+Run full-send's steps with `cm ship --no-merge <n>` in step 5: it stops with
+state `ready` after a clean PR-bot review, without merging. Use full-send's
+merge gate as the readiness check. Replace its merge and
 final report steps with a handoff. Proof and review must cover the final diff;
 recheck behavior changes and meaningful conflict fixes before handoff.
 

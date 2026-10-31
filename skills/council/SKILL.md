@@ -118,8 +118,8 @@ own `--port`). Without it, `cm` uses whichever plan was initialised last.
 
 ### 3. Each PR item
 
-Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
-"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 
 Work phase by phase. Inside a phase, PRs that touch disjoint files can run in
 parallel, each in its own worktree. Never switch the main checkout's branch.
@@ -141,24 +141,15 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    showing it as active. It kills running process groups and clears approval.
    `cm stop-job <id>` stops one job and clears its PR approval.
 4. Review with models from models.md:
-   - `cm review <n> 1 panel`: every review-panel member in parallel.
-   - `cm review <n> 2 panel`: the panel again on the same code, cross-checking
-     the round-1 findings. No fixes between rounds.
-   - `cm review <n> 3 gate`: Astra, one pass.
-   - Then `cm implement <n> <findings.md>` once with every accepted finding,
-     verify each fix, write the ledger, `cm approve <n> <ledger.md>`.
-     List every blocker/should from the gate and all panel outputs since `new`,
-     using job-prefixed ids: `pr3-rev3:S2 fixed: <evidence>` or
-     `pr3-rev1-0-deepseek:S1 declined: <reason>`. Exit 12 names missing
-     resolutions or a missing gate after the latest panel. The gate record
-     survives `implement`; `new` clears it and the review history.
-     The approval binds the current change and the ledger hash; editing either
-     requires approval again.
-   A light review, only when the user asks, uses one panel round and the gate.
-   A successful gate with an exact `VERDICT: APPROVE` line and no blocker
-   or should finding grants approval directly when the change stays unchanged.
-   After fixes, orchestrator approval requires the gate round and a complete
-   resolution ledger. Panel approval alone cannot grant approval.
+   - `cm review <n> 1`: Astra, DeepSeek and Muse in parallel (mode `all`).
+   - The orchestrator triages every finding into a ledger and takes the final
+     call; `cm implement <n> <findings.md>` once with the accepted findings;
+     the orchestrator verifies each fix; `cm approve <n> <ledger.md>`.
+   - Deep review (risky areas, orchestrator's call): `cm review <n> 2` on the
+     fixed change before approving.
+   A round where all three return an exact `VERDICT: APPROVE` with no blocker
+   or should is the approval itself, while the change stays unchanged. After
+   fixes, `cm approve` requires that round and a complete resolution ledger.
 5. Write `runs/pr<n>.title` (a conventional commit title in plain words) and
    `runs/pr<n>.body`: the plan reference, what was wrong, the bullets of what
    changed, the tests, "Reviewed by <reviewer> (approved in round N)", what
