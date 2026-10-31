@@ -30,6 +30,7 @@ model or round count the user names for the run wins.
 
 ## Rules
 
+- **In T3 Code every review round is a `delegate_task` subagent** (`role: "review"`, `mode: "async"`, target from `models.md`), one per reviewer per round, so it shows as its own thread. Never run reviewers from the terminal (`opencode run`, `codex exec`) in T3. The only terminal reviewers are `cm.sh review` rounds inside a council plan, which feed the plan board.
 - Panel members get narrow briefs: at most ~20 files or one area each. Split
   a bigger diff by area and run the pieces in parallel. Never send them
   secrets or customer data (Muse trains on requests).
