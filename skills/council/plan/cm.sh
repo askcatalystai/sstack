@@ -353,6 +353,7 @@ brief)
     } > "$G"
     echo "subagent: gate $(conf reviewerProvider) / $(conf reviewer) / $(effort_for reviewer)"
     echo "brief: $G"; echo "save reply to: $S/runs/pr$n-rev$r-gate.out"
+    job "pr$n-rev$r-gate" "$n" review "$(conf reviewerProvider)" "$(conf reviewer)" "$(effort_for reviewer)" running "$S/runs/pr$n-rev$r-gate.out"
     setst "$n" "review round $r: gate"; exit 0
   fi
   [[ $mode = all || $mode = panel || $mode = gate ]] || die "brief mode must be all, panel, gate or gate-after-panel"
@@ -369,12 +370,15 @@ brief)
   } > "$P"
   change_hash "$n" > "$S/state/pr$n.rev$r.hash" || exit 1
   rm -f "$S/state/pr$n.approval" "$S/state/pr$n.gate" "$S/runs/pr$n-rev$r".out "$S/runs/pr$n-rev$r"-*.out
+  # Reviewers run as subagents; the board shows each one as a running review job until the round is recorded.
   if [ "$mode" = gate ]; then
     echo "subagent: gate $(conf reviewerProvider) / $(conf reviewer) / $(effort_for reviewer)"
     echo "brief: $P"; echo "save reply to: $S/runs/pr$n-rev$r.out"
+    job "pr$n-rev$r" "$n" review "$(conf reviewerProvider)" "$(conf reviewer)" "$(effort_for reviewer)" running "$S/runs/pr$n-rev$r.out"
   else
     while IFS=$'\t' read -r provider model effort slug; do
       echo "subagent: panel $provider / $model / $effort"; echo "brief: $P"; echo "save reply to: $S/runs/pr$n-rev$r-$slug.out"
+      job "pr$n-rev$r-$slug" "$n" review "$provider" "$model" "$effort" running "$S/runs/pr$n-rev$r-$slug.out"
     done < <(python3 "$SKILL/panel.py" "$S/config.json")
     [ "$mode" = all ] && echo "then: cm brief $n $r gate-after-panel (Astra with the panel's findings)"
   fi
@@ -410,6 +414,16 @@ review)
     setst "$n" "needs-attention: change moved during review"; exit 1
   fi
   python3 "$SKILL/reviews.py" record "$S/state/pr$n.reviews.json" "$mode" "$r" "${outputs[@]}" || exit 1
+  python3 - "$S/dashboard/jobs.json" "pr$n-rev$r" <<'EOF'
+import json,sys,time
+p,prefix=sys.argv[1:]
+try: d=json.load(open(p))
+except (OSError, ValueError): sys.exit()
+for j in d.get('jobs',[]):
+    if (j['id']==prefix or j['id'].startswith(prefix+'-')) and j.get('status')=='running':
+        j['status']='done'; j['finishedAt']=time.strftime('%Y-%m-%dT%H:%M:%S%z')
+json.dump(d,open(p,'w'),indent=1)
+EOF
   if [ "$mode" != panel ] && grep -qxE 'VERDICT: (APPROVE|CHANGES)' "$out"; then
     verdict=CHANGES; [ "$approved" = 1 ] && verdict=APPROVE
     printf '%s %s %s\n' "$before" "$r" "$verdict" > "$S/state/pr$n.gate"

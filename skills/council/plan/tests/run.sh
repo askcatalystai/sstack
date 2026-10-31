@@ -554,6 +554,24 @@ PYCODE
 [ -d "$AW" ]
 git --git-dir="$T/origin.git" log -1 --format=%B refs/heads/council/repo-adhoc-1 | grep -q '^One-off PR 1\.$'
 echo 'ok: adhoc plan, panel then Astra, orchestrator ledger and ship --no-merge'
+# Reviewer subagents show on the board while they run and close when the round is recorded.
+bash "$CM" brief 1 60 > /dev/null
+python3 - "$A/dashboard/jobs.json" <<'PYCODE'
+import json,sys
+jobs=[j for j in json.load(open(sys.argv[1]))['jobs'] if j['id'].startswith('pr1-rev60-')]
+assert len(jobs)==2 and all(j['status']=='running' and j['role']=='review' for j in jobs), jobs
+PYCODE
+bash "$CM" brief 1 60 gate-after-panel > /dev/null
+for f in "$A"/runs/pr1-rev60-[0-9]-*.out "$A/runs/pr1-rev60-gate.out"; do :; done
+python3 "$(dirname "$CM")/panel.py" "$A/config.json" | while IFS=$'\t' read -r _ _ _ slug; do echo 'VERDICT: APPROVE' > "$A/runs/pr1-rev60-$slug.out"; done
+echo 'VERDICT: APPROVE' > "$A/runs/pr1-rev60-gate.out"
+bash "$CM" review 1 60 > /dev/null 2>&1 || true
+python3 - "$A/dashboard/jobs.json" <<'PYCODE'
+import json,sys
+jobs=[j for j in json.load(open(sys.argv[1]))['jobs'] if j['id'].startswith('pr1-rev60')]
+assert len(jobs)==3 and all(j['status']=='done' for j in jobs), jobs
+PYCODE
+echo 'ok: reviewer subagents appear on the board as running review jobs and close when the round is recorded'
 # pstack's model rule is generated from models.md with every pstack role.
 python3 "$(dirname "$CM")/pstack_models.py" "$(dirname "$CM")/../../../models.md" "$T/pstack-models.md"
 for role in 'feature, refactoring' bug-fix perf-issue hillclimb 'judgment and prose' 'hardest tasks' 'how explorer' 'why investigators' 'reflect tooling' 'how explainer' 'why synthesizer' 'reflect judgment, divergent, synthesizer' 'arena runners' 'arena cross-judge pool' 'architect runners' 'interrogate reviewers' 'swarm workers'; do
