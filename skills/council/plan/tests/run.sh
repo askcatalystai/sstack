@@ -162,6 +162,56 @@ expect() {
   if [ "$rc" != "$expected" ]; then cat "$T/output"; echo "FAIL: $* returned $rc, expected $expected"; exit 1; fi
 }
 no_approval() { [ ! -e "$S/state/pr1.approval" ]; }
+# Orchestrator approval covers all panel/gate findings after a single fix pass.
+echo 'no findings yet' > "$T/ledger.md"
+expect 12 approve 1 "$T/ledger.md"
+export FAKE_OUTPUT=$'VERDICT: CHANGES\nS1 [SHOULD] file:1 panel bug\nS2 blocker: file:2 panel bug'
+expect 0 review 1 1 panel
+expect 12 approve 1 "$T/ledger.md"
+export FAKE_OUTPUT=$'VERDICT: CHANGES\nS2 [should] file:1 gate bug'
+expect 0 review 1 2 gate
+read -r gate_hash gate_round gate_verdict < "$S/state/pr1.gate"
+[ "$gate_round $gate_verdict" = '2 CHANGES' ]
+expect 0 implement 1
+[ "$(cat "$S/state/pr1.gate")" = "$gate_hash 2 CHANGES" ]
+echo sol-fixed >> "$W/file"
+cat > "$T/ledger.md" <<'LEDGER'
+pr1-rev1-0-fake-panel-a:S1 fixed: checked panel bug regression
+pr1-rev1-0-fake-panel-a:S2 declined: outside the requested behavior
+pr1-rev1-1-fake-panel-b:S1 fixed: checked panel bug regression
+pr1-rev1-1-fake-panel-b:S2 declined: outside the requested behavior
+LEDGER
+expect 12 approve 1 "$T/ledger.md"
+grep -q 'pr1-rev2:S2' "$T/output"
+# Empty evidence is not a resolution.
+echo 'pr1-rev2:S2 fixed: ' >> "$T/ledger.md"
+expect 12 approve 1 "$T/ledger.md"
+echo 'pr1-rev2:S2 fixed: local regression passed after Sol edit' >> "$T/ledger.md"
+expect 0 approve 1 "$T/ledger.md"
+read -r approved reviewer round < "$S/state/pr1.approval"
+[ "$reviewer $round" = 'orchestrator 2' ]
+[ "$approved" != "$gate_hash" ]
+[ "$(cat "$S/state/pr1.approval.ledger")" = "$(sha256sum "$T/ledger.md" | cut -d' ' -f1)" ]
+# Verification is still required: reaching exit 10 proves approval passed.
+expect 10 ship 1
+echo edited >> "$T/ledger.md"
+expect 8 ship 1
+grep -q 'resolution ledger changed or missing' "$S/state/pr1"
+expect 0 stop 1
+expect 1 approve 1 "$T/ledger.md"
+no_approval
+expect 0 new 1
+[ ! -e "$S/state/pr1.gate" ]
+[ ! -e "$S/state/pr1.reviews.json" ]
+[ ! -e "$S/state/pr1.approval.ledger" ]
+expect 12 approve 1 "$T/ledger.md"
+# A later panel invalidates a prior gate, even if the code did not move.
+export FAKE_OUTPUT='VERDICT: APPROVE'
+expect 0 review 1 1 gate
+expect 0 review 1 2 panel
+expect 12 approve 1 "$T/ledger.md"
+expect 0 new 1
+echo 'ok: orchestrator approval requires a gate and full ledger, survives implement, binds ledger hash and respects stop/new/panel order'
 export FAKE_OUTPUT='VERDICT: CHANGES'
 expect 0 review 1 1 gate
 no_approval
@@ -443,6 +493,14 @@ echo wrong > "$S/state/pr1.head"
 expect 9 gate merge 1 "$branch" "$head"
 echo "$head" > "$S/state/pr1.head"
 echo 'ok: direct gate merge requires verification and matching shipped head'
+# Complete shipping also accepts the orchestrator path after a gate asks for fixes.
+export FAKE_OUTPUT=$'VERDICT: CHANGES\nS1 [should] file:1 final bug'
+expect 0 review 1 19 gate
+echo final-fix >> "$W/file"
+echo 'pr1-rev19:S1 fixed: final regression verified locally' > "$T/final-ledger.md"
+expect 0 approve 1 "$T/final-ledger.md"
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
 expect 0 ship 1
 [ "$(cat "$S/state/pr1")" = 'merged #1' ]
 [ "$(cat "$S/state/pr1.head")" = "$(git --git-dir="$T/origin.git" rev-parse 'refs/heads/council/repo-plan-1')" ]

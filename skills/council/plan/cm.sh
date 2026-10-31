@@ -12,6 +12,7 @@
 #   cm.sh verify <n>                  bind runs/pr<n>.proof to the current change
 #   cm.sh stop-job <id>               stop one job process group
 #   cm.sh review <n> <round> [panel|gate]           read-only review of the uncommitted change (needs runs/pr<n>.report);
+#   cm.sh approve <n> <ledger.md>      bind orchestrator resolutions to the fixed change
 #   cm.sh ship <n>                     commit, push, gate, open the PR, gate again, merge, remove the worktree
 #                                      (needs runs/pr<n>.title and runs/pr<n>.body)
 #   cm.sh bot-review <pr> [head-sha]   wait for the GitHub review bot (config botReview) to finish on the head commit;
@@ -25,7 +26,7 @@
 # State lives in ~/.local/state/council/<slug>/ (current plan: ~/.local/state/council/current).
 # Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
 # "light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
-# Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification, 11 unowned branch.
+# Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification, 11 unowned branch, 12 incomplete resolution ledger or missing gate round.
 # Gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused, 9 head moved.
 set -u
 SKILL=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
@@ -109,7 +110,7 @@ change_hash() {
   python3 "$SKILL/change.py" "$(wt "$1")" "$(cat "$S/runs/pr$1.base")" "$PLAN" "${2:-worktree}" "${3:-HEAD}"
 }
 clear_evidence() {
-  rm -f "$S/state/pr$1.approval" "$S/state/pr$1.verified" "$S/runs/pr$1.proof"
+  rm -f "$S/state/pr$1.approval" "$S/state/pr$1.approval.ledger" "$S/state/pr$1.approval.ledger.path" "$S/state/pr$1.verified" "$S/runs/pr$1.proof"
 }
 # Shipping never holds the stop lock while waiting for an external command.
 active() {
@@ -142,8 +143,16 @@ shipping_evidence() {
   local hash=$1 approved="" reviewer="" round="" verified="" proof=""
   active "$n"
   read -r approved reviewer round 2>/dev/null < "$S/state/pr$n.approval" || true
-  if [ "$approved" != "$hash" ] || [ "$reviewer" != "$(conf reviewer)" ]; then
+  if [ "$approved" != "$hash" ] || { [ "$reviewer" != "$(conf reviewer)" ] && [ "$reviewer" != orchestrator ]; }; then
     shipst "$n" "needs-attention: no approval for the current change"; exit 8
+  fi
+  if [ "$reviewer" = orchestrator ]; then
+    local ledger_path ledger_hash
+    ledger_path=$(cat "$S/state/pr$n.approval.ledger.path" 2>/dev/null)
+    ledger_hash=$(cat "$S/state/pr$n.approval.ledger" 2>/dev/null)
+    if [ -z "$ledger_hash" ] || [ "$ledger_hash" != "$(sha256sum -- "$ledger_path" 2>/dev/null | cut -d' ' -f1)" ]; then
+      shipst "$n" "needs-attention: resolution ledger changed or missing"; exit 8
+    fi
   fi
   read -r verified proof 2>/dev/null < "$S/state/pr$n.verified" || true
   if [ "$verified" != "$hash" ] || [ -z "$proof" ] || [ "$proof" != "$(sha256sum "$S/runs/pr$n.proof" 2>/dev/null | cut -d' ' -f1)" ]; then
@@ -207,6 +216,7 @@ path) echo "$S";;
 new)
   n=${1:?plan PR number}; W=$(wt "$n")
   clear_evidence "$n"
+  rm -f "$S/state/pr$n.gate" "$S/state/pr$n.reviews.json"
   git -C "$R" fetch -q origin "$BASE"
   [ -d "$W" ] || git -C "$R" worktree add -q -B "$(br "$n")" "$W" "origin/$BASE" || die "worktree add failed"
   # Reuse the main checkout's installed dependencies.
@@ -279,6 +289,24 @@ verify)
   printf '%s %s\n' "$hash" "$(sha256sum "$S/runs/pr$n.proof" | cut -d' ' -f1)" > "$S/state/pr$n.verified"
   echo "PR $n verification bound to current change";;
 
+approve)
+  n=${1:?plan PR number}; ledger=$(realpath -e -- "${2:?resolution ledger}") || exit 12
+  exec 7>"$S/state/pr$n.lock"; flock 7
+  active "$n"
+  gate_hash=""; gate_round=""; verdict=""
+  read -r gate_hash gate_round verdict < "$S/state/pr$n.gate" 2>/dev/null || true
+  if [ -z "$gate_hash" ] || [ -z "$gate_round" ] || { [ "$verdict" != APPROVE ] && [ "$verdict" != CHANGES ]; }; then
+    echo "cm: a gate round must run after the latest panel round" >&2; exit 12
+  fi
+  ledger_hash=$(sha256sum -- "$ledger" | cut -d' ' -f1) || exit 12
+  python3 "$SKILL/reviews.py" validate "$S/state/pr$n.reviews.json" "$gate_round" "$ledger" || exit 12
+  [ "$ledger_hash" = "$(sha256sum -- "$ledger" | cut -d' ' -f1)" ] || { echo "cm: ledger changed during approval" >&2; exit 12; }
+  hash=$(change_hash "$n") || exit 1
+  printf '%s\n' "$ledger_hash" > "$S/state/pr$n.approval.ledger"
+  printf '%s\n' "$ledger" > "$S/state/pr$n.approval.ledger.path"
+  printf '%s orchestrator %s\n' "$hash" "$gate_round" > "$S/state/pr$n.approval"
+  echo "PR $n orchestrator approval bound to current change (gate round $gate_round)";;
+
 review)
   n=${1:?plan PR number} r=${2:?round}; mode=${3:-gate}; W=$(wt "$n"); P=$S/runs/pr$n-rev$r.prompt
   [ -s "$S/runs/pr$n.report" ] || die "write the implementer report to $S/runs/pr$n.report first"
@@ -297,7 +325,7 @@ review)
   } > "$P"
   [[ $mode = panel || $mode = gate ]] || die "review mode must be panel or gate"
   before=$(change_hash "$n") || exit 1
-  rm -f "$S/state/pr$n.approval"
+  rm -f "$S/state/pr$n.approval" "$S/state/pr$n.gate"
   if [ "$mode" = panel ]; then
     pids=(); ids=()
     while IFS=$'\t' read -r provider model effort slug; do
@@ -316,7 +344,7 @@ EOF
     for i in "${!pids[@]}"; do
       wait "${pids[$i]}" || failed=1
       out=$S/runs/${ids[$i]}.out
-      grep -qx 'VERDICT: APPROVE' "$out" && ! grep -qiE '\[(blocker|should)\]|^S[0-9]+[ :]+(blocker|should)\b|^VERDICT: CHANGES$' "$out" || approved=0
+      python3 "$SKILL/reviews.py" clean "$out" || approved=0
       cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
     done
   else
@@ -324,8 +352,16 @@ EOF
     model=$(conf reviewer)
     "$SKILL/dashboard/run-job.sh" "pr$n-rev$r" "$n" review "$(conf reviewerProvider)" "$model" "$(effort_for reviewer)" "$W" "$S/runs/pr$n-rev$r.out" "$S/runs/pr$n-rev$r.log" -- "$P"; failed=$?
     out=$S/runs/pr$n-rev$r.out; approved=0
-    if [ "$failed" = 0 ] && grep -qx 'VERDICT: APPROVE' "$out" && ! grep -qiE '\[(blocker|should)\]|^S[0-9]+[ :]+(blocker|should)\b|^VERDICT: CHANGES$' "$out"; then approved=1; fi
+    if [ "$failed" = 0 ] && python3 "$SKILL/reviews.py" clean "$out"; then approved=1; fi
     tail -n 40 "$out"
+  fi
+  # Preserve all panel outputs, including findings from an unsuccessful run.
+  outputs=()
+  for id in "${ids[@]}"; do
+    [ ! -f "$S/runs/$id.out" ] || outputs+=("$S/runs/$id.out")
+  done
+  if [ "$mode" = panel ]; then
+    python3 "$SKILL/reviews.py" record "$S/state/pr$n.reviews.json" "$mode" "$r" "${outputs[@]}" || exit 1
   fi
   exec 8<>"$S/dashboard/jobs.json"; flock 8
   [[ $(cat "$S/state/pr$n") = stopped* ]] && exit 1
@@ -339,10 +375,19 @@ EOF
     setst "$n" "needs-attention: reviewer job failed"; exit 1
   elif [ "$before" != "$(change_hash "$n")" ]; then
     setst "$n" "needs-attention: change moved during review"; exit 1
-  elif [ "$approved" = 1 ]; then
-    [ "$mode" = gate ] && printf '%s %s %s\n' "$before" "$model" "$r" > "$S/state/pr$n.approval"
-    setst "$n" "$mode approved round $r"
-  else setst "$n" "changes round $r"; fi
+  else
+    if [ "$mode" = gate ]; then
+      python3 "$SKILL/reviews.py" record "$S/state/pr$n.reviews.json" "$mode" "$r" "${outputs[@]}" || exit 1
+    fi
+    if [ "$mode" = gate ] && grep -qxE 'VERDICT: (APPROVE|CHANGES)' "$out"; then
+      verdict=CHANGES; [ "$approved" = 1 ] && verdict=APPROVE
+      printf '%s %s %s\n' "$before" "$r" "$verdict" > "$S/state/pr$n.gate"
+    fi
+    if [ "$approved" = 1 ]; then
+      [ "$mode" = gate ] && printf '%s %s %s\n' "$before" "$model" "$r" > "$S/state/pr$n.approval"
+      setst "$n" "$mode approved round $r"
+    else setst "$n" "changes round $r"; fi
+  fi
   cat "$S/state/pr$n";;
 
 bot-review)

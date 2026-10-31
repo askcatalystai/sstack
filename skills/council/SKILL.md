@@ -146,11 +146,19 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
      the round-1 findings. No fixes between rounds.
    - `cm review <n> 3 gate`: Astra, one pass.
    - Then `cm implement <n> <findings.md>` once with every accepted finding,
-     and the orchestrator verifies each fix (until the runner records an
-     orchestrator approval for the fixed change, rerun the gate round on it).
+     verify each fix, write the ledger, `cm approve <n> <ledger.md>`.
+     List every blocker/should from the gate and all panel outputs since `new`,
+     using job-prefixed ids: `pr3-rev3:S2 fixed: <evidence>` or
+     `pr3-rev1-0-deepseek:S1 declined: <reason>`. Exit 12 names missing
+     resolutions or a missing gate after the latest panel. The gate record
+     survives `implement`; `new` clears it and the review history.
+     The approval binds the current change and the ledger hash; editing either
+     requires approval again.
    A light review, only when the user asks, uses one panel round and the gate.
-   Only a successful gate with an exact `VERDICT: APPROVE` line and no blocker
-   or should finding grants approval. Panel approval cannot grant it.
+   A successful gate with an exact `VERDICT: APPROVE` line and no blocker
+   or should finding grants approval directly when the change stays unchanged.
+   After fixes, orchestrator approval requires the gate round and a complete
+   resolution ledger. Panel approval alone cannot grant approval.
 5. Write `runs/pr<n>.title` (a conventional commit title in plain words) and
    `runs/pr<n>.body`: the plan reference, what was wrong, the bullets of what
    changed, the tests, "Reviewed by <reviewer> (approved in round N)", what
