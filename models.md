@@ -10,15 +10,15 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - claude fallback: claudeAgent_claude_2 / claude-opus-5-5 / medium (only after a usage or rate limit on the orchestrator's instance; same model, never a different one)
 - implementer: codex / gpt-6.1-sol / high
 - hardest tasks: codex / gpt-6.1-sol / xhigh
-- review panel: opencode / opencode-go/deepseek-v4.1-flash / high; opencode / opencode-go/muse-spark-1.3-contributor / high (one round, in parallel with the reviewer)
-- reviewer: codex / gpt-6-astra / low (same parallel round as the panel; Claude takes the final call, Sol fixes once)
+- review panel: opencode / opencode-go/deepseek-v4.1-flash / low; opencode / opencode-go/muse-spark-1.3-contributor / high (one round, in parallel with the reviewer)
+- reviewer: codex / gpt-6-astra / medium (same parallel round as the panel; Claude takes the final call, Sol fixes once)
 - pr bot: chatgpt-codex-connector (GitHub app; every PR; merge waits for its review of the head commit)
 - judgment and prose: claudesahitya / claude-opus-5-5 / medium
 
 ## Panels (one subagent per entry)
 
 - council: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; opencode / opencode-go/deepseek-v4.1-flash / high; opencode / opencode-go/muse-spark-1.3-contributor / high
-- interrogate reviewers: opencode / opencode-go/deepseek-v4.1-flash / high; opencode / opencode-go/muse-spark-1.3-contributor / high; codex / gpt-6.1-sol / high
+- interrogate reviewers: opencode / opencode-go/deepseek-v4.1-flash / low; opencode / opencode-go/muse-spark-1.3-contributor / high; codex / gpt-6.1-sol / high
 - arena runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
 - architect runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
 
@@ -30,6 +30,6 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 
 ## Notes
 
-- DeepSeek V4.1 Flash has no `medium` variant. It timed out on a 75-file diff (2026-10-31): give panel members narrow briefs, at most ~20 files or one area each, split bigger diffs by area and run the pieces in parallel.
+- DeepSeek V4.1 Flash has no `medium` variant; reviews run it at `low` for speed (it was slow at `high`), the council and explorers keep `high`. It timed out on a 75-file diff (2026-10-31): give panel members narrow briefs, at most ~20 files or one area each, split bigger diffs by area and run the pieces in parallel.
 - Muse Spark 1.3 contributor trains on request data: don't send it secrets, credentials or customer data.
 - Astra is the diff reviewer, not a council seat.

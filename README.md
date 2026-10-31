@@ -16,7 +16,7 @@ Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models 
 
 ## Roles
 
-See `models.md`. Today: Claude Opus 5.5 orchestrates and does the final review; GPT-6.1 Sol (high) codes; GPT-6 Astra (low) reviews diffs; the Codex GitHub bot reviews every PR and merges wait for it; the council is Opus, Sol, DeepSeek V4.1 Flash and Muse Spark 1.3.
+See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Astra, DeepSeek and Muse review in one parallel round; the Codex GitHub bot reviews every PR and merges wait for it; the council is Opus, Sol, DeepSeek and Muse.
 
 ## Install
 

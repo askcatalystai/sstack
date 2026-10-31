@@ -16,7 +16,7 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 - **Claude (orchestrator)** reads, plans, briefs, reviews every diff line by line, runs the checks, tests in the real app, files and merges PRs, and reports. Claude doesn't take a subagent's summary on trust: read the diff, rerun the checks outside the subagent's sandbox.
 - **Implementer** (Sol) writes the code, one PR per brief, in its own worktree. Never commits or pushes.
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
-- **Reviews** run through `review-loop`: one parallel round of Astra (low), DeepSeek and Muse. Claude takes the final call on every finding and on slop, Sol fixes all accepted findings once, Claude verifies each fix and approves.
+- **Reviews** run through `review-loop`: one parallel round of Astra, DeepSeek and Muse (efforts in `models.md`). Claude takes the final call on every finding and on slop, Sol fixes all accepted findings once, Claude verifies each fix and approves.
 - **PR bot** (Codex GitHub bot) reviews every PR. Merge waits for its review of the head commit.
 - **Council** (four seats) for plans, contested designs and UX reviews, through `council`.
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it in memory if it's lasting.

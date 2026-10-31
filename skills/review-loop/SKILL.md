@@ -14,7 +14,7 @@ the round is in and Claude has triaged it.
 Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
 "deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 
-1. **One parallel round.** Astra (`reviewer`, low), DeepSeek and Muse
+1. **One parallel round.** Astra (`reviewer`), DeepSeek and Muse
    (`review panel`) review the same change at the same time. In a council plan:
    `cm review <n> 1` (mode `all`). Astra failing ends the round; so does the
    round's time limit, and a panel member still running then is stopped and

@@ -38,10 +38,11 @@ Council: {{Claude Opus 5.5 (medium)}}, {{GPT-6.1-Sol (high)}}, {{DeepSeek V4.1 F
 
 - **Roles.** {{Use the roles the user named; this is the default.}}
   - {{Claude}} orchestrates: it briefs each PR, does the final review of the diff, runs the gate, merges, and checks the change on prod.
-  - {{GPT-6.1-Sol (high)}} writes the code through `cm implement`, in the PR's own worktree.
+  - {{GPT-6.1-Sol}} writes the code through `cm implement`, in the PR's own worktree, and fixes accepted findings once.
+  - {{Astra, DeepSeek and Muse}} review each change in one parallel round (`cm review <n> 1`); Claude triages every finding, takes the final call, verifies Sol's fixes and records the approval (`cm approve`). Efforts live in `models.md`.
   - {{The Codex GitHub bot (`chatgpt-codex-connector`)}} reviews every PR on GitHub. `cm ship` waits for its review of the head commit and merges only with no unresolved bot thread. P0 and P1 findings, and real P2 bugs, get fixed and pushed; the bot reviews the new commit itself. Threads judged not worth fixing are resolved with the reason in the PR body.
-  - {{Optional manual reviewer, e.g. GPT-6-Astra (low), through `cm review`, at most 2 rounds. Only when the user asks for one, or no review bot is set up.}}
-- **Gate.** Every PR runs the deploy gate before it opens and again before merge: main plus the branch, `pnpm install --frozen-lockfile`, `pnpm typecheck`, server build, web build.
+- **Proof.** Before a PR: covering tests with pass counts, and for UI the real app in a browser; `cm verify` binds it to the change.
+- **Gate.** Every PR runs the deploy gate before it opens and again before merge: main plus the branch, install, lint, typecheck and the builds the deploy runs.
 - **Merge.** Only after the gate passes and the bot review is clean. Squash-merge, delete the worktree and branch, and check the deploy on prod once it is live.
 - **Ticks.** Tick items in a small docs PR, per phase or per batch, with `- Done (#<github>).` under each item.
 - **Deliberate UX.** Before a PR undoes a choice made on purpose, check its history (`git log -S`) and ask the user. List those choices under "Kept on purpose" below.
