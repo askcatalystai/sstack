@@ -237,10 +237,16 @@ new)
   n=${1:?plan PR number}; task=${2:-}; W=$(wt "$n")
   if [ -n "$task" ]; then
     [ -s "$task" ] || die "task file $task is empty or missing"
+    title=$(head -1 "$task" | sed 's/^#* *//; s/[[:space:]]*$//')
+    [ -n "$title" ] || die "the task file's first line is its title; it is empty"
+    # One task per PR number: the board and the implementer must read the same brief.
+    if [ -s "$S/runs/pr$n.task" ] && ! cmp -s -- "$task" "$S/runs/pr$n.task"; then
+      die "PR $n already has a different task; use a new PR number"
+    fi
     cp -- "$task" "$S/runs/pr$n.task"
     pf=$(conf planFile)
     if [ -n "$pf" ] && ! grep -q "^### \[.\] PR $n " "$pf"; then
-      { printf '### [ ] PR %s — %s\n' "$n" "$(head -1 "$task" | sed 's/^#* *//')"; tail -n +2 "$task"; echo; } >> "$pf"
+      { printf '### [ ] PR %s — %s\n' "$n" "$title"; tail -n +2 "$task"; echo; } >> "$pf"
     fi
   elif [ "$(conf adhoc)" = True ]; then die "adhoc PRs need a task file: cm new $n task.md"
   fi
@@ -274,7 +280,8 @@ EOF
   [ -n "$model" ] && [ "$model" != claude ] || die "implementer is claude; set --implementer <codex model> in init"
   clear_evidence "$n"
   setst "$n" "coding"
-  { echo "Implement plan PR $n from $PLAN in this git worktree ($W). Work only here; do not commit, push or switch branches."
+  what="plan PR $n from $PLAN"; [ "$(conf adhoc)" = True ] && what="one-off PR $n"
+  { echo "Implement $what in this git worktree ($W). Work only here; do not commit, push or switch branches."
     echo "Make the smallest change that meets the acceptance check. Add a regression test that fails without the fix. Run the affected tests and the typecheck."
     echo "When done, write what was wrong, what changed (files), the proof (tests, counts) and what was not checked live to $S/runs/pr$n.report."
     for extra in "$@"; do echo; cat "$extra"; done
@@ -343,7 +350,8 @@ review)
   setst "$n" "review round $r"
   { echo "Review only. Do not edit, commit, push, comment on PRs, or start subagents."
     echo "Repo: $W (a git worktree). The change under review is the uncommitted working tree against this branch's base commit $(cat "$S/runs/pr$n.base"): run \`git diff $(cat "$S/runs/pr$n.base")\` and read untracked files (\`git status --short\`). origin/$BASE may have moved on since the branch was cut; changes that exist only there are not part of this PR and are not regressions. Ignore node_modules symlinks."
-    echo "Intent: plan PR $n from $PLAN (round $r). The plan item and the implementer's report follow."
+    what="plan PR $n from $PLAN"; [ "$(conf adhoc)" = True ] && what="one-off PR $n"
+    echo "Intent: $what (round $r). The task and the implementer's report follow."
     echo "Read surrounding code. Find bugs, broken callers, mismatch with intent, and regressions of existing behaviour."
     echo "Skip style unless it hides a bug. Hold to the smallest change. Flag code, tests, or guards the intent does not need. Other paths, rare cases, small perf, extra compat: nits."
     echo "blocker = intended case wrong. should = real bug callers will hit, in intent. nit = rest."

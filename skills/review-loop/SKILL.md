@@ -16,8 +16,9 @@ Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator
 
 1. **One parallel round.** Astra (`reviewer`, low), DeepSeek and Muse
    (`review panel`) review the same change at the same time. In a council plan:
-   `cm review <n> 1` (mode `all`). A panel member that times out is noted, not
-   waited on; Astra failing stops the round.
+   `cm review <n> 1` (mode `all`). Astra failing ends the round; so does the
+   round's time limit, and a panel member still running then is stopped and
+   noted.
 2. **The orchestrator takes the final call.** Claude (Opus) reads every
    finding, checks it against the code, and keeps a ledger: each blocker and
    should is accepted, or declined with a reason. Claude also reviews the diff
@@ -41,11 +42,12 @@ Sol reviews alone, up to 3 rounds. A model or round count the user names wins.
 ## Rules
 
 - **In T3 Code every review round is a `delegate_task` subagent** (`role: "review"`, `mode: "async"`, target from `models.md`), one per reviewer per round, so it shows as its own thread. Never run reviewers from the terminal (`opencode run`, `codex exec`) in T3. The only terminal reviewers are `cm.sh review` rounds inside a council plan, which feed the plan board.
-- Panel members get narrow briefs: at most ~20 files or one area each. Split
-  a bigger diff by area and run the pieces in parallel. Never send them
-  secrets or customer data (Muse trains on requests).
+- All three reviewers get the same brief. `cm review` sends one shared brief;
+  outside a plan, a diff over ~20 files is split by area, one brief per area,
+  every area to all three. Never send secrets or customer data (Muse trains on
+  requests).
 - A panel member that times out or errors is noted in the ledger and the
-  sequence continues; it is not waited on again.
+  round goes on without it.
 - Reviewers must not start subagents or reviewers.
 - Keep one ledger across all rounds: id, source (DeepSeek/Muse/Astra/bot),
   round, severity, outcome. Never guess usage.
@@ -106,12 +108,9 @@ S1 [blocker|should|nit] <file>:<line> <claim>. Fix: <suggestion> (stable ids)
 
 ## 2b. Review panel
 
-Alongside the reviewer, send the same round-1 brief to each `review panel`
-member in `models.md` (DeepSeek and Muse by default), in parallel, read-only.
-Split a diff over ~20 files by area, one brief per area per member. Panel
-findings go into the same ledger with their source; the reviewer's verdict is
-still the gate. A panel member that times out or errors is noted, not waited on
-again. Never send the panel secrets or customer data.
+Send the same brief to the reviewer and each `review panel` member in
+`models.md` (DeepSeek and Muse by default), in parallel, read-only. Their
+findings go into one ledger with their source; Claude takes the final call.
 
 ## 3. Answer findings
 

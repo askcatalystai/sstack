@@ -517,9 +517,17 @@ import json,sys
 c=json.load(open(sys.argv[1])); assert c['adhoc'] is True and c['planFile'].endswith('adhoc-plan.md')
 PYCODE
 expect 1 new 1
+printf '\nno title\n' > "$T/untitled.md"
+expect 1 new 1 "$T/untitled.md"
 printf 'Fix the file\nChange file once.\n' > "$T/task.md"
 expect 0 new 1 "$T/task.md"
 grep -q '^### \[ \] PR 1 — Fix the file$' "$A/adhoc-plan.md"
+# The same task again is a no-op; a different task for the same number is refused.
+expect 0 new 1 "$T/task.md"
+[ "$(grep -c '^### \[ \] PR 1 ' "$A/adhoc-plan.md")" = 1 ]
+printf 'Something else\n' > "$T/other.md"
+expect 1 new 1 "$T/other.md"
+cmp -s "$T/task.md" "$A/runs/pr1.task"
 AW=$(python3 - "$A/config.json" <<'PY'
 import json,sys
 c=json.load(open(sys.argv[1])); print(c['worktrees']+'/'+c['slug']+'-1')
@@ -583,6 +591,17 @@ expect 0 verify 1
 echo 'fix: adhoc' > "$A/runs/pr1.title"; echo 'adhoc body' > "$A/runs/pr1.body"
 expect 0 ship --no-merge 1
 [ "$(cat "$A/state/pr1")" = 'ready #1' ]
+# The board reads the one-off plan file and shows the ready PR as open with its PR number.
+printf '' > "$T/transcript-adhoc.jsonl"
+COUNCIL_STATE=$A python3 - "$A/config.json" "$T/transcript-adhoc.jsonl" "$(dirname "$CM")/dashboard/observe.py" <<'PYCODE'
+import importlib.util,json,sys
+p,transcript,source=sys.argv[1:]; c=json.load(open(p)); c['transcript']=transcript
+json.dump(c,open(p,'w'))
+spec=importlib.util.spec_from_file_location('observe',source)
+m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.collect()['total']==1
+assert m.pipeline_state()[1][0]=='open' and m.pipeline_state()[1][2]==1, m.pipeline_state()
+PYCODE
 [ -d "$AW" ]
 git --git-dir="$T/origin.git" log -1 --format=%B refs/heads/council/repo-adhoc-1 | grep -q '^One-off PR 1\.$'
 echo 'ok: adhoc plan, parallel review round, orchestrator ledger and ship --no-merge'

@@ -129,10 +129,10 @@ def pipeline_state():
         if not re.fullmatch(r'pr\d+', f.name): continue
         try: text = f.read_text().splitlines()[0].strip()
         except (OSError, IndexError): continue
-        number = re.search(r'#?(\d{2,})', text.split(' ', 1)[1]) if ' ' in text else None
+        number = re.search(r'#(\d+)', text) or (re.search(r'(\d{2,})', text.split(' ', 1)[1]) if ' ' in text else None)
         kind = ('merged' if text.startswith('merged') else 'done' if text.startswith('nochange') else
                 'stopped' if text.startswith(('stopped', 'paused', 'queued')) else
-                'blocked' if text.startswith(('blocked', 'needs-attention')) else 'open' if text.startswith('opened') else
+                'blocked' if text.startswith(('blocked', 'needs-attention')) else 'open' if text.startswith(('opened', 'ready')) else
                 'review' if text.startswith('review') else 'coding')
         gh = int(number[1]) if number and kind in ('merged', 'open') else None
         out[int(f.name[2:])] = (kind, text, gh)
