@@ -81,6 +81,15 @@ VERDICT: APPROVE or CHANGES
 S1 [blocker|should|nit] <file>:<line> <claim>. Fix: <suggestion> (stable ids)
 ```
 
+## 2b. Review panel
+
+Alongside the reviewer, send the same round-1 brief to each `review panel`
+member in `models.md` (DeepSeek and Muse by default), in parallel, read-only.
+Split a diff over ~20 files by area, one brief per area per member. Panel
+findings go into the same ledger with their source; the reviewer's verdict is
+still the gate. A panel member that times out or errors is noted, not waited on
+again. Never send the panel secrets or customer data.
+
 ## 3. Answer findings
 
 Check each finding and severity yourself. The orchestrator fixes small findings directly; larger ones go back to the implementer with the finding and the file:line. Another path, rare case, or
