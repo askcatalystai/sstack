@@ -8,7 +8,8 @@
 #   cm.sh new <n>                      worktree + branch for plan PR <n>, from origin/<default>
 #   cm.sh implement <n> [extra.md...]    Codex implementer (config implementer) writes the change in the worktree
 #   cm.sh stop <n> [reason]            mark a PR stopped (not active) and close its running jobs
-#   cm.sh review <n> <round>           read-only review of the uncommitted change (needs runs/pr<n>.report)
+#   cm.sh review <n> <round>           read-only review of the uncommitted change (needs runs/pr<n>.report);
+#                                      CM_REVIEWER=<model> CM_REVIEWER_EFFORT=<level> picks the round's reviewer
 #   cm.sh ship <n>                     commit, push, gate, open the PR, gate again, merge, remove the worktree
 #                                      (needs runs/pr<n>.title and runs/pr<n>.body)
 #   cm.sh bot-review <pr> [head-sha]   wait for the GitHub review bot (config botReview) to finish on the head commit;
@@ -139,7 +140,8 @@ review)
     echo; echo "=== Implementer report ==="; cat "$S/runs/pr$n.report"
     [ "$r" -gt 1 ] && [ -f "$S/runs/pr$n-rev$((r-1)).out" ] && { echo; echo "=== Earlier findings (verify they are fixed) ==="; cat "$S/runs/pr$n-rev$((r-1)).out"; }
   } > "$P"
-  "$SKILL/dashboard/run-job.sh" "pr$n-rev$r" "$n" review "$(conf reviewer)" "$(effort_for reviewer)" "$W" "$S/runs/pr$n-rev$r.out" "$S/runs/pr$n-rev$r.log" -- "$P"
+  # CM_REVIEWER / CM_REVIEWER_EFFORT pick this round's reviewer (review-loop order: DeepSeek, Muse, then Astra).
+  "$SKILL/dashboard/run-job.sh" "pr$n-rev$r" "$n" review "${CM_REVIEWER:-$(conf reviewer)}" "${CM_REVIEWER_EFFORT:-$(effort_for reviewer)}" "$W" "$S/runs/pr$n-rev$r.out" "$S/runs/pr$n-rev$r.log" -- "$P"
   out=$S/runs/pr$n-rev$r.out
   if grep -q VERDICT "$out" 2>/dev/null && ! grep -qE '\[(blocker|should)\]' "$out"; then setst "$n" "approved round $r"; else setst "$n" "changes round $r"; fi
   cat "$S/state/pr$n"; tail -n 40 "$out" 2>/dev/null;;

@@ -138,11 +138,13 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    (tests and counts, what failed before), and what was not checked live.
    To pause or drop a PR, run `cm stop <n> [reason]` so the board stops
    showing it as active.
-4. Skip this step when `botReview` is set; the bot reviews in step 6.
-   Otherwise: `cm review <n> 1`. Fix every `blocker` and `should`, append a "Round 2"
-   note to the report, then `cm review <n> 2`. Stop after 2 rounds: fix the
-   last findings yourself and say so in the PR body. Push back on findings
-   outside the item's scope.
+4. Review in `review-loop`'s order. Use a distinct round number per call,
+   run the two panel calls of a round in parallel, and fix through the
+   implementer between rounds:
+   - rounds 1 and 3: `CM_REVIEWER=opencode-go/deepseek-v4.1-flash CM_REVIEWER_EFFORT=high cm review <n> <r>`
+   - rounds 2 and 4: `CM_REVIEWER=opencode-go/muse-spark-1.3-contributor CM_REVIEWER_EFFORT=medium cm review <n> <r>`
+   - round 5, the gate: `cm review <n> 5` (Astra, low, from config)
+   The PR bot reviews the PR in step 6.
 5. Write `runs/pr<n>.title` (a conventional commit title in plain words) and
    `runs/pr<n>.body`: the plan reference, what was wrong, the bullets of what
    changed, the tests, "Reviewed by <reviewer> (approved in round N)", what
