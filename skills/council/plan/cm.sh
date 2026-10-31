@@ -355,6 +355,7 @@ review)
   [[ $mode = panel || $mode = gate || $mode = all ]] || die "review mode must be all, panel or gate"
   before=$(change_hash "$n") || exit 1
   rm -f "$S/state/pr$n.approval" "$S/state/pr$n.gate"
+  dropped=()
   if [ "$mode" = panel ] || [ "$mode" = all ]; then
     pids=(); ids=(); gate_pid=""
     if [ "$mode" = all ]; then
@@ -375,23 +376,57 @@ for i, m in enumerate(json.load(open(sys.argv[1]))['reviewPanel']):
 EOF
 )
     : > "$S/runs/pr$n-rev$r.out"
-    failed=0; approved=1; panel_failed=0
-    for i in "${!pids[@]}"; do
-      # In an all round a panel member that fails is noted, not waited on again; the gate decides.
-      if ! wait "${pids[$i]}"; then
-        approved=0
-        if [ "$mode" = all ]; then panel_failed=1; echo "cm: panel member ${ids[$i]} failed; noted" >&2; else failed=1; fi
-      fi
-      out=$S/runs/${ids[$i]}.out
-      python3 "$SKILL/reviews.py" clean "$out" || approved=0
-      cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
-    done
+    failed=0; approved=1
     if [ "$mode" = all ]; then
+      # Watch every reviewer at once: Astra failing or the round timing out stops the rest
+      # (their outputs stay); a panel member that fails or hangs is noted, not waited on.
+      limit=$(conf reviewTimeout); deadline=$(( $(date +%s) + ${limit:-1200} ))
+      declare -A rcs=()
+      while :; do
+        for i in "${!pids[@]}"; do
+          [ -n "${rcs[$i]:-}" ] && continue
+          kill -0 "${pids[$i]}" 2>/dev/null && continue
+          rc=0; wait "${pids[$i]}" || rc=$?; rcs[$i]=$rc
+        done
+        if [ -z "${rcs[gate]:-}" ] && ! kill -0 "$gate_pid" 2>/dev/null; then
+          rc=0; wait "$gate_pid" || rc=$?; rcs[gate]=$rc
+        fi
+        pending=0; for i in "${!pids[@]}"; do [ -n "${rcs[$i]:-}" ] || pending=1; done
+        [ -n "${rcs[gate]:-}" ] || pending=1
+        [ "$pending" = 0 ] && break
+        timed_out=0; [ "$(date +%s)" -ge "$deadline" ] && timed_out=1
+        if [ "$timed_out" = 1 ] || { [ -n "${rcs[gate]:-}" ] && [ "${rcs[gate]}" != 0 ]; }; then
+          for i in "${!pids[@]}"; do
+            [ -n "${rcs[$i]:-}" ] && continue
+            echo "cm: stopping panel member ${ids[$i]} (round ended without it)" >&2
+            stop_jobs id "${ids[$i]}"; wait "${pids[$i]}" 2>/dev/null; rcs[$i]=124; dropped+=("${ids[$i]}")
+          done
+          if [ -z "${rcs[gate]:-}" ]; then
+            echo "cm: gate reviewer timed out" >&2
+            stop_jobs id "pr$n-rev$r-gate"; wait "$gate_pid" 2>/dev/null; rcs[gate]=124; dropped+=("pr$n-rev$r-gate")
+          fi
+          break
+        fi
+        sleep 1
+      done
+      for i in "${!pids[@]}"; do
+        if [ "${rcs[$i]}" != 0 ]; then approved=0; echo "cm: panel member ${ids[$i]} failed or timed out; noted" >&2; fi
+        out=$S/runs/${ids[$i]}.out
+        python3 "$SKILL/reviews.py" clean "$out" || approved=0
+        cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
+      done
       ids+=("pr$n-rev$r-gate")
-      wait "$gate_pid" || failed=1
+      [ "${rcs[gate]}" = 0 ] || failed=1
       out=$S/runs/pr$n-rev$r-gate.out
       python3 "$SKILL/reviews.py" clean "$out" || approved=0
       cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
+    else
+      for i in "${!pids[@]}"; do
+        wait "${pids[$i]}" || failed=1
+        out=$S/runs/${ids[$i]}.out
+        python3 "$SKILL/reviews.py" clean "$out" || approved=0
+        cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
+      done
     fi
   else
     ids=("pr$n-rev$r")
@@ -412,9 +447,10 @@ EOF
   exec 8<>"$S/dashboard/jobs.json"; flock 8
   [[ $(cat "$S/state/pr$n") = stopped* ]] && exit 1
   # A stopped job may exit zero after trapping TERM; it still cannot approve.
-  if python3 - "$S/dashboard/jobs.json" "${ids[@]}" <<'EOF'
+  if python3 - "$S/dashboard/jobs.json" "${#dropped[@]}" "${dropped[@]}" "${ids[@]}" <<'EOF'
 import json,sys
-sys.exit(not any(j['id'] in sys.argv[2:] and j['status']=='stopped' for j in json.load(open(sys.argv[1]))['jobs']))
+k=int(sys.argv[2]); dropped=set(sys.argv[3:3+k]); ids=set(sys.argv[3+k:])-dropped
+sys.exit(not any(j['id'] in ids and j['status']=='stopped' for j in json.load(open(sys.argv[1]))['jobs']))
 EOF
   then setst "$n" "needs-attention: review stopped"; exit 1; fi
   if [ "$failed" != 0 ]; then

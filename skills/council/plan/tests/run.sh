@@ -32,6 +32,7 @@ exit "${FAKE_RC:-0}"
 FAKE
 cat > "$T/bin/opencode" <<'FAKE'
 #!/usr/bin/env bash
+if [[ "$*" = *fake/panel-b* ]] && [ -n "${FAKE_HANG_B:-}" ]; then sleep 300; fi
 if [[ "$*" = *fake/panel-b* ]] && [ -n "${FAKE_DISSENT:-}" ]; then
   echo 'VERDICT: CHANGES'
 else
@@ -526,6 +527,28 @@ PY
 )
 echo adhoc-change >> "$AW/file"
 echo 'report' > "$A/runs/pr1.report"
+# A hung panel member never holds the round: Astra failing ends it at once...
+python3 - "$A/config.json" <<'PYCODE'
+import json,sys
+c=json.load(open(sys.argv[1])); c['reviewTimeout']=4; json.dump(c,open(sys.argv[1],'w'))
+PYCODE
+export FAKE_HANG_B=1 FAKE_OUTPUT='VERDICT: APPROVE'
+start=$(date +%s)
+FAKE_RC=1 bash "$CM" review 1 51 > "$T/output" 2>&1 && { echo 'FAIL: failed gate passed'; exit 1; }
+[ $(( $(date +%s) - start )) -lt 20 ] || { echo 'FAIL: round waited on a hung panel member'; exit 1; }
+[[ $(cat "$A/state/pr1") = needs-attention:* ]]
+[ ! -e "$A/state/pr1.approval" ]
+# ...and a member still hanging at the round's time limit is stopped and noted while the gate verdict stands.
+expect 0 review 1 52
+[ ! -e "$A/state/pr1.approval" ]
+read -r _ _ verdict < "$A/state/pr1.gate"; [ "$verdict" = CHANGES ]
+grep -q 'failed or timed out; noted' "$T/output"
+unset FAKE_HANG_B
+python3 - "$A/config.json" <<'PYCODE'
+import json,sys
+c=json.load(open(sys.argv[1])); c.pop('reviewTimeout'); json.dump(c,open(sys.argv[1],'w'))
+PYCODE
+echo 'ok: parallel round ends on gate failure or timeout without waiting on a hung panel member'
 # All three in parallel: one dissenting panel member blocks approval but the gate verdict is recorded.
 export FAKE_OUTPUT='VERDICT: APPROVE' FAKE_DISSENT=1
 expect 0 review 1 1
@@ -544,6 +567,17 @@ echo 'pr1-rev3-gate:S1 fixed: verified' > "$T/adhoc-ledger.md"
 expect 12 approve 1 "$T/adhoc-ledger.md"
 printf 'pr1-rev3-gate:S1 fixed: verified\npr1-rev3-0-fake-panel-a:S1 fixed: same bug\npr1-rev3-1-fake-panel-b:S1 declined: duplicate\n' > "$T/adhoc-ledger.md"
 expect 0 approve 1 "$T/adhoc-ledger.md"
+# A deep-review round can't make an earlier round's findings disappear from the ledger.
+export FAKE_OUTPUT=$'VERDICT: CHANGES\nS7 [should] file:1 deep bug'
+echo deep-fix >> "$AW/file"
+expect 0 review 1 4
+echo deep-fix-2 >> "$AW/file"
+printf 'pr1-rev4-gate:S7 fixed: ok\npr1-rev4-0-fake-panel-a:S7 fixed: ok\npr1-rev4-1-fake-panel-b:S7 fixed: ok\n' > "$T/deep-ledger.md"
+expect 12 approve 1 "$T/deep-ledger.md"
+grep -q 'pr1-rev3-gate:S1' "$T/output"
+cat "$T/adhoc-ledger.md" >> "$T/deep-ledger.md"
+expect 0 approve 1 "$T/deep-ledger.md"
+echo 'ok: deep review keeps earlier parallel-round findings in the ledger'
 echo adhoc-proof > "$A/runs/pr1.proof"
 expect 0 verify 1
 echo 'fix: adhoc' > "$A/runs/pr1.title"; echo 'adhoc body' > "$A/runs/pr1.body"

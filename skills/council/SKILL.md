@@ -146,7 +146,9 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    showing it as active. It kills running process groups and clears approval.
    `cm stop-job <id>` stops one job and clears its PR approval.
 4. Review with models from models.md:
-   - `cm review <n> 1`: Astra, DeepSeek and Muse in parallel (mode `all`).
+   - `cm review <n> 1`: Astra, DeepSeek and Muse in parallel (mode `all`). The
+     round ends when Astra fails or after `reviewTimeout` seconds in config
+     (default 1200); a panel member still running then is stopped and noted.
    - The orchestrator triages every finding into a ledger and takes the final
      call; `cm implement <n> <findings.md>` once with the accepted findings;
      the orchestrator verifies each fix; `cm approve <n> <ledger.md>`.

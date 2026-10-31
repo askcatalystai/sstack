@@ -34,7 +34,10 @@ def validate(state, gate_round, ledger):
     resolutions = {r.lower() for r in resolutions}
     missing = set()
     for review in history:
-        if review['kind'] != 'panel' and review is not history[gate]:
+        # Every panel round, every earlier parallel round, and the selected gate round.
+        if review['kind'] not in ('panel', 'all') and review is not history[gate]:
+            continue
+        if review['kind'] == 'all' and history.index(review) > gate:
             continue
         for job, text in review['outputs'].items():
             # A severity may appear on a continuation line of an S<n> finding.
