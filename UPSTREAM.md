@@ -1,0 +1,19 @@
+# Upstream
+
+Copied from [tstack](https://github.com/t3dotgg/tstack) at commit `10b2bf0`:
+
+- full-send
+- full-stop
+- council (including plan files)
+- file-pr
+- babysit-pr
+- takeover
+- modernize
+- leaving-pr-comments
+- sol-loop (renamed review-loop here)
+
+[pstack](https://github.com/cursor/plugins) at commit `4dd1d05` is used in
+place through the adapter, not copied.
+
+Run `scripts/upstream-check.sh` for a report of changes since these commits.
+It fetches temporary clones, prints diff stats, and always exits 0.

@@ -97,23 +97,20 @@ PRs: "council plan", "council to completion", or a council request followed by
 cm=<this skill>/plan/cm.sh
 $cm init <repo>/<plan>.md --gh <owner/repo> --title "<short title>" \
   --gate-dir <dir> --gate '<exact install, typecheck and build commands the deploy runs>' \
-  --reviewer gpt-6-astra --reviewer-effort low --implementer gpt-6.1-sol --implementer-effort high \
   --trailer '<the commit attribution line, if any>' --port 8787 \
   [--bot-review chatgpt-codex-connector]
 $cm dashboard --transcript <this session's .jsonl>   # open the URL for the user
 ```
 
-`--implementer` is `claude` when you write the code yourself, or a Codex
-model (for example `gpt-6.1-sol`) when Codex writes it through `cm implement`.
-`--effort` applies to Codex reviews and implementation; keep it at medium
-unless the user asks otherwise. `--implementer-effort` and `--reviewer-effort`
-override it per role (for example Sol high for code, Astra low for review);
-they're stored as `implementerEffort` and `reviewerEffort` in `config.json`.
+Model defaults (implementer, hardest tasks, review panel and gate reviewer) come
+from `~/.local/share/sidstack/models.md`; set `SIDSTACK_MODELS` to use another
+file at init. Provider, model and effort are saved in `config.json`.
+`--reviewer`, `--implementer`, `--effort`, `--implementer-effort` and
+`--reviewer-effort` override defaults. Model overrides keep the role's provider.
+`--implementer claude` means the orchestrator writes the code itself.
 
-`--bot-review <login>` names a GitHub review bot that reviews every PR by
-itself (the Codex GitHub app, `chatgpt-codex-connector`). With it set, the bot
-is the PR reviewer: skip `cm review` (step 4 below), and `cm ship` waits for the
-bot before merging. `--bot-timeout` sets the wait in seconds (default 900).
+`--bot-review <login>` names the GitHub review bot; it does not replace local
+review. `--bot-timeout` sets the wait in seconds (default 900).
 
 `init` prints the plan's slug. Other sessions may run their own plans, so put
 `COUNCIL_PLAN=<slug>` in front of every later `cm` call (and give each plan its
@@ -129,7 +126,8 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    history before undoing a deliberate choice (`git log -S`).
 2. Implement the smallest change that meets the acceptance check. With a
    Codex implementer, run `cm implement <n> [brief.md]` instead and review its
-   diff and report before step 4. Add a
+   diff and report before step 4. Use `cm implement <n> --hardest [brief.md]`
+   for the `hardest tasks` model and effort from models.md. Add a
    regression test that fails without the fix. Run the affected tests and
    the typecheck. Compare any failure against the default branch before
    calling it pre-existing, and name stale builds or isolation failures as
@@ -137,37 +135,46 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
 3. Write `runs/pr<n>.report`: what was wrong, what changed (files), the proof
    (tests and counts, what failed before), and what was not checked live.
    To pause or drop a PR, run `cm stop <n> [reason]` so the board stops
-   showing it as active.
-4. Review in `review-loop`'s order. Use a distinct round number per call,
-   run the two panel calls of a round in parallel, and fix through the
-   implementer between rounds:
-   - rounds 1 and 3: `CM_REVIEWER=opencode-go/deepseek-v4.1-flash CM_REVIEWER_EFFORT=high cm review <n> <r>`
-   - rounds 2 and 4: `CM_REVIEWER=opencode-go/muse-spark-1.3-contributor CM_REVIEWER_EFFORT=medium cm review <n> <r>`
-   - round 5, the gate: `cm review <n> 5` (Astra, low, from config)
-   The PR bot reviews the PR in step 6.
+   showing it as active. It kills running process groups and clears approval.
+   `cm stop-job <id>` stops one job and clears its PR approval.
+4. Review with models from models.md:
+   - `cm review <n> 1 panel`: every review-panel member in parallel; fix.
+   - `cm review <n> 2 panel`: every review-panel member again; fix.
+   - `cm review <n> 3 gate`: the gate reviewer; fix. The orchestrator verifies
+     fixes. Since approval binds to the exact change, rerun the gate after edits.
+   A light review, only when the user asks, uses one panel round and the gate.
+   Only a successful gate with an exact `VERDICT: APPROVE` line and no blocker
+   or should finding grants approval. Panel approval cannot grant it.
 5. Write `runs/pr<n>.title` (a conventional commit title in plain words) and
    `runs/pr<n>.body`: the plan reference, what was wrong, the bullets of what
    changed, the tests, "Reviewed by <reviewer> (approved in round N)", what
    is not checked live, and the harness attribution line.
-6. `cm ship <n>`. It commits (never the plan file), pushes, runs the gate on
+6. Run the real thing: tests covering the change (commands and pass counts),
+   and for UI the app in a browser with a screenshot path. Green mocked tests
+   alone are not proof. Write what ran, how and the result to `runs/pr<n>.proof`,
+   then `cm verify <n>`. This binds the proof to the current change.
+7. `cm ship <n>`. It commits (never the plan file), pushes, runs the gate on
    the default branch plus the branch, opens the PR, runs the gate again,
    squash-merges, and removes the worktree. With `botReview` set, it waits
    between opening and merging until the bot has finished reviewing the
    head commit (`cm bot-review <pr>`), and merges only if no bot thread is
    unresolved.
+   - Exit 8 means no gate approval for the current change; exit 10 means no
+     verification for it. Review and verify again after edits. Exit 9 means the
+     remote head moved after shipping; do not merge it on the old approval.
    - Exit 6 means bot findings; they're printed with severity and thread id.
-     Fix P0 and P1 findings, and real P2 bugs, in the worktree, commit, and
-     run `cm ship <n>` again; the bot re-reviews new commits by itself.
+     Fix P0 and P1 findings, and real P2 bugs, in the worktree, rerun the gate review
+     and verification, and run `cm ship <n>` again; the bot re-reviews new commits by itself.
      Resolve each thread once it's fixed, or once you judge it not worth
      fixing (say why in the PR body):
      `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}}}'`.
    - Exit 7 means the bot review failed or timed out. Check the PR; don't
      merge around it without telling the user.
    - Exit 3 means conflicts: merge `origin/<default>` in the worktree, resolve,
-     commit, and run `cm ship <n>` again.
+     rerun the gate review and verification, and run `cm ship <n>` again.
    - A gate log ending in `Killed` means memory pressure from parallel
      builds. Rerun it; it's not a code failure.
-7. Let the next item proceed while gates run in the background. Wait on
+8. Let the next item proceed while gates run in the background. Wait on
    them with background commands, never sleep loops in the foreground.
 
 ### 4. After each phase or batch

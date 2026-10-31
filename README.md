@@ -30,6 +30,12 @@ Update: `git -C ~/.local/share/sidstack pull && git -C ~/.local/share/pstack-src
 
 Needs `gh`, `python3`, the Codex CLI, and for council/OpenCode seats the `opencode` CLI. Works best in T3 Code (`delegate_task`); falls back to Claude Code and Codex.
 
+## Checks and upstream
+
+Run `scripts/check.sh` for shell, dashboard JavaScript and Python syntax checks
+and the offline plan-runner tests. See `UPSTREAM.md` for copied skill origins
+and `scripts/upstream-check.sh` for upstream change reports.
+
 ## Licenses
 
 pstack and tstack are MIT; their licenses are in `LICENSE.pstack` and `LICENSE.tstack`.

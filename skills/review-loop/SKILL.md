@@ -28,6 +28,9 @@ Make your change more correct before filing a PR. Models come from
 "sol loop" replaces steps 1-5 with Sol as the reviewer, up to 3 rounds. A
 model or round count the user names for the run wins.
 
+"light review" means one panel round plus the gate for routine changes when
+the user says so. The default stays two panel rounds plus the gate.
+
 ## Rules
 
 - **In T3 Code every review round is a `delegate_task` subagent** (`role: "review"`, `mode: "async"`, target from `models.md`), one per reviewer per round, so it shows as its own thread. Never run reviewers from the terminal (`opencode run`, `codex exec`) in T3. The only terminal reviewers are `cm.sh review` rounds inside a council plan, which feed the plan board.

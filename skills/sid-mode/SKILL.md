@@ -51,11 +51,12 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 ## Gates (every PR)
 
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, `pnpm lint` (or the repo's lint), with no new failures against main.
-2. `review-loop`: DeepSeek ×2 and Muse ×2, then Astra ×1; Sol fixes through the orchestrator. Decline nits with a reason.
-3. The deploy gate: main plus the branch, fresh install, lint, typecheck, and the builds the deploy runs (`cm.sh gate check`).
-4. Open the PR (`file-pr`), wait for the PR bot (`cm.sh bot-review`), fix real P0/P1 and real P2 bugs, resolve the rest with a reason.
-5. Gate again on the latest main, squash-merge (`cm.sh gate merge`), delete the worktree and branch.
-6. Check the change on prod once deployed, in the browser, signed in. Say what was not checked live.
+2. `review-loop`: DeepSeek ×2 and Muse ×2, then Astra ×1; Sol fixes through the orchestrator. Decline nits with a reason. When the user asks for light review on a routine change, use one panel round plus the gate; the default stays two panel rounds plus the gate.
+3. Behavioural verification before the PR: run covering tests with pass counts; for UI, run the app in a browser and save a screenshot. Green mocked tests alone are not proof. Write `runs/pr<n>.proof`, then `cm verify <n>` to bind it to the current change. Edits require fresh gate approval and verification.
+4. The deploy gate: main plus the branch, fresh install, lint, typecheck, and the builds the deploy runs (`cm.sh gate check`).
+5. Open the PR (`file-pr`), wait for the PR bot (`cm.sh bot-review`), fix real P0/P1 and real P2 bugs, resolve the rest with a reason.
+6. Gate again on the latest main, squash-merge (`cm.sh gate merge`), delete the worktree and branch.
+7. Check the change on prod once deployed, in the browser, signed in. Say what was not checked live.
 
 ## Principles
 
