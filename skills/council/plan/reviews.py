@@ -40,6 +40,9 @@ def validate(state, gate_round, ledger):
         if review['kind'] == 'all' and history.index(review) > gate:
             continue
         for job, text in review['outputs'].items():
+            # In an all round Astra consolidates the panel: only its list needs resolutions.
+            if review['kind'] == 'all' and not job.endswith('-gate'):
+                continue
             # A severity may appear on a continuation line of an S<n> finding.
             finding = None
             for line in text.splitlines():

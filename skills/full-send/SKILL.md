@@ -58,12 +58,15 @@ plan is `<repo>-adhoc` (create it once with `cm init --adhoc --repo <dir>
 
 1. **Brief.** Write `task.md`: the user's goal in their words, the smallest
    change that meets it, and the acceptance check. `cm new <n> task.md`.
-2. **Code.** `cm implement <n>` (Sol). For a trivial change Claude may edit the
-   worktree itself instead.
-3. **Review.** `cm review <n> 1`: Astra, DeepSeek and Muse in one parallel round
-   (see `review-loop`). Claude triages every finding and takes the final call,
-   then `cm implement <n> findings.md` once and verifies each fix, then
-   `cm approve <n> ledger.md`. Skip the fix pass if all three approved cleanly.
+2. **Code.** `cm implement <n>` writes Sol's brief; run Sol as a subagent with
+   it, then `cm implemented <n>`. For a trivial change Claude may edit the
+   worktree itself instead. Every model runs as a subagent, never from the
+   terminal.
+3. **Review** (see `review-loop`): `cm brief <n> 1`, DeepSeek and Muse as
+   parallel subagents, `cm brief <n> 1 gate-after-panel`, Astra as a subagent
+   with their findings, `cm review <n> 1`. Claude takes the final call on
+   Astra's list, Sol fixes once, Claude verifies each fix, `cm approve <n>
+   ledger.md`. Skip the fix pass if Astra approved cleanly.
 4. **Prove it.** Run the real thing (see "Proof") and write
    `runs/pr<n>.proof`; `cm verify <n>`.
 5. **Ship.** Write `runs/pr<n>.title` and `runs/pr<n>.body` (`file-pr` style;

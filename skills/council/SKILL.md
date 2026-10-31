@@ -123,7 +123,7 @@ own `--port`). Without it, `cm` uses whichever plan was initialised last.
 
 ### 3. Each PR item
 
-Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
 "deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 
 Work phase by phase. Inside a phase, PRs that touch disjoint files can run in
@@ -146,16 +146,18 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    showing it as active. It kills running process groups and clears approval.
    `cm stop-job <id>` stops one job and clears its PR approval.
 4. Review with models from models.md:
-   - `cm review <n> 1`: Astra, DeepSeek and Muse in parallel (mode `all`). The
-     round ends when Astra fails or after `reviewTimeout` seconds in config
-     (default 1200); a panel member still running then is stopped and noted.
-   - The orchestrator triages every finding into a ledger and takes the final
-     call; `cm implement <n> <findings.md>` once with the accepted findings;
-     the orchestrator verifies each fix; `cm approve <n> <ledger.md>`.
+   - `cm brief <n> 1`: prints the panel briefs and where to save each reply.
+     Run DeepSeek and Muse as parallel subagents; save each reply verbatim.
+   - `cm brief <n> 1 gate-after-panel`: Astra's brief with both replies. Run
+     Astra as a subagent; save its reply. `cm review <n> 1` records the round.
+   - The orchestrator triages Astra's consolidated list into a ledger and takes
+     the final call; `cm implement <n> <findings.md>` writes Sol's brief, Sol
+     runs as a subagent, then `cm implemented <n>`; the orchestrator verifies
+     each fix; `cm approve <n> <ledger.md>`.
    - Deep review (risky areas, orchestrator's call): `cm review <n> 2` on the
      fixed change before approving.
-   A round where all three return an exact `VERDICT: APPROVE` with no blocker
-   or should is the approval itself, while the change stays unchanged. After
+   If Astra returns an exact `VERDICT: APPROVE` with no blocker or should,
+   that is the approval itself, while the change stays unchanged. After
    fixes, `cm approve` requires that round and a complete resolution ledger.
 5. Write `runs/pr<n>.title` (a conventional commit title in plain words) and
    `runs/pr<n>.body`: the plan reference, what was wrong, the bullets of what

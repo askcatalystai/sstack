@@ -8,13 +8,15 @@
 #                                      one-off PRs without a plan file (slug <repo>-adhoc); full send / full stop use it
 #   cm.sh use <slug>                   make another initialised plan current
 #   cm.sh new <n> [task.md]            worktree + branch for PR <n>, from origin/<default>; adhoc plans need task.md
-#   cm.sh implement <n> [extra.md...]    Codex implementer (config implementer) writes the change in the worktree
+#   cm.sh implement <n> [--hardest] [extra.md...]  write the implementer's brief; the orchestrator runs it as a subagent
+#   cm.sh implemented <n>              record that the implementer subagent wrote runs/pr<n>.report
 #   cm.sh stop <n> [reason]            mark a PR stopped (not active) and close its running jobs
 #   cm.sh adopt <n>                   explicitly take over the current origin branch SHA
 #   cm.sh verify <n>                  bind runs/pr<n>.proof to the current change
-#   cm.sh stop-job <id>               stop one job process group
-#   cm.sh review <n> <round> [all|panel|gate]  read-only review of the uncommitted change (needs runs/pr<n>.report);
-#                                      all (default): gate reviewer and every panel member in parallel, one round
+#   cm.sh brief <n> <round> [all|panel|gate|gate-after-panel]  write review briefs, pin the change hash, print
+#                                      which subagent to run and where to save each reply (models never run from here)
+#   cm.sh review <n> <round> [all|panel|gate]  record the round from the saved replies and apply the gates;
+#                                      all (default): panel replies, then Astra's consolidated reply decides
 #   cm.sh approve <n> <ledger.md>      bind orchestrator resolutions to the fixed change
 #   cm.sh ship [--no-merge] <n>        commit, push, gate, open the PR, bot review, gate again, merge, remove the worktree
 #                                      (--no-merge stops after a clean bot review with state "ready")
@@ -28,7 +30,8 @@
 #
 # With more than one plan, name yours on every call: COUNCIL_PLAN=<slug> cm.sh <command> (slug: printed by init).
 # State lives in ~/.local/state/council/<slug>/ (current plan: ~/.local/state/council/current).
-# Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+# Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+# Every model runs as a subagent the orchestrator starts; cm writes briefs and records replies.
 # "deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 # Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification, 11 unowned branch, 12 incomplete resolution ledger or missing gate round.
 # Gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused, 9 head moved.
@@ -179,9 +182,10 @@ shipping_evidence() {
     shipst "$n" "needs-attention: no verification for the current change"; exit 10
   fi
 }
+# Mark a PR's board jobs stopped; the orchestrator cancels the subagents themselves (task_cancel).
 stop_jobs() {
   python3 - "$S" "$1" "$2" <<'EOF'
-import fcntl, json, os, signal, sys, time
+import fcntl, json, sys, time
 from pathlib import Path
 s, kind, target = sys.argv[1:]
 p = Path(s)/'dashboard/jobs.json'
@@ -190,43 +194,10 @@ with open(p, 'a+') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
     f.seek(0)
     data = json.loads(f.read() or '{"jobs":[]}')
-    groups = []
     for j in data['jobs']:
-        if (str(j.get('plan')) if kind == 'plan' else j['id']) != target:
-            continue
-        for suffix in ('approval', 'verified'):
-            (Path(s)/f"state/pr{j['plan']}.{suffix}").unlink(missing_ok=True)
-        if j.get('status') != 'running':
-            continue
-        pidfile = Path(s)/f"runs/{j['id']}.pid"
-        pid = int(pidfile.read_text()) if pidfile.exists() else j.get('pid')
-        try: command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-        except OSError: command = []
-        worker = [b'--worker', j['id'].encode()]
-        if pid and pid > 1 and any(command[i:i+2] == worker for i in range(len(command)-1)):
-            groups.append((pid, worker))
-            try: os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError: pass
-        j['status'] = 'stopped'
-        j['finishedAt'] = time.strftime('%Y-%m-%dT%H:%M:%S%z')
+        if (str(j.get('plan')) if kind == 'plan' else j['id']) == target and j.get('status') == 'running':
+            j['status'] = 'stopped'; j['finishedAt'] = time.strftime('%Y-%m-%dT%H:%M:%S%z')
     f.seek(0); f.truncate(); json.dump(data, f, indent=1)
-# Release the board lock while waiting for runners to reap their children.
-if groups:
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        alive = []
-        for pid, worker in groups:
-            try: os.killpg(pid, 0); alive.append((pid, worker))
-            except ProcessLookupError: pass
-        groups = alive
-        if not groups: break
-        time.sleep(.1)
-    for pid, worker in groups:
-        try:
-            command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-            if any(command[i:i+2] == worker for i in range(len(command)-1)):
-                os.killpg(pid, signal.SIGKILL)
-        except OSError: pass
 EOF
 }
 
@@ -265,9 +236,11 @@ new)
   echo "$W ($(cut -c1-8 "$S/runs/pr$n.base"))"; cat "$S/runs/pr$n.task";;
 
 implement)
+  # Writes the implementer's brief. The orchestrator runs it as a subagent (never from the terminal),
+  # then calls `cm implemented <n>` once the subagent has written runs/pr<n>.report.
   n=${1:?plan PR number}; W=$(wt "$n"); P=$S/runs/pr$n-impl.prompt; shift
   [ -d "$W" ] || die "run cm.sh new $n first"
-  model=$(conf implementer); provider=$(conf implementerProvider); impl_effort=$(effort_for implementer)
+  provider=$(conf implementerProvider); model=$(conf implementer); impl_effort=$(effort_for implementer)
   if [ "${1:-}" = --hardest ]; then
     read -r provider model impl_effort < <(python3 - "$S/config.json" <<'EOF'
 import json,sys
@@ -277,9 +250,10 @@ EOF
 )
     shift
   fi
-  [ -n "$model" ] && [ "$model" != claude ] || die "implementer is claude; set --implementer <codex model> in init"
+  active_or_new() { [[ $(cat "$S/state/pr$n" 2>/dev/null) != stopped* ]] || die "PR $n is stopped"; }
+  active_or_new
   clear_evidence "$n"
-  setst "$n" "coding"
+  rm -f "$S/runs/pr$n.report"
   what="plan PR $n from $PLAN"; [ "$(conf adhoc)" = True ] && what="one-off PR $n"
   { echo "Implement $what in this git worktree ($W). Work only here; do not commit, push or switch branches."
     echo "Make the smallest change that meets the acceptance check. Add a regression test that fails without the fix. Run the affected tests and the typecheck."
@@ -287,10 +261,26 @@ EOF
     for extra in "$@"; do echo; cat "$extra"; done
     echo; echo "=== Plan item ==="; cat "$S/runs/pr$n.task"
   } > "$P"
-  "$SKILL/dashboard/run-job.sh" "pr$n-impl" "$n" implement "$provider" "$model" "$impl_effort" "$W" "$S/runs/pr$n-impl.out" "$S/runs/pr$n-impl.log" -- "$P"; rc=$?
-  [[ $(cat "$S/state/pr$n") = stopped:* ]] && exit 1
-  [ $rc = 0 ] && setst "$n" "implemented" || setst "$n" "needs-attention: implement failed ($S/runs/pr$n-impl.log)"
-  tail -n 30 "$S/runs/pr$n-impl.out" 2>/dev/null; exit $rc;;
+  setst "$n" "coding"
+  job "pr$n-impl" "$n" implement "$provider" "$model" "$impl_effort" running "$S/runs/pr$n.report"
+  echo "subagent: implementer $provider / $model / $impl_effort"
+  echo "brief: $P"
+  echo "then: cm implemented $n";;
+
+implemented)
+  n=${1:?plan PR number}
+  [ -s "$S/runs/pr$n.report" ] || die "the implementer subagent has not written $S/runs/pr$n.report"
+  [[ $(cat "$S/state/pr$n" 2>/dev/null) != stopped* ]] || die "PR $n is stopped"
+  python3 - "$S/dashboard/jobs.json" "pr$n-impl" <<'EOF'
+import json,sys,time
+p,i=sys.argv[1:]
+try: d=json.load(open(p))
+except (OSError, ValueError): sys.exit()
+for j in d.get('jobs',[]):
+    if j['id']==i and j.get('status')=='running': j['status']='done'; j['finishedAt']=time.strftime('%Y-%m-%dT%H:%M:%S%z')
+json.dump(d,open(p,'w'),indent=1)
+EOF
+  setst "$n" "implemented"; echo "PR $n implemented";;
 
 stop)
   n=${1:?plan PR number}
@@ -300,16 +290,13 @@ stop)
   rm -f "$S/state/pr$n.approval" "$S/state/pr$n.verified"
   flock -u 8
   stop_jobs plan "$n"
-  echo "PR $n stopped";;
+  echo "PR $n stopped; cancel its running subagents (task_cancel)";;
 
 adopt)
   n=${1:?plan PR number}; b=$(br "$n")
   seen=$(git -C "$R" ls-remote --exit-code origin "refs/heads/$b") || die "cannot read remote branch $b"
   echo "${seen%%$'\t'*}" > "$S/state/pr$n.remote"
   echo "adopted $b at ${seen%%$'\t'*}";;
-
-stop-job)
-  stop_jobs id "${1:?job id}";;
 
 verify)
   n=${1:?plan PR number}
@@ -343,11 +330,30 @@ approve)
   printf '%s orchestrator %s\n' "$hash" "$gate_round" > "$S/state/pr$n.approval"
   echo "PR $n orchestrator approval bound to current change (gate round $gate_round)";;
 
-review)
+brief)
+  # Writes this round's review briefs and pins the change hash. The orchestrator runs each reviewer
+  # as a subagent and saves its reply verbatim to the printed path, then runs `cm review <n> <r> [mode]`.
+  # all: the panel first (in parallel), then `cm brief <n> <r> gate-after-panel` for Astra with the panel's findings.
   n=${1:?plan PR number} r=${2:?round}; mode=${3:-all}; W=$(wt "$n"); P=$S/runs/pr$n-rev$r.prompt
   [ -s "$S/runs/pr$n.report" ] || die "write the implementer report to $S/runs/pr$n.report first"
-  impl=$(conf implementer); [ "${impl:-claude}" = claude ] && job "pr$n-implement" "$n" implement anthropic claude "$(effort_for implementer)" done "$S/runs/pr$n.report"
-  setst "$n" "review round $r"
+  [[ $(cat "$S/state/pr$n" 2>/dev/null) != stopped* ]] || die "PR $n is stopped"
+  if [ "$mode" = gate-after-panel ]; then
+    [ -s "$P" ] && [ -s "$S/state/pr$n.rev$r.hash" ] || die "run cm brief $n $r first"
+    G=$S/runs/pr$n-rev$r-gate.prompt
+    { cat "$P"
+      echo; echo "=== Review panel findings for this round ==="
+      echo "Check each finding against the code: confirm it (keep or correct its severity), reject it with evidence, and add anything the panel missed. Your reply is the single consolidated list the implementer fixes; restate every confirmed finding as your own S<n> line."
+      while IFS=$'\t' read -r _ _ _ slug; do
+        f=$S/runs/pr$n-rev$r-$slug.out
+        echo; echo "--- pr$n-rev$r-$slug ---"
+        if [ -s "$f" ]; then cat "$f"; else echo "(no reply: failed or timed out)"; fi
+      done < <(python3 "$SKILL/panel.py" "$S/config.json")
+    } > "$G"
+    echo "subagent: gate $(conf reviewerProvider) / $(conf reviewer) / $(effort_for reviewer)"
+    echo "brief: $G"; echo "save reply to: $S/runs/pr$n-rev$r-gate.out"
+    setst "$n" "review round $r: gate"; exit 0
+  fi
+  [[ $mode = all || $mode = panel || $mode = gate ]] || die "brief mode must be all, panel, gate or gate-after-panel"
   { echo "Review only. Do not edit, commit, push, comment on PRs, or start subagents."
     echo "Repo: $W (a git worktree). The change under review is the uncommitted working tree against this branch's base commit $(cat "$S/runs/pr$n.base"): run \`git diff $(cat "$S/runs/pr$n.base")\` and read untracked files (\`git status --short\`). origin/$BASE may have moved on since the branch was cut; changes that exist only there are not part of this PR and are not regressions. Ignore node_modules symlinks."
     what="plan PR $n from $PLAN"; [ "$(conf adhoc)" = True ] && what="one-off PR $n"
@@ -358,126 +364,58 @@ review)
     echo "Reply:"; echo "VERDICT: APPROVE or CHANGES"; echo "S1 [blocker|should|nit] <file>:<line> <claim>. Fix: <suggestion> (stable ids)"
     echo; echo "=== Plan item ==="; cat "$S/runs/pr$n.task"
     echo; echo "=== Implementer report ==="; cat "$S/runs/pr$n.report"
-    [ "$r" -gt 1 ] && [ -f "$S/runs/pr$n-rev$((r-1)).out" ] && { echo; echo "=== Earlier findings (verify they are fixed) ==="; cat "$S/runs/pr$n-rev$((r-1)).out"; }
   } > "$P"
-  [[ $mode = panel || $mode = gate || $mode = all ]] || die "review mode must be all, panel or gate"
-  before=$(change_hash "$n") || exit 1
-  rm -f "$S/state/pr$n.approval" "$S/state/pr$n.gate"
-  dropped=()
-  if [ "$mode" = panel ] || [ "$mode" = all ]; then
-    pids=(); ids=(); gate_pid=""
-    if [ "$mode" = all ]; then
-      # The gate reviewer runs in the same round as the panel, in parallel.
-      model=$(conf reviewer)
-      "$SKILL/dashboard/run-job.sh" "pr$n-rev$r-gate" "$n" review "$(conf reviewerProvider)" "$model" "$(effort_for reviewer)" "$W" "$S/runs/pr$n-rev$r-gate.out" "$S/runs/pr$n-rev$r-gate.log" -- "$P" &
-      gate_pid=$!
-    fi
-    while IFS=$'\t' read -r p_provider p_model p_effort p_slug; do
-      id=pr$n-rev$r-$p_slug; ids+=("$id")
-      "$SKILL/dashboard/run-job.sh" "$id" "$n" review "$p_provider" "$p_model" "$p_effort" "$W" "$S/runs/$id.out" "$S/runs/$id.log" -- "$P" &
-      pids+=("$!")
-    done < <(python3 - "$S/config.json" <<'EOF'
-import json,re,sys
-for i, m in enumerate(json.load(open(sys.argv[1]))['reviewPanel']):
-    slug=re.sub('[^a-z0-9]+','-',m['model'].lower()).strip('-')
-    print(m['provider'],m['model'],m['effort'],str(i)+'-'+slug,sep='\t')
-EOF
-)
-    : > "$S/runs/pr$n-rev$r.out"
-    failed=0; approved=1
-    if [ "$mode" = all ]; then
-      # Watch every reviewer at once: Astra failing or the round timing out stops the rest
-      # (their outputs stay); a panel member that fails or hangs is noted, not waited on.
-      limit=$(conf reviewTimeout); deadline=$(( $(date +%s) + ${limit:-1200} ))
-      declare -A rcs=()
-      while :; do
-        for i in "${!pids[@]}"; do
-          [ -n "${rcs[$i]:-}" ] && continue
-          kill -0 "${pids[$i]}" 2>/dev/null && continue
-          rc=0; wait "${pids[$i]}" || rc=$?; rcs[$i]=$rc
-        done
-        if [ -z "${rcs[gate]:-}" ] && ! kill -0 "$gate_pid" 2>/dev/null; then
-          rc=0; wait "$gate_pid" || rc=$?; rcs[gate]=$rc
-        fi
-        pending=0; for i in "${!pids[@]}"; do [ -n "${rcs[$i]:-}" ] || pending=1; done
-        [ -n "${rcs[gate]:-}" ] || pending=1
-        [ "$pending" = 0 ] && break
-        timed_out=0; [ "$(date +%s)" -ge "$deadline" ] && timed_out=1
-        if [ "$timed_out" = 1 ] || { [ -n "${rcs[gate]:-}" ] && [ "${rcs[gate]}" != 0 ]; }; then
-          for i in "${!pids[@]}"; do
-            [ -n "${rcs[$i]:-}" ] && continue
-            echo "cm: stopping panel member ${ids[$i]} (round ended without it)" >&2
-            stop_jobs id "${ids[$i]}"; wait "${pids[$i]}" 2>/dev/null; rcs[$i]=124; dropped+=("${ids[$i]}")
-          done
-          if [ -z "${rcs[gate]:-}" ]; then
-            echo "cm: gate reviewer timed out" >&2
-            stop_jobs id "pr$n-rev$r-gate"; wait "$gate_pid" 2>/dev/null; rcs[gate]=124; dropped+=("pr$n-rev$r-gate")
-          fi
-          break
-        fi
-        sleep 1
-      done
-      for i in "${!pids[@]}"; do
-        if [ "${rcs[$i]}" != 0 ]; then approved=0; echo "cm: panel member ${ids[$i]} failed or timed out; noted" >&2; fi
-        out=$S/runs/${ids[$i]}.out
-        python3 "$SKILL/reviews.py" clean "$out" || approved=0
-        cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
-      done
-      ids+=("pr$n-rev$r-gate")
-      [ "${rcs[gate]}" = 0 ] || failed=1
-      out=$S/runs/pr$n-rev$r-gate.out
-      python3 "$SKILL/reviews.py" clean "$out" || approved=0
-      cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
-    else
-      for i in "${!pids[@]}"; do
-        wait "${pids[$i]}" || failed=1
-        out=$S/runs/${ids[$i]}.out
-        python3 "$SKILL/reviews.py" clean "$out" || approved=0
-        cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
-      done
-    fi
+  change_hash "$n" > "$S/state/pr$n.rev$r.hash" || exit 1
+  rm -f "$S/state/pr$n.approval" "$S/state/pr$n.gate" "$S/runs/pr$n-rev$r".out "$S/runs/pr$n-rev$r"-*.out
+  if [ "$mode" = gate ]; then
+    echo "subagent: gate $(conf reviewerProvider) / $(conf reviewer) / $(effort_for reviewer)"
+    echo "brief: $P"; echo "save reply to: $S/runs/pr$n-rev$r.out"
   else
-    ids=("pr$n-rev$r")
-    model=$(conf reviewer)
-    "$SKILL/dashboard/run-job.sh" "pr$n-rev$r" "$n" review "$(conf reviewerProvider)" "$model" "$(effort_for reviewer)" "$W" "$S/runs/pr$n-rev$r.out" "$S/runs/pr$n-rev$r.log" -- "$P"; failed=$?
-    out=$S/runs/pr$n-rev$r.out; approved=0
-    if [ "$failed" = 0 ] && python3 "$SKILL/reviews.py" clean "$out"; then approved=1; fi
-    tail -n 40 "$out"
+    while IFS=$'\t' read -r provider model effort slug; do
+      echo "subagent: panel $provider / $model / $effort"; echo "brief: $P"; echo "save reply to: $S/runs/pr$n-rev$r-$slug.out"
+    done < <(python3 "$SKILL/panel.py" "$S/config.json")
+    [ "$mode" = all ] && echo "then: cm brief $n $r gate-after-panel (Astra with the panel's findings)"
   fi
-  # Preserve all panel outputs, including findings from an unsuccessful run.
-  outputs=()
-  for id in "${ids[@]}"; do
-    [ ! -f "$S/runs/$id.out" ] || outputs+=("$S/runs/$id.out")
-  done
-  if [ "$mode" = panel ]; then
-    python3 "$SKILL/reviews.py" record "$S/state/pr$n.reviews.json" "$mode" "$r" "${outputs[@]}" || exit 1
-  fi
+  setst "$n" "review round $r: $mode";;
+
+review)
+  # Records a round from the replies the orchestrator saved; launches nothing.
+  n=${1:?plan PR number} r=${2:?round}; mode=${3:-all}
+  [[ $mode = all || $mode = panel || $mode = gate ]] || die "review mode must be all, panel or gate"
+  [ -s "$S/state/pr$n.rev$r.hash" ] || die "run cm brief $n $r $mode first"
+  before=$(cat "$S/state/pr$n.rev$r.hash")
   exec 8<>"$S/dashboard/jobs.json"; flock 8
-  [[ $(cat "$S/state/pr$n") = stopped* ]] && exit 1
-  # A stopped job may exit zero after trapping TERM; it still cannot approve.
-  if python3 - "$S/dashboard/jobs.json" "${#dropped[@]}" "${dropped[@]}" "${ids[@]}" <<'EOF'
-import json,sys
-k=int(sys.argv[2]); dropped=set(sys.argv[3:3+k]); ids=set(sys.argv[3+k:])-dropped
-sys.exit(not any(j['id'] in ids and j['status']=='stopped' for j in json.load(open(sys.argv[1]))['jobs']))
-EOF
-  then setst "$n" "needs-attention: review stopped"; exit 1; fi
+  [[ $(cat "$S/state/pr$n") = stopped* ]] && { echo "cm: PR $n is stopped" >&2; exit 1; }
+  outputs=(); failed=0; approved=1; : > "$S/runs/pr$n-rev$r.all"
+  if [ "$mode" != gate ]; then
+    while IFS=$'\t' read -r _ _ _ slug; do
+      f=$S/runs/pr$n-rev$r-$slug.out
+      if [ -s "$f" ]; then outputs+=("$f"); cat "$f" >> "$S/runs/pr$n-rev$r.all"
+        [ "$mode" = panel ] && { python3 "$SKILL/reviews.py" clean "$f" || approved=0; }
+      else echo "cm: panel member pr$n-rev$r-$slug has no reply; noted" >&2; [ "$mode" = panel ] && failed=1; fi
+    done < <(python3 "$SKILL/panel.py" "$S/config.json")
+  fi
+  if [ "$mode" != panel ]; then
+    out=$S/runs/pr$n-rev$r.out; [ "$mode" = all ] && out=$S/runs/pr$n-rev$r-gate.out
+    if [ -s "$out" ]; then outputs+=("$out"); cat "$out" >> "$S/runs/pr$n-rev$r.all"
+      # Astra's consolidated verdict decides; the panel informed it.
+      python3 "$SKILL/reviews.py" clean "$out" || approved=0
+    else failed=1; fi
+  fi
   if [ "$failed" != 0 ]; then
-    setst "$n" "needs-attention: reviewer job failed"; exit 1
+    setst "$n" "needs-attention: reviewer reply missing"; exit 1
   elif [ "$before" != "$(change_hash "$n")" ]; then
     setst "$n" "needs-attention: change moved during review"; exit 1
-  else
-    if [ "$mode" = gate ] || [ "$mode" = all ]; then
-      python3 "$SKILL/reviews.py" record "$S/state/pr$n.reviews.json" "$mode" "$r" "${outputs[@]}" || exit 1
-    fi
-    if { [ "$mode" = gate ] || [ "$mode" = all ]; } && grep -qxE 'VERDICT: (APPROVE|CHANGES)' "$out"; then
-      verdict=CHANGES; [ "$approved" = 1 ] && verdict=APPROVE
-      printf '%s %s %s\n' "$before" "$r" "$verdict" > "$S/state/pr$n.gate"
-    fi
-    if [ "$approved" = 1 ]; then
-      { [ "$mode" = gate ] || [ "$mode" = all ]; } && printf '%s %s %s\n' "$before" "$model" "$r" > "$S/state/pr$n.approval"
-      setst "$n" "$mode approved round $r"
-    else setst "$n" "changes round $r"; fi
   fi
+  python3 "$SKILL/reviews.py" record "$S/state/pr$n.reviews.json" "$mode" "$r" "${outputs[@]}" || exit 1
+  if [ "$mode" != panel ] && grep -qxE 'VERDICT: (APPROVE|CHANGES)' "$out"; then
+    verdict=CHANGES; [ "$approved" = 1 ] && verdict=APPROVE
+    printf '%s %s %s\n' "$before" "$r" "$verdict" > "$S/state/pr$n.gate"
+  fi
+  if [ "$approved" = 1 ]; then
+    [ "$mode" != panel ] && printf '%s %s %s\n' "$before" "$(conf reviewer)" "$r" > "$S/state/pr$n.approval"
+    setst "$n" "$mode approved round $r"
+  else setst "$n" "changes round $r"; fi
   cat "$S/state/pr$n";;
 
 bot-review)

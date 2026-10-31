@@ -1,38 +1,43 @@
 ---
 name: review-loop
-description: Review a change in one parallel round (Astra, DeepSeek, Muse); Claude takes the final call, Sol fixes once, Claude approves, then the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
+description: DeepSeek and Muse review in parallel, Astra consolidates their findings into one list, Claude takes the final call, Sol fixes once, Claude approves, then the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
 ---
 
 # review-loop
 
 Make your change more correct before filing a PR. Models come from
-`~/.local/share/sidstack/models.md`. Reviews come first; Sol changes nothing until
-the round is in and Claude has triaged it.
+`~/.local/share/sidstack/models.md`. Every model runs as a subagent the orchestrator starts, never as a terminal
+command. Sol changes nothing until Astra has consolidated and Claude has
+triaged.
 
 ## The sequence
 
-Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
 "deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
 
-1. **One parallel round.** Astra (`reviewer`), DeepSeek and Muse
-   (`review panel`) review the same change at the same time. In a council plan:
-   `cm review <n> 1` (mode `all`). Astra failing ends the round; so does the
-   round's time limit, and a panel member still running then is stopped and
-   noted.
-2. **The orchestrator takes the final call.** Claude (Opus) reads every
-   finding, checks it against the code, and keeps a ledger: each blocker and
-   should is accepted, or declined with a reason. Claude also reviews the diff
-   itself for slop: dead code, needless guards, comments that restate code,
-   names that lie, anything a reviewer missed.
-3. **Sol fixes once**: every accepted finding in one brief.
-4. **The orchestrator verifies each fix** (diff, checks, a focused test where
+1. **Panel.** DeepSeek and Muse (`review panel`) review the change in
+   parallel, each as its own subagent. Their findings do not go to Sol.
+2. **Astra consolidates.** Astra (`reviewer`) reviews the change with both
+   panel replies in its brief: it confirms each finding, rejects it with
+   evidence, or adds what both missed, and returns the one list Sol works from.
+   A panel member with no reply is noted in Astra's brief.
+3. **The orchestrator takes the final call.** Claude (Opus) checks Astra's
+   list against the code and keeps a ledger (accepted, or declined with a
+   reason). Claude also reads the diff itself for slop: dead code, needless
+   guards, comments that restate code, names that lie.
+4. **Sol fixes once**: every accepted finding in one brief.
+5. **The orchestrator verifies each fix** (diff, checks, a focused test where
    the finding needs one) and records the approval for the fixed change
-   (`cm approve <n> <ledger.md>` in a plan).
-5. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
+   (`cm approve <n> <ledger.md>`).
+6. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
    `babysit-pr` / `cm bot-review` handle its findings the same way.
 
-If all three approve with no blocker or should, the round itself is the
-approval and steps 3 and 4 are skipped.
+If Astra approves with no blocker or should, its verdict is the approval and
+steps 4 and 5 are skipped.
+
+In a plan: `cm brief <n> <r>` prints the panel briefs and where to save each
+reply; `cm brief <n> <r> gate-after-panel` builds Astra's brief from them;
+`cm review <n> <r>` records the round and applies the gates.
 
 "deep review" is the orchestrator's call for risky changes (auth, permissions,
 payments, data loss, concurrency, migrations) or a fix that changed behavior
@@ -41,10 +46,9 @@ Sol reviews alone, up to 3 rounds. A model or round count the user names wins.
 
 ## Rules
 
-- **In T3 Code every review round is a `delegate_task` subagent** (`role: "review"`, `mode: "async"`, target from `models.md`), one per reviewer per round, so it shows as its own thread. Never run reviewers from the terminal (`opencode run`, `codex exec`) in T3. The only terminal reviewers are `cm.sh review` rounds inside a council plan, which feed the plan board.
-- All three reviewers get the same brief. `cm review` sends one shared brief;
-  outside a plan, a diff over ~20 files is split by area, one brief per area,
-  every area to all three. Never send secrets or customer data (Muse trains on
+- **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, DeepSeek, Muse and Astra, one subagent per reviewer per round, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`). `cm` only writes briefs and records the replies the orchestrator saves.
+- DeepSeek and Muse get the same brief; Astra gets it plus their replies.
+  Outside a plan, a diff over ~20 files is split by area, one brief per area. Never send secrets or customer data (Muse trains on
   requests).
 - A panel member that times out or errors is noted in the ledger and the
   round goes on without it.
@@ -108,9 +112,9 @@ S1 [blocker|should|nit] <file>:<line> <claim>. Fix: <suggestion> (stable ids)
 
 ## 2b. Review panel
 
-Send the same brief to the reviewer and each `review panel` member in
-`models.md` (DeepSeek and Muse by default), in parallel, read-only. Their
-findings go into one ledger with their source; Claude takes the final call.
+Send the brief to each `review panel` member in `models.md` (DeepSeek and Muse
+by default), in parallel, read-only; then send Astra the brief plus their
+replies. Astra's consolidated list is what the ledger resolves.
 
 ## 3. Answer findings
 

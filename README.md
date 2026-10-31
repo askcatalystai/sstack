@@ -16,7 +16,7 @@ Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models 
 
 ## Roles
 
-See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Astra, DeepSeek and Muse review in one parallel round; the Codex GitHub bot reviews every PR and merges wait for it; the council is Opus, Sol, DeepSeek and Muse.
+See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; DeepSeek and Muse review in parallel and Astra consolidates their findings into one list; every model runs as a subagent; the Codex GitHub bot reviews every PR and merges wait for it; the council is Opus, Sol, DeepSeek and Muse.
 
 ## Install
 

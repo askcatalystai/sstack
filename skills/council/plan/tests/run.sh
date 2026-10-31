@@ -127,24 +127,6 @@ for file in state/pr1.approval state/pr1.verified runs/pr1.proof; do [ ! -e "$S/
 [ "$(cat "$S/state/pr1.remote")" = owned ]
 rm "$S/state/pr1.remote"
 echo 'ok: new and implement clear evidence and preserve branch ownership'
-# Direct runner defaults match jobs.py, and its worker publishes its PID first.
-mkdir -p "$T/home/.local/state/council"
-ln -s "$S" "$T/home/.local/state/council/current"
-echo prompt > "$T/prompt"
-env -u COUNCIL_STATE HOME="$T/home" FAKE_PID_FILE="$S/runs/default-job.pid" bash "$(dirname "$CM")/dashboard/run-job.sh" default-job 1 review codex fake low "$T/repo" "$S/runs/default.out" "$S/runs/default.log" -- "$T/prompt"
-[ ! -e "$S/runs/default-job.pid" ]
-FAKE_SLEEP=1 bash "$(dirname "$CM")/dashboard/run-job.sh" parent-term 1 review codex fake low "$T/repo" "$S/runs/term.out" "$S/runs/term.log" -- "$T/prompt" &
-parent=$!
-for ((i=0; i<200; i++)); do
-  [ -f "$S/runs/parent-term.pid" ] && break
-  sleep .02
-done
-worker=$(cat "$S/runs/parent-term.pid")
-kill -TERM "$parent"
-wait "$parent" || true
-if kill -0 "$worker" 2>/dev/null; then echo 'FAIL: parent TERM left worker alive'; exit 1; fi
-[ ! -e "$S/runs/parent-term.pid" ]
-echo 'ok: runner defaults, synchronous worker PID, parent TERM and PID cleanup'
 W=$T/repo-wt/repo-plan-1
 # Derive worktree from the config rather than assuming the slug casing.
 W=$(python3 - "$S/config.json" <<'PY'
@@ -156,8 +138,27 @@ echo change >> "$W/file"
 echo 'implemented file' > "$S/runs/pr1.report"
 echo 'fix: test' > "$S/runs/pr1.title"
 echo 'test body' > "$S/runs/pr1.body"
+# The orchestrator's part of a review: brief, run subagents, save their replies verbatim.
+fake_review() {
+  local n=$1 r=$2 mode=${3:-all} slug
+  bash "$CM" brief "$n" "$r" "$mode" > "$T/brief" 2>&1 || { cat "$T/brief" >&2; return 0; }
+  if [ "$mode" != gate ]; then
+    while IFS=$'\t' read -r _ _ _ slug; do
+      [[ $slug = *panel-b* && -n "${FAKE_HANG_B:-}" ]] && continue
+      [ "$mode" = panel ] && [ "${FAKE_RC:-0}" != 0 ] && continue
+      if [[ $slug = *panel-b* && -n "${FAKE_DISSENT:-}" ]]; then echo 'VERDICT: CHANGES' > "$S/runs/pr$n-rev$r-$slug.out"
+      else printf '%s\n' "${FAKE_OUTPUT-VERDICT: APPROVE}" > "$S/runs/pr$n-rev$r-$slug.out"; fi
+    done < <(python3 "$(dirname "$CM")/panel.py" "$S/config.json")
+  fi
+  [ "$mode" = panel ] && return 0
+  [ "$mode" = all ] && bash "$CM" brief "$n" "$r" gate-after-panel > "$T/gate-brief" 2>&1
+  [ "${FAKE_RC:-0}" != 0 ] && return 0
+  local out=$S/runs/pr$n-rev$r.out; [ "$mode" = all ] && out=$S/runs/pr$n-rev$r-gate.out
+  printf '%s\n' "${FAKE_OUTPUT-VERDICT: APPROVE}" > "$out"
+}
 expect() {
   local expected=$1; shift
+  [ "${1:-}" = review ] && S=$(bash "$CM" path) fake_review "$2" "$3" "${4:-all}"
   local rc=0
   bash "$CM" "$@" > "$T/output" 2>&1 || rc=$?
   if [ "$rc" != "$expected" ]; then cat "$T/output"; echo "FAIL: $* returned $rc, expected $expected"; exit 1; fi
@@ -174,6 +175,7 @@ expect 0 review 1 2 gate
 read -r gate_hash gate_round gate_verdict < "$S/state/pr1.gate"
 [ "$gate_round $gate_verdict" = '2 CHANGES' ]
 expect 0 implement 1
+echo 'implemented file' > "$S/runs/pr1.report"
 [ "$(cat "$S/state/pr1.gate")" = "$gate_hash 2 CHANGES" ]
 echo sol-fixed >> "$W/file"
 cat > "$T/ledger.md" <<'LEDGER'
@@ -240,13 +242,8 @@ expect 0 review 1 3 panel
 cp "$T/models.saved" "$T/models.md"
 no_approval
 expect 8 ship 1
-python3 - "$S/dashboard/jobs.json" <<'PY'
-import json,sys
-jobs=json.load(open(sys.argv[1]))['jobs']
-panel=[j for j in jobs if j['provider']=='opencode' and j['id'].startswith('pr1-rev3-')]
-assert len(panel)==2 and all(j['status']=='done' and j['pid']>1 for j in panel)
-assert len({j['id'] for j in panel})==2 and {j['model'] for j in panel}=={'fake/panel-a'}
-PY
+# Two panel entries with the same model still get distinct reply files.
+[ "$(ls "$S/runs"/pr1-rev3-[0-9]-*.out | wc -l)" = 2 ]
 echo 'ok c: parallel panel approval cannot ship'
 expect 0 review 1 4 gate
 [ -s "$S/state/pr1.approval" ]
@@ -293,59 +290,18 @@ import json,sys
 p=sys.argv[1]; c=json.load(open(p)); c['gate']='true'; json.dump(c,open(p,'w'))
 PYCODE
 echo 'ok: direct gate merge requires approval and rejects a moved remote head'
-export FAKE_SLEEP=1
-bash "$CM" review 1 7 gate > "$T/sleep.log" 2>&1 &
-runner=$!
-for ((i=0; i<200; i++)); do
-  [ -f "$S/runs/pr1-rev7.pid" ] && python3 - "$S/dashboard/jobs.json" <<'PY' && break
-import json,sys
-sys.exit(not any(j['id']=='pr1-rev7' and j['status']=='running' for j in json.load(open(sys.argv[1]))['jobs']))
-PY
-  sleep .02
-done
-pid=$(cat "$S/runs/pr1-rev7.pid")
+# Stop between the brief and the record: the round can't be recorded, evidence is cleared, ship refuses.
+bash "$CM" brief 1 7 gate >/dev/null
+echo 'VERDICT: APPROVE' > "$S/runs/pr1-rev7.out"
 expect 0 stop 1
-wait "$runner" || true
-if kill -0 "$pid" 2>/dev/null; then echo 'FAIL: stopped pid remains'; exit 1; fi
+grep -q 'cancel its running subagents' "$T/output"
+expect 1 review 1 7 gate
 no_approval
-python3 - "$S/dashboard/jobs.json" <<'PY'
-import json,sys
-assert next(j for j in json.load(open(sys.argv[1]))['jobs'] if j['id']=='pr1-rev7')['status']=='stopped'
-PY
 [ ! -e "$S/state/pr1.verified" ]
-[ ! -e "$S/runs/pr1-rev7.pid" ]
 expect 1 ship 1
 grep -q 'stopped; cannot ship' "$T/output"
-echo 'ok h: stop kills running process group, clears evidence and blocks ship'
-bash "$CM" review 1 11 gate > "$T/stop-job.log" 2>&1 &
-runner=$!
-for ((i=0; i<200; i++)); do
-  [ -f "$S/runs/pr1-rev11.pid" ] && python3 - "$S/dashboard/jobs.json" <<'PYCODE' && break
-import json,sys
-sys.exit(not any(j['id']=='pr1-rev11' and j['status']=='running' for j in json.load(open(sys.argv[1]))['jobs']))
-PYCODE
-  sleep .02
-done
-pid=$(cat "$S/runs/pr1-rev11.pid")
-expect 0 stop-job pr1-rev11
-wait "$runner" || true
-if kill -0 "$pid" 2>/dev/null; then echo 'FAIL: stop-job pid remains'; exit 1; fi
-no_approval
-echo 'ok extra: stop-job kills its process group'
-unset FAKE_SLEEP
-# A recycled PID belonging to another process must never be signalled.
-setsid sleep 300 &
-innocent=$!
-python3 - "$S/dashboard/jobs.json" "$S/runs/stale.pid" "$innocent" <<'PYCODE'
-import json,sys
-p,pidfile,pid=sys.argv[1:]; c=json.load(open(p))
-c['jobs'].append({'id':'stale','plan':1,'status':'running','pid':int(pid)})
-json.dump(c,open(p,'w')); open(pidfile,'w').write(pid)
-PYCODE
-expect 0 stop-job stale
-kill -0 "$innocent"
-kill "$innocent"; wait "$innocent" || true
-echo 'ok: stale worker PID does not kill an unrelated process'
+echo 'ok h: stop blocks recording a round, clears evidence and blocks ship'
+echo implemented > "$S/state/pr1"
 # Additional boundary checks: missing/empty verdict, untracked hash, proof and stop-job.
 for FAKE_OUTPUT in '' 'no verdict'; do
   export FAKE_OUTPUT
@@ -444,6 +400,7 @@ branch=council/repo-plan-1
 moved=$(echo concurrent | git -C "$W" commit-tree 'HEAD^{tree}' -p HEAD)
 git -C "$W" push -q origin "$moved:refs/heads/$branch"
 expect 0 implement 1
+echo 'implemented file' > "$S/runs/pr1.report"
 [ "$(cat "$S/state/pr1.remote")" = "$old" ]
 expect 0 review 1 12 gate
 echo fresh-proof > "$S/runs/pr1.proof"
@@ -481,6 +438,7 @@ rc=0; wait "$shipper" || rc=$?
 [ "$(cat "$S/state/pr1.remote")" = "$(git --git-dir="$T/origin.git" rev-parse "refs/heads/$branch")" ]
 expect 1 gate merge 1 "$branch" "$(cat "$S/state/pr1.head")"
 echo 'ok: stop during slow merge cancels merge and preserves stopped state and ownership'
+echo implemented > "$S/state/pr1"
 unset FAKE_MERGE_CALLS
 expect 0 review 1 18 gate
 echo fresh-proof > "$S/runs/pr1.proof"
@@ -535,34 +493,24 @@ PY
 )
 echo adhoc-change >> "$AW/file"
 echo 'report' > "$A/runs/pr1.report"
-# A hung panel member never holds the round: Astra failing ends it at once...
-python3 - "$A/config.json" <<'PYCODE'
-import json,sys
-c=json.load(open(sys.argv[1])); c['reviewTimeout']=4; json.dump(c,open(sys.argv[1],'w'))
-PYCODE
+# Astra's reply is required; a panel member with no reply is noted and Astra decides.
 export FAKE_HANG_B=1 FAKE_OUTPUT='VERDICT: APPROVE'
-start=$(date +%s)
-FAKE_RC=1 bash "$CM" review 1 51 > "$T/output" 2>&1 && { echo 'FAIL: failed gate passed'; exit 1; }
-[ $(( $(date +%s) - start )) -lt 20 ] || { echo 'FAIL: round waited on a hung panel member'; exit 1; }
-[[ $(cat "$A/state/pr1") = needs-attention:* ]]
+FAKE_RC=1 expect 1 review 1 51
+[[ $(cat "$A/state/pr1") = 'needs-attention: reviewer reply missing' ]]
 [ ! -e "$A/state/pr1.approval" ]
-# ...and a member still hanging at the round's time limit is stopped and noted while the gate verdict stands.
 expect 0 review 1 52
-[ ! -e "$A/state/pr1.approval" ]
-read -r _ _ verdict < "$A/state/pr1.gate"; [ "$verdict" = CHANGES ]
-grep -q 'failed or timed out; noted' "$T/output"
+grep -q 'has no reply; noted' "$T/output"
+read -r _ reviewer _ < "$A/state/pr1.approval"; [ "$reviewer" = fake-reviewer ]
+grep -q '(no reply: failed or timed out)' "$A/runs/pr1-rev52-gate.prompt"
 unset FAKE_HANG_B
-python3 - "$A/config.json" <<'PYCODE'
-import json,sys
-c=json.load(open(sys.argv[1])); c.pop('reviewTimeout'); json.dump(c,open(sys.argv[1],'w'))
-PYCODE
-echo 'ok: parallel round ends on gate failure or timeout without waiting on a hung panel member'
-# All three in parallel: one dissenting panel member blocks approval but the gate verdict is recorded.
+echo 'ok: Astra is required; a missing panel reply is noted and shown to Astra'
+# The panel goes to Astra, not to the implementer: Astra's brief carries both replies, and its verdict decides.
 export FAKE_OUTPUT='VERDICT: APPROVE' FAKE_DISSENT=1
 expect 0 review 1 1
-[ ! -e "$A/state/pr1.approval" ]
-read -r _ _ verdict < "$A/state/pr1.gate"; [ "$verdict" = CHANGES ]
 for job in pr1-rev1-gate pr1-rev1-0-fake-panel-a pr1-rev1-1-fake-panel-b; do [ -s "$A/runs/$job.out" ]; done
+grep -q -- '--- pr1-rev1-1-fake-panel-b ---' "$A/runs/pr1-rev1-gate.prompt"
+grep -q 'single consolidated list' "$A/runs/pr1-rev1-gate.prompt"
+read -r _ _ verdict < "$A/state/pr1.gate"; [ "$verdict" = APPROVE ]
 unset FAKE_DISSENT
 # All three approve cleanly: the round itself is the approval.
 expect 0 review 1 2
@@ -571,16 +519,17 @@ read -r _ reviewer _ < "$A/state/pr1.approval"; [ "$reviewer" = fake-reviewer ]
 export FAKE_OUTPUT=$'VERDICT: CHANGES\nS1 [should] file:1 parallel bug'
 expect 0 review 1 3
 echo adhoc-fix >> "$AW/file"
-echo 'pr1-rev3-gate:S1 fixed: verified' > "$T/adhoc-ledger.md"
+# Only Astra's consolidated list needs ledger lines; the panel's raw findings went through Astra.
+echo 'nothing' > "$T/adhoc-ledger.md"
 expect 12 approve 1 "$T/adhoc-ledger.md"
-printf 'pr1-rev3-gate:S1 fixed: verified\npr1-rev3-0-fake-panel-a:S1 fixed: same bug\npr1-rev3-1-fake-panel-b:S1 declined: duplicate\n' > "$T/adhoc-ledger.md"
+echo 'pr1-rev3-gate:S1 fixed: verified' > "$T/adhoc-ledger.md"
 expect 0 approve 1 "$T/adhoc-ledger.md"
 # A deep-review round can't make an earlier round's findings disappear from the ledger.
 export FAKE_OUTPUT=$'VERDICT: CHANGES\nS7 [should] file:1 deep bug'
 echo deep-fix >> "$AW/file"
 expect 0 review 1 4
 echo deep-fix-2 >> "$AW/file"
-printf 'pr1-rev4-gate:S7 fixed: ok\npr1-rev4-0-fake-panel-a:S7 fixed: ok\npr1-rev4-1-fake-panel-b:S7 fixed: ok\n' > "$T/deep-ledger.md"
+printf 'pr1-rev4-gate:S7 fixed: ok\n' > "$T/deep-ledger.md"
 expect 12 approve 1 "$T/deep-ledger.md"
 grep -q 'pr1-rev3-gate:S1' "$T/output"
 cat "$T/adhoc-ledger.md" >> "$T/deep-ledger.md"
@@ -604,7 +553,7 @@ assert m.pipeline_state()[1][0]=='open' and m.pipeline_state()[1][2]==1, m.pipel
 PYCODE
 [ -d "$AW" ]
 git --git-dir="$T/origin.git" log -1 --format=%B refs/heads/council/repo-adhoc-1 | grep -q '^One-off PR 1\.$'
-echo 'ok: adhoc plan, parallel review round, orchestrator ledger and ship --no-merge'
+echo 'ok: adhoc plan, panel then Astra, orchestrator ledger and ship --no-merge'
 # pstack's model rule is generated from models.md with every pstack role.
 python3 "$(dirname "$CM")/pstack_models.py" "$(dirname "$CM")/../../../models.md" "$T/pstack-models.md"
 for role in 'feature, refactoring' bug-fix perf-issue hillclimb 'judgment and prose' 'hardest tasks' 'how explorer' 'why investigators' 'reflect tooling' 'how explainer' 'why synthesizer' 'reflect judgment, divergent, synthesizer' 'arena runners' 'arena cross-judge pool' 'architect runners' 'interrogate reviewers' 'swarm workers'; do
@@ -617,7 +566,7 @@ python3 - "$(dirname "$CM")" <<'PYCODE'
 from pathlib import Path
 import sys
 plan=Path(sys.argv[1])
-policy=('Default: one parallel round (Astra, DeepSeek and Muse at once); the orchestrator takes the final call, Sol fixes once, the orchestrator approves.',
+policy=('Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.',
         '"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.')
 for path in (plan/'cm.sh', plan.parent/'SKILL.md',
              plan.parent.parent/'review-loop/SKILL.md', plan.parent.parent/'sid-mode/SKILL.md'):
@@ -625,5 +574,5 @@ for path in (plan/'cm.sh', plan.parent/'SKILL.md',
     assert all(line in text for line in policy), path
     assert 'Stop early only if a round returns nothing but nits.' not in text, path
 PYCODE
-echo 'ok: review instructions agree on the parallel round, deep review and sol loop'
+echo 'ok: review instructions agree on panel then Astra, deep review and sol loop'
 echo 'All plan-runner tests passed.'
