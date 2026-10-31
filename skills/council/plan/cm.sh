@@ -22,7 +22,8 @@
 #
 # With more than one plan, name yours on every call: COUNCIL_PLAN=<slug> cm.sh <command> (slug: printed by init).
 # State lives in ~/.local/state/council/<slug>/ (current plan: ~/.local/state/council/current).
-# Exit codes for gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused.
+# Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification.
+# Gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused, 9 head moved.
 set -u
 SKILL=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 ROOT=${COUNCIL_HOME:-$HOME/.local/state/council}
@@ -36,11 +37,11 @@ if [ "$cmd" = init ]; then
   models=$(python3 "$SKILL/models.py" "${SIDSTACK_MODELS:-$HOME/.local/share/sidstack/models.md}") || die "cannot read models.md"
   model_field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]][0][sys.argv[3]])' "$models" "$1" "$2"; }
   # Defaults follow ~/.local/share/sidstack/models.md: Sol implements, Astra reviews, the Codex GitHub bot gates merges.
-  gh="" title="" gate_dir="." gate="" reviewer=$(model_field reviewer model) implementer=$(model_field implementer model) effort="" impl_effort="" rev_effort="" trailer="" port=8787 bot="chatgpt-codex-connector" bot_timeout=900
+  gh="" title="" gate_dir="." gate="" reviewer=$(model_field reviewer model) implementer=$(model_field implementer model) effort="" impl_effort="" rev_effort="" trailer="" port=8787 bot="chatgpt-codex-connector" bot_timeout=900 pinned=false
   while [ $# -gt 0 ]; do case $1 in
     --repo) repo=$2; shift 2;; --gh) gh=$2; shift 2;; --title) title=$2; shift 2;;
-    --gate-dir) gate_dir=$2; shift 2;; --gate) gate=$2; shift 2;; --reviewer) reviewer=$2; shift 2;; --implementer) implementer=$2; shift 2;;
-    --effort) effort=$2; shift 2;; --implementer-effort) impl_effort=$2; shift 2;; --reviewer-effort) rev_effort=$2; shift 2;; --trailer) trailer=$2; shift 2;; --port) port=$2; shift 2;;
+    --gate-dir) gate_dir=$2; shift 2;; --gate) gate=$2; shift 2;; --reviewer) pinned=true; reviewer=$2; shift 2;; --implementer) pinned=true; implementer=$2; shift 2;;
+    --effort) pinned=true; effort=$2; shift 2;; --implementer-effort) pinned=true; impl_effort=$2; shift 2;; --reviewer-effort) pinned=true; rev_effort=$2; shift 2;; --trailer) trailer=$2; shift 2;; --port) port=$2; shift 2;;
     --bot-review) bot=$2; shift 2;; --bot-timeout) bot_timeout=$2; shift 2;;
     *) die "unknown option $1";; esac; done
   impl_effort=${impl_effort:-${effort:-$(model_field implementer effort)}}
@@ -51,14 +52,14 @@ if [ "$cmd" = init ]; then
   slug=$(basename "$repo")-$(basename "$relplan" .md | tr 'A-Z_ ' 'a-z--')
   S=$ROOT/$slug; mkdir -p "$S/runs" "$S/state" "$S/dashboard"
   base=$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||'); base=${base:-main}
-  python3 - "$S/config.json" "$repo" "$gh" "$relplan" "$title" "$base" "$slug" "$gate_dir" "$gate" "$reviewer" "$implementer" "$effort" "$trailer" "$port" "$impl_effort" "$rev_effort" "$bot" "$bot_timeout" "$models" <<'EOF'
+  python3 - "$S/config.json" "$repo" "$gh" "$relplan" "$title" "$base" "$slug" "$gate_dir" "$gate" "$reviewer" "$implementer" "$effort" "$trailer" "$port" "$impl_effort" "$rev_effort" "$bot" "$bot_timeout" "$models" "$pinned" <<'EOF'
 import json,os,sys
-out,repo,gh,plan,title,base,slug,gate_dir,gate,reviewer,implementer,effort,trailer,port,impl_effort,rev_effort,bot,bot_timeout,models=sys.argv[1:]
+out,repo,gh,plan,title,base,slug,gate_dir,gate,reviewer,implementer,effort,trailer,port,impl_effort,rev_effort,bot,bot_timeout,models,pinned=sys.argv[1:]
 models=json.loads(models)
 old=json.load(open(out)) if os.path.exists(out) else {}
 json.dump({"repo":repo,"gh":gh,"plan":plan,"title":title or None,"base":base,"slug":slug,
   "worktrees":os.path.join(os.path.dirname(repo),os.path.basename(repo)+"-wt"),"gateDir":gate_dir,"gate":gate,
-  "reviewerProvider":models["reviewer"][0]["provider"],"implementerProvider":models["implementer"][0]["provider"],"reviewPanel":models["review panel"],"hardestTasks":models["hardest tasks"][0],
+  "modelsPinned":pinned == "true","reviewerProvider":models["reviewer"][0]["provider"],"implementerProvider":models["implementer"][0]["provider"],"reviewPanel":models["review panel"],"hardestTasks":models["hardest tasks"][0],
   "reviewer":reviewer,"implementer":implementer,"effort":effort,**({"implementerEffort":impl_effort} if impl_effort else {}),**({"reviewerEffort":rev_effort} if rev_effort else {}),"trailer":trailer,"port":int(port),"botReview":bot or None,"botTimeout":int(bot_timeout),"transcript":old.get("transcript")},open(out,"w"),indent=1)
 EOF
   ln -sfn "$S" "$ROOT/current"
@@ -77,18 +78,18 @@ S=$(readlink -f "${COUNCIL_STATE:-$ROOT/current}") || die "no current plan; run 
 [ -f "$S/config.json" ] || die "no current plan; run cm.sh init"
 export COUNCIL_STATE=$S
 python3 - "$S/config.json" "$SKILL/models.py" "${SIDSTACK_MODELS:-$HOME/.local/share/sidstack/models.md}" <<'EOF' || die "cannot load model settings"
-import json, subprocess, sys
+import json, os, subprocess, sys, tempfile
 path, parser, source = sys.argv[1:]
 c = json.load(open(path))
-fields = {'reviewerProvider': ('reviewer', 'provider'),
-          'implementerProvider': ('implementer', 'provider'),
-          'reviewPanel': ('review panel', None), 'hardestTasks': ('hardest tasks', None)}
-if any(key not in c for key in fields):
+if not c.get('modelsPinned', False):
     models = json.loads(subprocess.check_output(['python3', parser, source]))
-    for key, (role, field) in fields.items():
-        value = models[role] if key == 'reviewPanel' else models[role][0]
-        c.setdefault(key, value[field] if field else value)
-    with open(path, 'w') as f: json.dump(c, f, indent=1)
+    for role in ('reviewer', 'implementer'):
+        m = models[role][0]
+        c.update({role: m['model'], role+'Provider': m['provider'], role+'Effort': m['effort']})
+    c.update(reviewPanel=models['review panel'], hardestTasks=models['hardest tasks'][0])
+    with tempfile.NamedTemporaryFile(mode='w', dir=os.path.dirname(path), delete=False) as f:
+        json.dump(c, f, indent=1)
+    os.replace(f.name, path)
 EOF
 conf() { python3 -c 'import json,sys;v=json.load(open(sys.argv[1])).get(sys.argv[2]);print("" if v is None else v)' "$S/config.json" "$1"; }
 # Per-role effort; falls back to the shared effort.
@@ -100,21 +101,12 @@ br() { echo "council/$SLUG-$1"; }
 setst() { echo "$2" > "$S/state/pr$1"; }
 job() { python3 "$SKILL/dashboard/jobs.py" upsert "$@"; }
 
-# Hash the exact tracked diff and untracked paths and bytes, including symlink targets.
+# Hash the snapshot ship stages, including Git modes and addition metadata.
 change_hash() {
-  python3 - "$(wt "$1")" "$(cat "$S/runs/pr$1.base")" <<'EOF'
-import hashlib, os, subprocess, sys
-w, base = sys.argv[1:]
-def git(*args):
-    return subprocess.check_output(['git', '-C', w, *args])
-h = hashlib.sha256()
-h.update(git('diff', '--no-ext-diff', '--binary', base, '--'))
-for path in sorted(filter(None, git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0'))):
-    full = os.path.join(os.fsencode(w), path)
-    content = os.readlink(full) if os.path.islink(full) else open(full, 'rb').read()
-    h.update(b'\0' + path + b'\0' + str(len(content)).encode() + b'\0' + content)
-print(h.hexdigest())
-EOF
+  python3 "$SKILL/change.py" "$(wt "$1")" "$(cat "$S/runs/pr$1.base")" "$PLAN" "${2:-worktree}"
+}
+clear_evidence() {
+  rm -f "$S/state/pr$1.approval" "$S/state/pr$1.verified" "$S/runs/pr$1.proof" "$S/runs/pr$1.remote"
 }
 stop_jobs() {
   python3 - "$S" "$1" "$2" <<'EOF'
@@ -131,13 +123,17 @@ with open(p, 'a+') as f:
     for j in data['jobs']:
         if (str(j.get('plan')) if kind == 'plan' else j['id']) != target:
             continue
-        (Path(s)/f"state/pr{j['plan']}.approval").unlink(missing_ok=True)
+        for suffix in ('approval', 'verified'):
+            (Path(s)/f"state/pr{j['plan']}.{suffix}").unlink(missing_ok=True)
         if j.get('status') != 'running':
             continue
         pidfile = Path(s)/f"runs/{j['id']}.pid"
         pid = int(pidfile.read_text()) if pidfile.exists() else j.get('pid')
-        if pid and pid > 1:
-            groups.append(pid)
+        try: command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+        except OSError: command = []
+        worker = [b'--worker', j['id'].encode()]
+        if pid and pid > 1 and any(command[i:i+2] == worker for i in range(len(command)-1)):
+            groups.append((pid, worker))
             try: os.killpg(pid, signal.SIGTERM)
             except ProcessLookupError: pass
         j['status'] = 'stopped'
@@ -148,15 +144,18 @@ if groups:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         alive = []
-        for pid in groups:
-            try: os.killpg(pid, 0); alive.append(pid)
+        for pid, worker in groups:
+            try: os.killpg(pid, 0); alive.append((pid, worker))
             except ProcessLookupError: pass
         groups = alive
         if not groups: break
         time.sleep(.1)
-    for pid in groups:
-        try: os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError: pass
+    for pid, worker in groups:
+        try:
+            command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+            if any(command[i:i+2] == worker for i in range(len(command)-1)):
+                os.killpg(pid, signal.SIGKILL)
+        except OSError: pass
 EOF
 }
 
@@ -165,6 +164,7 @@ path) echo "$S";;
 
 new)
   n=${1:?plan PR number}; W=$(wt "$n")
+  clear_evidence "$n"
   git -C "$R" fetch -q origin "$BASE"
   [ -d "$W" ] || git -C "$R" worktree add -q -B "$(br "$n")" "$W" "origin/$BASE" || die "worktree add failed"
   # Reuse the main checkout's installed dependencies.
@@ -191,6 +191,7 @@ EOF
     shift
   fi
   [ -n "$model" ] && [ "$model" != claude ] || die "implementer is claude; set --implementer <codex model> in init"
+  clear_evidence "$n"
   setst "$n" "coding"
   { echo "Implement plan PR $n from $PLAN in this git worktree ($W). Work only here; do not commit, push or switch branches."
     echo "Make the smallest change that meets the acceptance check. Add a regression test that fails without the fix. Run the affected tests and the typecheck."
@@ -204,8 +205,12 @@ EOF
   tail -n 30 "$S/runs/pr$n-impl.out" 2>/dev/null; exit $rc;;
 
 stop)
-  n=${1:?plan PR number}; setst "$n" "stopped: ${2:-stopped by the orchestrator}"
-  rm -f "$S/state/pr$n.approval"
+  n=${1:?plan PR number}
+  exec 7>"$S/state/pr$n.lock"; flock 7
+  exec 8<>"$S/dashboard/jobs.json"; flock 8
+  setst "$n" "stopped: ${2:-stopped by the orchestrator}"
+  rm -f "$S/state/pr$n.approval" "$S/state/pr$n.verified"
+  flock -u 8
   stop_jobs plan "$n"
   echo "PR $n stopped";;
 
@@ -218,7 +223,12 @@ verify)
     echo "Write runs/pr$n.proof: run the real thing (covering tests with pass counts; for UI, the app in a browser with a screenshot path); green mocked tests alone are not proof." >&2
     exit 10
   }
-  change_hash "$n" > "$S/state/pr$n.verified" || exit 1
+  newest=$(python3 "$SKILL/change.py" "$(wt "$n")" "$(cat "$S/runs/pr$n.base")" "$PLAN" newest) || exit 1
+  if [ "$newest" -gt "$(python3 -c 'import os,sys;print(os.stat(sys.argv[1]).st_mtime_ns)' "$S/runs/pr$n.proof")" ]; then
+    echo "cm: proof is older than the newest changed file; rerun verification and rewrite runs/pr$n.proof" >&2; exit 10
+  fi
+  hash=$(change_hash "$n") || exit 1
+  printf '%s %s\n' "$hash" "$(sha256sum "$S/runs/pr$n.proof" | cut -d' ' -f1)" > "$S/state/pr$n.verified"
   echo "PR $n verification bound to current change";;
 
 review)
@@ -250,7 +260,7 @@ review)
 import json,re,sys
 for i, m in enumerate(json.load(open(sys.argv[1]))['reviewPanel']):
     slug=re.sub('[^a-z0-9]+','-',m['model'].lower()).strip('-')
-    print(m['provider'],m['model'],m['effort'],slug,sep='\t')
+    print(m['provider'],m['model'],m['effort'],str(i)+'-'+slug,sep='\t')
 EOF
 )
     : > "$S/runs/pr$n-rev$r.out"
@@ -258,7 +268,7 @@ EOF
     for i in "${!pids[@]}"; do
       wait "${pids[$i]}" || failed=1
       out=$S/runs/${ids[$i]}.out
-      grep -qx 'VERDICT: APPROVE' "$out" && ! grep -qE '\[(blocker|should)\]|^VERDICT: CHANGES$' "$out" || approved=0
+      grep -qx 'VERDICT: APPROVE' "$out" && ! grep -qiE '\[(blocker|should)\]|^S[0-9]+[ :]+(blocker|should)\b|^VERDICT: CHANGES$' "$out" || approved=0
       cat "$out" | tee -a "$S/runs/pr$n-rev$r.out"
     done
   else
@@ -266,10 +276,11 @@ EOF
     model=$(conf reviewer)
     "$SKILL/dashboard/run-job.sh" "pr$n-rev$r" "$n" review "$(conf reviewerProvider)" "$model" "$(effort_for reviewer)" "$W" "$S/runs/pr$n-rev$r.out" "$S/runs/pr$n-rev$r.log" -- "$P"; failed=$?
     out=$S/runs/pr$n-rev$r.out; approved=0
-    if [ "$failed" = 0 ] && grep -qx 'VERDICT: APPROVE' "$out" && ! grep -qE '\[(blocker|should)\]|^VERDICT: CHANGES$' "$out"; then approved=1; fi
+    if [ "$failed" = 0 ] && grep -qx 'VERDICT: APPROVE' "$out" && ! grep -qiE '\[(blocker|should)\]|^S[0-9]+[ :]+(blocker|should)\b|^VERDICT: CHANGES$' "$out"; then approved=1; fi
     tail -n 40 "$out"
   fi
-  [[ $(cat "$S/state/pr$n") = stopped:* ]] && exit 1
+  exec 8<>"$S/dashboard/jobs.json"; flock 8
+  [[ $(cat "$S/state/pr$n") = stopped* ]] && exit 1
   # A stopped job may exit zero after trapping TERM; it still cannot approve.
   if python3 - "$S/dashboard/jobs.json" "${ids[@]}" <<'EOF'
 import json,sys
@@ -333,25 +344,32 @@ gate)
 
 ship)
   n=${1:?plan PR number}; W=$(wt "$n") b=$(br "$n")
+  exec 7>"$S/state/pr$n.lock"; flock 7
+  [[ $(cat "$S/state/pr$n" 2>/dev/null) = stopped* ]] && { echo "cm: PR $n is stopped; cannot ship" >&2; exit 1; }
   hash=$(change_hash "$n") || exit 1
   read -r approved reviewer round 2>/dev/null < "$S/state/pr$n.approval" || approved=""
   if [ "$approved" != "$hash" ] || [ "${reviewer:-}" != "$(conf reviewer)" ]; then
     setst "$n" "needs-attention: no approval for the current change"; exit 8
   fi
-  if [ "$(cat "$S/state/pr$n.verified" 2>/dev/null)" != "$hash" ]; then
+  verified=""; proof=""
+  read -r verified proof 2>/dev/null < "$S/state/pr$n.verified" || true
+  if [ "$verified" != "$hash" ] || [ -z "$proof" ] || [ "$proof" != "$(sha256sum "$S/runs/pr$n.proof" 2>/dev/null | cut -d' ' -f1)" ]; then
     setst "$n" "needs-attention: no verification for the current change"; exit 10
   fi
   [ -s "$S/runs/pr$n.title" ] && [ -s "$S/runs/pr$n.body" ] || die "write $S/runs/pr$n.title and pr$n.body first"
   setst "$n" "shipping: commit + gate"
   if [ -n "$(git -C "$W" status --porcelain -- . ":!$PLAN")" ]; then
-    git -C "$W" add -A -- . ":!$PLAN"
+    git -C "$W" add -A -- . ":!$PLAN" || die "cannot stage change"
+    git -C "$W" reset -q HEAD -- "$PLAN" || die "cannot exclude plan"
     while IFS= read -r -d '' dep; do
       git -C "$W" reset -q -- "${dep#./}" || die "cannot exclude $dep"
     done < <(cd "$W" && find . -maxdepth 4 -name node_modules -type l -print0)
+    [ "$(change_hash "$n" staged)" = "$approved" ] || { echo "cm: staged change differs from approval" >&2; exit 8; }
     { cat "$S/runs/pr$n.title"; echo; echo "PR $n in $PLAN."; t=$(conf trailer); [ -n "$t" ] && { echo; echo "$t"; }; } > "$S/runs/pr$n.msg"
     git -C "$W" commit -q -F "$S/runs/pr$n.msg" || { setst "$n" "needs-attention: commit failed"; die "commit failed"; }
   fi
   [ "$(git -C "$W" rev-parse HEAD)" != "$(cat "$S/runs/pr$n.base")" ] || { setst "$n" "needs-attention: nothing to ship"; die "nothing to ship"; }
+  flock -u 7
   # Keep the last observed remote SHA; never overwrite an intervening push.
   seen_file=$S/runs/pr$n.remote
   if [ ! -f "$seen_file" ]; then
@@ -363,7 +381,7 @@ ship)
   if [ -n "$seen" ]; then
     git -C "$W" push -q "--force-with-lease=refs/heads/$b:$seen" origin "HEAD:refs/heads/$b" || { setst "$n" "needs-attention: push lease refused"; exit 1; }
   else
-    git -C "$W" push -q origin "HEAD:refs/heads/$b" || { setst "$n" "needs-attention: push failed"; exit 1; }
+    git -C "$W" push -q "--force-with-lease=refs/heads/$b:" origin "HEAD:refs/heads/$b" || { setst "$n" "needs-attention: push failed"; exit 1; }
   fi
   head=$(git -C "$W" rev-parse HEAD)
   echo "$head" > "$S/runs/pr$n.head"

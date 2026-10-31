@@ -126,6 +126,7 @@ def pipeline_state():
     """Per-PR status written by the phase worktree pipeline: {plan number: (kind, text, github number)}."""
     out = {}
     for f in PIPELINE.glob('pr*') if PIPELINE.exists() else []:
+        if not re.fullmatch(r'pr\d+', f.name): continue
         try: text = f.read_text().splitlines()[0].strip()
         except (OSError, IndexError): continue
         number = re.search(r'#?(\d{2,})', text.split(' ', 1)[1]) if ' ' in text else None

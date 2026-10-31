@@ -2,7 +2,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find . -type f -name '*.sh' -not -path './.git/*' -print0)
+if command -v node >/dev/null 2>&1; then
 while IFS= read -r -d '' file; do node --check "$file"; done < <(find skills/council/plan/dashboard -type f -name '*.js' -print0)
+else
+  echo 'note: node absent; skipping JavaScript syntax checks'
+fi
 cache=$(mktemp -d)
 trap 'rm -rf "$cache"' EXIT
 while IFS= read -r -d '' file; do PYTHONPYCACHEPREFIX=$cache python3 -m py_compile "$file"; done < <(find . -type f -name '*.py' -not -path './.git/*' -print0)

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Offline integration tests: actual git worktrees, bare origin and process groups.
 set -eu
-CM=$(cd "$(dirname "$0")/.." && pwd)/cm.sh
+CM=${CM_UNDER_TEST:-$(cd "$(dirname "$0")/.." && pwd)/cm.sh}
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 export COUNCIL_HOME=$T/state SIDSTACK_MODELS=$T/models.md
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+export REAL_GIT=$(command -v git)
 mkdir "$T/bin"
 export PATH=$T/bin:$PATH
 cat > "$T/models.md" <<'MODELS'
@@ -18,6 +19,9 @@ cat > "$T/bin/codex" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
 out=''
+if [ -n "${FAKE_PID_FILE:-}" ]; then
+  [ "$(cat "$FAKE_PID_FILE")" = "$PPID" ] || exit 3
+fi
 while [ $# -gt 0 ]; do
   if [ "$1" = -o ]; then out=$2; shift 2; else shift; fi
 done
@@ -28,7 +32,11 @@ exit "${FAKE_RC:-0}"
 FAKE
 cat > "$T/bin/opencode" <<'FAKE'
 #!/usr/bin/env bash
-printf '%s\n' "${FAKE_OUTPUT-VERDICT: APPROVE}"
+if [[ "$*" = *fake/panel-b* ]] && [ -n "${FAKE_DISSENT:-}" ]; then
+  echo 'VERDICT: CHANGES'
+else
+  printf '%s\n' "${FAKE_OUTPUT-VERDICT: APPROVE}"
+fi
 exit "${FAKE_RC:-0}"
 FAKE
 cat > "$T/bin/gh" <<'FAKE'
@@ -38,12 +46,23 @@ elif [ "${1:-} ${2:-}" = 'pr view' ]; then echo 'test change'
 elif [ "${1:-} ${2:-}" = 'pr merge' ]; then exit 0
 else echo 'https://example.test/pull/1'; fi
 FAKE
+cat > "$T/bin/git" <<'FAKE'
+#!/usr/bin/env bash
+if [ "${FAKE_STAGE_EDIT:-}" = 1 ] && [ -z "${GIT_INDEX_FILE:-}" ] && [[ " $* " = *' add -A '* ]]; then
+  echo stage-race >> "$2/file"
+fi
+"$REAL_GIT" "$@"; rc=$?
+if [ "${FAKE_FIRST_PUSH:-}" = 1 ] && [[ " $* " = *' ls-remote --exit-code '* ]]; then
+  "$REAL_GIT" --git-dir="$TEST_ORIGIN" update-ref "$TEST_BRANCH" "$TEST_BASE"
+fi
+exit "$rc"
+FAKE
 chmod +x "$T/bin/"*
 git init -q --bare --initial-branch=main "$T/origin.git"
 git init -q --initial-branch=main "$T/repo"
 git -C "$T/repo" config user.email test@example.test
 git -C "$T/repo" config user.name Test
-printf '## Phase 1\n### [ ] PR 1 — test (S)\nChange file.\n' > "$T/repo/PLAN.md"
+printf '## Phase 1 — Tests\n### [ ] PR 1 — test (S)\nChange file.\n' > "$T/repo/PLAN.md"
 echo base > "$T/repo/file"
 git -C "$T/repo" add .
 git -C "$T/repo" commit -qm base
@@ -52,7 +71,66 @@ git -C "$T/repo" push -q -u origin main
 bash "$CM" init "$T/repo/PLAN.md" --gh test/repo --gate true --bot-review '' >/dev/null
 S=$(bash "$CM" path)
 export COUNCIL_STATE=$S
+# Model settings refresh existing plans; explicit init flags pin them.
+cp "$T/models.md" "$T/models.saved"
+sed -i 's/fake-coder/fresh-coder/; s/fake-reviewer/fresh-reviewer/' "$T/models.md"
+bash "$CM" path >/dev/null
+python3 - "$S/config.json" <<'PYCODE'
+import json,sys
+c=json.load(open(sys.argv[1])); assert c['implementer']=='fresh-coder' and c['reviewer']=='fresh-reviewer'
+assert c['reviewPanel'][1]['model']=='fake/panel-b'
+PYCODE
+bash "$CM" init "$T/repo/PLAN.md" --gh test/repo --gate true --bot-review '' --reviewer pinned-reviewer >/dev/null
+cp "$T/models.saved" "$T/models.md"
+bash "$CM" path >/dev/null
+python3 - "$S/config.json" <<'PYCODE'
+import json,sys
+c=json.load(open(sys.argv[1])); assert c['modelsPinned'] and c['reviewer']=='pinned-reviewer'
+PYCODE
+bash "$CM" init "$T/repo/PLAN.md" --gh test/repo --gate true --bot-review '' >/dev/null
+python3 - "$(dirname "$CM")/models.py" "$T/models.md" <<'PYCODE'
+import json,subprocess,sys,tempfile
+parser,source=sys.argv[1:]; text=open(source).read()
+for original,replacement,role in [
+    ('codex / fake-coder / high','broken','implementer'),
+    ('opencode / fake/panel-a / high; opencode / fake/panel-b / medium (notes)','opencode / fake/panel-a / high','review panel'),
+    ('opencode / fake/panel-b / medium (notes)','broken','review panel')]:
+    with tempfile.NamedTemporaryFile(mode='w') as f:
+        f.write(text.replace(original,replacement)); f.flush()
+        p=subprocess.run(['python3',parser,f.name],capture_output=True,text=True)
+        assert p.returncode and role in p.stderr
+with tempfile.NamedTemporaryFile(mode='w') as f:
+    f.write(text.replace('fake/panel-a / high;', 'fake/panel-a / high (first note);'))
+    f.flush(); models=json.loads(subprocess.check_output(['python3',parser,f.name]))
+    assert len(models['review panel'])==2
+PYCODE
+echo 'ok: model parsing, per-entry notes, refresh and explicit pinning'
+# Fresh implementations must clear all old evidence.
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do echo stale > "$S/$file"; done
 bash "$CM" new 1 >/dev/null
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do [ ! -e "$S/$file" ]; done
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do echo stale > "$S/$file"; done
+bash "$CM" implement 1 >/dev/null
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do [ ! -e "$S/$file" ]; done
+echo 'ok: new and implement clear stale evidence'
+# Direct runner defaults match jobs.py, and its worker publishes its PID first.
+mkdir -p "$T/home/.local/state/council"
+ln -s "$S" "$T/home/.local/state/council/current"
+echo prompt > "$T/prompt"
+env -u COUNCIL_STATE HOME="$T/home" FAKE_PID_FILE="$S/runs/default-job.pid" bash "$(dirname "$CM")/dashboard/run-job.sh" default-job 1 review codex fake low "$T/repo" "$S/runs/default.out" "$S/runs/default.log" -- "$T/prompt"
+[ ! -e "$S/runs/default-job.pid" ]
+FAKE_SLEEP=1 bash "$(dirname "$CM")/dashboard/run-job.sh" parent-term 1 review codex fake low "$T/repo" "$S/runs/term.out" "$S/runs/term.log" -- "$T/prompt" &
+parent=$!
+for ((i=0; i<200; i++)); do
+  [ -f "$S/runs/parent-term.pid" ] && break
+  sleep .02
+done
+worker=$(cat "$S/runs/parent-term.pid")
+kill -TERM "$parent"
+wait "$parent" || true
+if kill -0 "$worker" 2>/dev/null; then echo 'FAIL: parent TERM left worker alive'; exit 1; fi
+[ ! -e "$S/runs/parent-term.pid" ]
+echo 'ok: runner defaults, synchronous worker PID, parent TERM and PID cleanup'
 W=$T/repo-wt/repo-plan-1
 # Derive worktree from the config rather than assuming the slug casing.
 W=$(python3 - "$S/config.json" <<'PY'
@@ -80,15 +158,30 @@ export FAKE_OUTPUT=$'VERDICT: APPROVE\nS1 [should] file:1 bug'
 expect 0 review 1 2 gate
 no_approval
 echo 'ok b: should finding blocks approval'
+for FAKE_OUTPUT in $'VERDICT: APPROVE\nS1 [Blocker] file:1 bug' $'VERDICT: APPROVE\nS1 blocker: file:1 bug'; do
+  export FAKE_OUTPUT
+  expect 0 review 1 2 gate
+  no_approval
+done
+echo 'ok: mixed-case tagged and bare severities block approval'
+export FAKE_OUTPUT='VERDICT: APPROVE' FAKE_DISSENT=1
+expect 0 review 1 2 panel
+no_approval
+[ "$(cat "$S/state/pr1")" = 'changes round 2' ]
+unset FAKE_DISSENT
+echo 'ok: dissenting panel member blocks the round'
 export FAKE_OUTPUT='VERDICT: APPROVE'
+sed -i 's@fake/panel-b@fake/panel-a@' "$T/models.md"
 expect 0 review 1 3 panel
+cp "$T/models.saved" "$T/models.md"
 no_approval
 expect 8 ship 1
 python3 - "$S/dashboard/jobs.json" <<'PY'
 import json,sys
 jobs=json.load(open(sys.argv[1]))['jobs']
-panel=[j for j in jobs if j['provider']=='opencode']
+panel=[j for j in jobs if j['provider']=='opencode' and j['id'].startswith('pr1-rev3-')]
 assert len(panel)==2 and all(j['status']=='done' and j['pid']>1 for j in panel)
+assert len({j['id'] for j in panel})==2 and {j['model'] for j in panel}=={'fake/panel-a'}
 PY
 echo 'ok c: parallel panel approval cannot ship'
 expect 0 review 1 4 gate
@@ -112,6 +205,23 @@ git -C "$W" commit -qm changed
 git -C "$W" push -q origin HEAD:refs/heads/moved
 expect 9 gate merge 1 moved "$base"
 echo 'ok g: merge rejects moved head'
+# Move the remote from inside the build, after fetch but before merge.
+# The fake gh merge succeeds, so only the ls-remote re-check can catch this.
+new_head=$(echo remote-race | git -C "$W" commit-tree 'HEAD^{tree}' -p HEAD)
+head=$(git -C "$W" rev-parse HEAD)
+git -C "$W" push -q origin "$new_head:refs/heads/race-object"
+python3 - "$S/config.json" "$T/origin.git" "$new_head" <<'PYCODE'
+import json,shlex,sys
+p,origin,head=sys.argv[1:]; c=json.load(open(p))
+c['gate']='git --git-dir='+shlex.quote(origin)+' update-ref refs/heads/moved '+head
+json.dump(c,open(p,'w'))
+PYCODE
+expect 9 gate merge 1 moved "$head"
+python3 - "$S/config.json" <<'PYCODE'
+import json,sys
+p=sys.argv[1]; c=json.load(open(p)); c['gate']='true'; json.dump(c,open(p,'w'))
+PYCODE
+echo 'ok: remote head moving after fetch refuses merge'
 export FAKE_SLEEP=1
 bash "$CM" review 1 7 gate > "$T/sleep.log" 2>&1 &
 runner=$!
@@ -131,7 +241,11 @@ python3 - "$S/dashboard/jobs.json" <<'PY'
 import json,sys
 assert next(j for j in json.load(open(sys.argv[1]))['jobs'] if j['id']=='pr1-rev7')['status']=='stopped'
 PY
-echo 'ok h: stop kills running process group and clears approval'
+[ ! -e "$S/state/pr1.verified" ]
+[ ! -e "$S/runs/pr1-rev7.pid" ]
+expect 1 ship 1
+grep -q 'stopped; cannot ship' "$T/output"
+echo 'ok h: stop kills running process group, clears evidence and blocks ship'
 bash "$CM" review 1 11 gate > "$T/stop-job.log" 2>&1 &
 runner=$!
 for ((i=0; i<200; i++)); do
@@ -148,6 +262,19 @@ if kill -0 "$pid" 2>/dev/null; then echo 'FAIL: stop-job pid remains'; exit 1; f
 no_approval
 echo 'ok extra: stop-job kills its process group'
 unset FAKE_SLEEP
+# A recycled PID belonging to another process must never be signalled.
+setsid sleep 300 &
+innocent=$!
+python3 - "$S/dashboard/jobs.json" "$S/runs/stale.pid" "$innocent" <<'PYCODE'
+import json,sys
+p,pidfile,pid=sys.argv[1:]; c=json.load(open(p))
+c['jobs'].append({'id':'stale','plan':1,'status':'running','pid':int(pid)})
+json.dump(c,open(p,'w')); open(pidfile,'w').write(pid)
+PYCODE
+expect 0 stop-job stale
+kill -0 "$innocent"
+kill "$innocent"; wait "$innocent" || true
+echo 'ok: stale worker PID does not kill an unrelated process'
 # Additional boundary checks: missing/empty verdict, untracked hash, proof and stop-job.
 for FAKE_OUTPUT in '' 'no verdict'; do
   export FAKE_OUTPUT
@@ -162,13 +289,62 @@ expect 10 verify 1
 echo 'bash tests: 12 passed (real local test run)' > "$S/runs/pr1.proof"
 expect 0 verify 1
 [ -s "$S/state/pr1.verified" ]
+echo edit-after-proof >> "$W/new-file"
+expect 10 verify 1
+grep -q 'proof is older' "$T/output"
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
+expect 0 review 1 13 gate
+echo swapped-proof > "$S/runs/pr1.proof"
+expect 10 ship 1
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
+echo 'ok: old proof after edit and swapped proof after verify are refused'
+# Observe must ignore every auxiliary state file when collect() reads the board.
+printf '' > "$T/transcript.jsonl"
+python3 - "$S/config.json" "$T/transcript.jsonl" "$(dirname "$CM")/dashboard/observe.py" <<'PYCODE'
+import importlib.util,json,sys
+p,transcript,source=sys.argv[1:]; c=json.load(open(p)); c['transcript']=transcript
+json.dump(c,open(p,'w'))
+spec=importlib.util.spec_from_file_location('observe',source)
+m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.collect()['total']==1
+assert set(m.pipeline_state())=={1}
+PYCODE
+echo 'ok: board collect ignores approval, verified and lock files'
 expect 0 review 1 10 gate
+# The plan is excluded, while untracked mode and type changes invalidate approval.
+echo plan-edit >> "$W/PLAN.md"
+FAKE_STAGE_EDIT=1 expect 8 ship 1
+grep -q 'staged change differs' "$T/output"
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
+expect 0 review 1 14 gate
+chmod +x "$W/new-file"
+expect 8 ship 1
+chmod -x "$W/new-file"
+cp "$W/new-file" "$T/saved-file"
+rm "$W/new-file"; ln -s "$T/saved-file" "$W/new-file"
+expect 8 ship 1
+rm "$W/new-file"; cp "$T/saved-file" "$W/new-file"
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
+expect 0 review 1 15 gate
+echo 'ok: staged race, file mode, symlink type and plan exclusion'
+# A branch appearing after an absent ls-remote must be protected by an empty lease.
+export TEST_ORIGIN=$T/origin.git TEST_BRANCH=refs/heads/council/repo-plan-1 TEST_BASE=$(cat "$S/runs/pr1.base")
+FAKE_FIRST_PUSH=1 expect 1 ship 1
+[ "$(git --git-dir="$T/origin.git" rev-parse "$TEST_BRANCH")" = "$TEST_BASE" ]
+git --git-dir="$T/origin.git" update-ref -d "$TEST_BRANCH"
+echo 'ok: first push uses an expect-absent lease'
 # Preserve the branch after its first push to test lease protection on a retry.
 python3 - "$S/config.json" <<'PYCODE'
 import json,sys
 p=sys.argv[1]; c=json.load(open(p)); c['gate']='false'; json.dump(c,open(p,'w'))
 PYCODE
 expect 1 ship 1
+grep -q 'gate check failed' "$S/state/pr1"
+echo 'ok: failing gate command prevents ship'
 old=$(cat "$S/runs/pr1.head")
 branch=council/repo-plan-1
 moved=$(echo concurrent | git -C "$W" commit-tree 'HEAD^{tree}' -p HEAD)
