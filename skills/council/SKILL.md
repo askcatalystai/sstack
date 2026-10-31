@@ -138,10 +138,13 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    showing it as active. It kills running process groups and clears approval.
    `cm stop-job <id>` stops one job and clears its PR approval.
 4. Review with models from models.md:
-   - `cm review <n> 1 panel`: every review-panel member in parallel; fix.
-   - `cm review <n> 2 panel`: every review-panel member again; fix.
-   - `cm review <n> 3 gate`: the gate reviewer; fix. The orchestrator verifies
-     fixes. Since approval binds to the exact change, rerun the gate after edits.
+   - `cm review <n> 1 panel`: every review-panel member in parallel.
+   - `cm review <n> 2 panel`: the panel again on the same code, cross-checking
+     the round-1 findings. No fixes between rounds.
+   - `cm review <n> 3 gate`: Astra, one pass.
+   - Then `cm implement <n> <findings.md>` once with every accepted finding,
+     and the orchestrator verifies each fix (until the runner records an
+     orchestrator approval for the fixed change, rerun the gate round on it).
    A light review, only when the user asks, uses one panel round and the gate.
    Only a successful gate with an exact `VERDICT: APPROVE` line and no blocker
    or should finding grants approval. Panel approval cannot grant it.

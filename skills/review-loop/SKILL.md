@@ -1,35 +1,39 @@
 ---
 name: review-loop
-description: Review a change in a fixed sequence (DeepSeek twice, Muse twice, Astra once), with the orchestrator routing fixes to Sol, before the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
+description: Review a change in a fixed sequence (DeepSeek and Muse twice, Astra once), then Sol fixes everything once, before the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
 ---
 
 # review-loop
 
 Make your change more correct before filing a PR. Models come from
-`~/.local/share/sidstack/models.md`.
+`~/.local/share/sidstack/models.md`. Reviews come first; Sol changes nothing
+until Astra has reviewed.
 
 ## The sequence
 
-1. **DeepSeek round 1** and **Muse round 1** (`review panel`), in parallel,
-   full review.
-2. Orchestrator triages both (see "Answer findings"); **Sol** fixes the real
-   ones (the orchestrator makes tiny fixes itself).
-3. **DeepSeek round 2** and **Muse round 2**, in parallel: open ids and the
-   code changed since round 1 only.
-4. Sol fixes again, through the orchestrator.
-5. **Astra** (`reviewer`, low), **one pass**, on the whole current diff with
-   the ledger. This is the gate: no blocker or should may stay open.
-6. Sol fixes Astra's findings through the orchestrator. The orchestrator
-   verifies those fixes itself (diff, checks); Astra does not run again unless
-   a fix changed behavior beyond the finding.
-7. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
+1. **Panel round 1**: DeepSeek and Muse (`review panel`), in parallel, full
+   review of the change.
+2. **Panel round 2**: DeepSeek and Muse again, in parallel, on the same code
+   plus the combined round-1 ledger. Each one confirms or rejects every finding
+   (with evidence) and adds what both missed. No code changes between rounds.
+3. **Astra** (`reviewer`, low), **one pass**, on the change plus the checked
+   ledger. This is the gate: it gives the verdict and its own findings.
+4. **Sol fixes once**, through the orchestrator: every accepted blocker and
+   should from all three reviewers in one brief. The orchestrator declines nits
+   and findings it disproved, with a reason in the ledger.
+5. **The orchestrator verifies every fix** against the ledger (diff, checks,
+   a focused test where the finding needs one) and records the approval for the
+   fixed change. Astra does not run again unless a fix changed behavior beyond
+   its finding.
+6. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
    `babysit-pr` / `cm.sh bot-review` handle its findings the same way.
 
-"sol loop" replaces steps 1-5 with Sol as the reviewer, up to 3 rounds. A
-model or round count the user names for the run wins.
+If Astra approves with no blocker or should open, step 4 is skipped and the
+approval stands as is.
 
-"light review" means one panel round plus the gate for routine changes when
-the user says so. The default stays two panel rounds plus the gate.
+"light review" (the user's words, routine changes): panel round 1 only, then
+Astra, then Sol once. "sol loop": Sol reviews alone, up to 3 rounds. A model or
+round count the user names for the run wins.
 
 ## Rules
 
@@ -39,7 +43,7 @@ the user says so. The default stays two panel rounds plus the gate.
   secrets or customer data (Muse trains on requests).
 - A panel member that times out or errors is noted in the ledger and the
   sequence continues; it is not waited on again.
-- Stop early only if a round returns nothing but nits.
+- Stop early (skip to Astra) only if round 1 returns nothing but nits.
 - Reviewers must not start subagents or reviewers.
 - Keep one ledger across all rounds: id, source (DeepSeek/Muse/Astra/bot),
   round, severity, outcome. Never guess usage.
