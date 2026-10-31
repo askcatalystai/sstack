@@ -585,12 +585,12 @@ from pathlib import Path
 import sys
 plan=Path(sys.argv[1])
 policy=('Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.',
-        '"deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.')
+        'One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.')
 for path in (plan/'cm.sh', plan.parent/'SKILL.md',
              plan.parent.parent/'review-loop/SKILL.md', plan.parent.parent/'sid-mode/SKILL.md'):
     text=path.read_text()
     assert all(line in text for line in policy), path
     assert 'Stop early only if a round returns nothing but nits.' not in text, path
 PYCODE
-echo 'ok: review instructions agree on panel then Astra, deep review and sol loop'
+echo 'ok: review instructions agree on panel then Astra, one round and sol loop'
 echo 'All plan-runner tests passed.'

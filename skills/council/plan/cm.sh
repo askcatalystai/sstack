@@ -32,7 +32,7 @@
 # State lives in ~/.local/state/council/<slug>/ (current plan: ~/.local/state/council/current).
 # Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
 # Every model runs as a subagent the orchestrator starts; cm writes briefs and records replies.
-# "deep review" (the orchestrator decides, risky areas): a second parallel round on the fixed change. "sol loop": Sol only, up to 3 rounds.
+# One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
 # Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification, 11 unowned branch, 12 incomplete resolution ledger or missing gate round.
 # Gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused, 9 head moved.
 set -u
