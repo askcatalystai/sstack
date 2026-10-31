@@ -130,3 +130,23 @@ h1{font-size:17px}
 .model-effort{color:var(--muted-foreground)}
 .task-header .model-chip:first-of-type{margin-left:auto}
 .task-header .provider-mark{margin-left:0}
+
+/* In progress: one card per agent; title first, one quiet meta line */
+#running-tasks{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
+.agent-card{display:flex;flex-direction:column;gap:6px;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--background);color:var(--foreground);text-align:left}
+.agent-card:hover{border-color:#555;background:#0a0a0a}
+.agent-top{display:flex;align-items:baseline;gap:10px;min-width:0}
+.agent-title{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-time{flex:none;font:11px/1 var(--font-mono);color:var(--muted-foreground)}
+.agent-meta{display:flex;align-items:center;gap:8px;min-width:0;font-size:11px;color:var(--muted-foreground)}
+.agent-role{padding:0 6px;border-radius:4px;background:var(--muted);line-height:1.6}
+.agent-role-code{color:var(--info-foreground)}
+.agent-role-review{color:var(--warning-foreground)}
+.agent-meta .model-chip{margin-left:auto;border:0;padding:0;background:none}
+/* Board card: logos only, stacked */
+.agent-stack{display:inline-flex;align-items:center;margin-left:auto;padding-left:4px}
+.agent-stack .provider-mark{display:grid;place-items:center;width:18px;height:18px;margin-left:-5px;border:1px solid var(--border);border-radius:50%;background:var(--background)}
+.agent-stack .provider-mark svg{width:11px;height:11px}
+.task-header .phase-label{margin-left:0}
+/* Keep the board tall: the top cards scroll past ~3 rows */
+#running-tasks,.next-list{max-height:212px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}

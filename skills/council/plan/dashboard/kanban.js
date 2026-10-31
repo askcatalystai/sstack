@@ -208,7 +208,11 @@ function taskCard(task,variant='board'){
   card.classList.toggle('is-active',Boolean(task.active));
   card.setAttribute('aria-haspopup','dialog');
   const header=node('div','task-header');header.append(node('span','pr-number',String(task.number)),phaseLabel(task));
-  for(const job of task.jobs||[])header.append(modelChip(job));
+  if(task.jobs?.length){
+    const stack=node('span','agent-stack');
+    for(const job of task.jobs){const mark=providerMark(job.provider,job.model);mark.title=(job.model||'')+(job.effort?' · '+job.effort:'');stack.append(mark);}
+    header.append(stack);
+  }
   card.append(header,node('h4','',cleanTitle(task.title)));
   const link=githubLink(task);
   if(link){const footer=node('div','task-footer');footer.append(link);card.append(footer);}
@@ -372,11 +376,13 @@ function renderJobs(data){
   const fragment=document.createDocumentFragment();
   for(const job of [...running].sort((a,b)=>Number(a.plan)-Number(b.plan))){
     const number=Number(job.plan);const task=taskByNumber.get(number);
-    const card=node('button','mini-card job-card'+(job.stalled?' job-stalled':''));card.type='button';card.dataset.jobId=job.id;
+    const card=node('button','agent-card'+(job.stalled?' job-stalled':''));card.type='button';card.dataset.jobId=job.id;
     const title=task?cleanTitle(task.title):'Helper';
-    card.setAttribute('aria-label','PR '+number+' · '+title+' · '+(isReviewJob(job)?'reviewing':'coding'));
-    card.append(node('span','pr-number',number?String(number):'·'),node('span','mini-title',title),
-      modelChip(job),node('span','mini-time',duration((now-Date.parse(job.startedAt))/1000)));
+    const role=isReviewJob(job)?'Review':job.role==='implement'?'Code':'Work';
+    card.setAttribute('aria-label','PR '+number+' · '+title+' · '+role+' · '+(job.model||''));
+    const top=node('div','agent-top');top.append(node('span','agent-title',title),node('span','agent-time',duration((now-Date.parse(job.startedAt))/1000)));
+    const meta=node('div','agent-meta');meta.append(node('span','pr-number',number?'#'+number:'·'),node('span','agent-role agent-role-'+role.toLowerCase(),role),modelChip(job));
+    card.append(top,meta);
     if(task)card.addEventListener('click',()=>openTaskDialog(card,taskByNumber.get(number)||task));
     fragment.append(card);
   }
