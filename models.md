@@ -10,8 +10,8 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - claude fallback: claudeAgent_claude_2 / claude-opus-5-5 / medium (only after a usage or rate limit on the orchestrator's instance; same model, never a different one)
 - implementer: codex / gpt-6.1-sol / high
 - hardest tasks: codex / gpt-6.1-sol / xhigh
-- reviewer: codex / gpt-6-astra / low (the gate: one reviewer that must approve)
-- review panel: opencode / opencode-go/deepseek-v4.1-flash / high; opencode / opencode-go/muse-spark-1.3-contributor / medium (extra eyes on every diff, plan, UI and PR; findings feed the gate, they don't replace it)
+- review panel: opencode / opencode-go/deepseek-v4.1-flash / high; opencode / opencode-go/muse-spark-1.3-contributor / medium (two rounds each on every diff, in parallel, before the gate)
+- reviewer: codex / gpt-6-astra / low (the gate: one pass after the panel's two rounds)
 - pr bot: chatgpt-codex-connector (GitHub app; every PR; merge waits for its review of the head commit)
 - judgment and prose: claudesahitya / claude-opus-5-5 / medium
 

@@ -1,31 +1,44 @@
 ---
 name: review-loop
-description: Review a change with the configured reviewer in a loop until both agents agree. Use for "review loop", "sol loop" (forces Sol), or before filing a PR.
+description: Review a change in a fixed sequence (DeepSeek twice, Muse twice, Astra once), with the orchestrator routing fixes to Sol, before the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
 ---
 
 # review-loop
 
-Make your change more correct before (or sometimes after) filing a PR: a
-second model reviews it in a loop.
+Make your change more correct before filing a PR. Models come from
+`~/.local/share/sidstack/models.md`.
 
-The reviewer is the `reviewer` role in `~/.local/share/sidstack/models.md`
-(Astra by default). "sol loop" means use Sol (`gpt-6.1-sol`, high) for this
-run. A model the user names for the run wins over both.
+## The sequence
 
-Make the most minimal possible changes to appease the reviewer. Be careful
-of scope creep and don't be scared to push back.
+1. **DeepSeek round 1** and **Muse round 1** (`review panel`), in parallel,
+   full review.
+2. Orchestrator triages both (see "Answer findings"); **Sol** fixes the real
+   ones (the orchestrator makes tiny fixes itself).
+3. **DeepSeek round 2** and **Muse round 2**, in parallel: open ids and the
+   code changed since round 1 only.
+4. Sol fixes again, through the orchestrator.
+5. **Astra** (`reviewer`, low), **one pass**, on the whole current diff with
+   the ledger. This is the gate: no blocker or should may stay open.
+6. Sol fixes Astra's findings through the orchestrator. The orchestrator
+   verifies those fixes itself (diff, checks); Astra does not run again unless
+   a fix changed behavior beyond the finding.
+7. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
+   `babysit-pr` / `cm.sh bot-review` handle its findings the same way.
 
-## Budget
+"sol loop" replaces steps 1-5 with Sol as the reviewer, up to 3 rounds. A
+model or round count the user names for the run wins.
 
-- Default: 3 rounds total. Round 1 is full. Later rounds check only
-  changed code and open findings.
-- Extend to 5 only for security, permissions, auth, data loss, or
-  state/concurrency, while a blocker or should stays open with evidence. Or when
-  the user asks.
-- Stop early if a round returns only nits. Declined nits and comment,
-  doc, or format-only fixes need no new round.
-- One reviewer only. The reviewer must not start subagents or reviewers.
-- Keep a ledger: id, severity, outcome, usage if returned. Never guess it.
+## Rules
+
+- Panel members get narrow briefs: at most ~20 files or one area each. Split
+  a bigger diff by area and run the pieces in parallel. Never send them
+  secrets or customer data (Muse trains on requests).
+- A panel member that times out or errors is noted in the ledger and the
+  sequence continues; it is not waited on again.
+- Stop early only if a round returns nothing but nits.
+- Reviewers must not start subagents or reviewers.
+- Keep one ledger across all rounds: id, source (DeepSeek/Muse/Astra/bot),
+  round, severity, outcome. Never guess usage.
 
 ## 1. Scope
 
