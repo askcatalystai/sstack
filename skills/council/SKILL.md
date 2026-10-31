@@ -123,8 +123,8 @@ own `--port`). Without it, `cm` uses whichever plan was initialised last.
 
 ### 3. Each PR item
 
-Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
+Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
 
 Work phase by phase. Inside a phase, PRs that touch disjoint files can run in
 parallel, each in its own worktree. Never switch the main checkout's branch.
@@ -147,7 +147,7 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    `cm stop-job <id>` stops one job and clears its PR approval.
 4. Review with models from models.md:
    - `cm brief <n> 1`: prints the panel briefs and where to save each reply.
-     Run DeepSeek and Muse as parallel subagents; save each reply verbatim.
+     Run Muse as a subagent; save its reply verbatim.
    - `cm brief <n> 1 gate-after-panel`: Astra's brief with both replies. Run
      Astra as a subagent; save its reply. `cm review <n> 1` records the round.
    - The orchestrator triages Astra's consolidated list into a ledger and takes

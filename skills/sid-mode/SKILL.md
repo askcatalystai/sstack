@@ -16,10 +16,10 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 - **Claude (orchestrator)** reads, plans, briefs, reviews every diff line by line, runs the checks, tests in the real app, files and merges PRs, and reports. Claude doesn't take a subagent's summary on trust: read the diff, rerun the checks outside the subagent's sandbox.
 - **Implementer** (Sol) writes the code, one PR per brief, in its own worktree. Never commits or pushes.
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
-- **Reviews** run through `review-loop`: DeepSeek and Muse in parallel, then Astra reviews with their findings and returns one list. Claude takes the final call on it and on slop, Sol fixes once, Claude verifies each fix and approves.
+- **Reviews** run through `review-loop`: Muse first, then Astra reviews with its findings and returns one list. Claude takes the final call on it and on slop, Sol fixes once, Claude verifies each fix and approves.
 - **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command. `cm` writes briefs and records replies.
 - **PR bot** (Codex GitHub bot) reviews every PR. Merge waits for its review of the head commit.
-- **Council** (four seats) for plans, contested designs and UX reviews, through `council`.
+- **Council** (DeepSeek and Muse) for plans, contested designs and UX reviews, through `council`.
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it in memory if it's lasting.
 
 ## Playbooks
@@ -51,11 +51,11 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 
 ## Gates (every PR)
 
-Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
+Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
 
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, `pnpm lint` (or the repo's lint), with no new failures against main.
-2. `review-loop`: DeepSeek and Muse in parallel, then Astra consolidates; Claude takes the final call, Sol fixes once, Claude verifies and approves. Decline nits with a reason.
+2. `review-loop`: Muse first, then Astra consolidates; Claude takes the final call, Sol fixes once, Claude verifies and approves. Decline nits with a reason.
 3. Behavioural verification before the PR: run covering tests with pass counts; for UI, run the app in a browser and save a screenshot. Green mocked tests alone are not proof. Write `runs/pr<n>.proof`, then `cm verify <n>` to bind it to the current change. Edits require fresh gate approval and verification.
 4. The deploy gate: main plus the branch, fresh install, lint, typecheck, and the builds the deploy runs (`cm.sh gate check`).
 5. Open the PR (`file-pr`), wait for the PR bot (`cm.sh bot-review`), fix real P0/P1 and real P2 bugs, resolve the rest with a reason.

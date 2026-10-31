@@ -1,6 +1,6 @@
 ---
 name: review-loop
-description: DeepSeek and Muse review in parallel, Astra consolidates their findings into one list, Claude takes the final call, Sol fixes once, Claude approves, then the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
+description: Muse reviews first, Astra consolidates its findings into one list, Claude takes the final call, Sol fixes once, Claude approves, then the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
 ---
 
 # review-loop
@@ -12,13 +12,13 @@ triaged.
 
 ## The sequence
 
-Default: DeepSeek and Muse review in parallel, then Astra reviews with their findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-One review round per PR: DeepSeek and Muse in parallel, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
+Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
 
-1. **Panel.** DeepSeek and Muse (`review panel`) review the change in
-   parallel, each as its own subagent. Their findings do not go to Sol.
-2. **Astra consolidates.** Astra (`reviewer`) reviews the change with both
-   panel replies in its brief: it confirms each finding, rejects it with
+1. **Panel.** Muse (`review panel`) reviews the change as its own
+   subagent. Its findings do not go to Sol.
+2. **Astra consolidates.** Astra (`reviewer`) reviews the change with the
+   panel reply in its brief: it confirms each finding, rejects it with
    evidence, or adds what both missed, and returns the one list Sol works from.
    A panel member with no reply is noted in Astra's brief.
 3. **The orchestrator takes the final call.** Claude (Opus) checks Astra's
@@ -39,7 +39,7 @@ In a plan: `cm brief <n> <r>` prints the panel briefs and where to save each
 reply; `cm brief <n> <r> gate-after-panel` builds Astra's brief from them;
 `cm review <n> <r>` records the round and applies the gates.
 
-One round only: DeepSeek and Muse in parallel, Astra consolidates once, Sol
+One round only: Muse first, Astra consolidates once, Sol
 fixes once, the orchestrator verifies every fix itself (rerun tests, read the
 diff) and approves. No second panel round, even for risky changes: the user
 found two rounds too slow (2026-10-31). For risky areas the orchestrator reruns
@@ -48,14 +48,14 @@ the critical tests itself before approving. "sol loop": Sol reviews alone, up to
 
 ## Rules
 
-- **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, DeepSeek, Muse and Astra, one subagent per reviewer per round, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`). `cm` only writes briefs and records the replies the orchestrator saves.
-- DeepSeek and Muse get the same brief; Astra gets it plus their replies.
+- **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, Muse and Astra, one subagent per reviewer per round, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`). `cm` only writes briefs and records the replies the orchestrator saves.
+- Muse gets the brief; Astra gets it plus Muse's reply.
   Outside a plan, a diff over ~20 files is split by area, one brief per area. Never send secrets or customer data (Muse trains on
   requests).
 - A panel member that times out or errors is noted in the ledger and the
   round goes on without it.
 - Reviewers must not start subagents or reviewers.
-- Keep one ledger across all rounds: id, source (DeepSeek/Muse/Astra/bot),
+- Keep one ledger across all rounds: id, source (Muse/Astra/bot),
   round, severity, outcome. Never guess usage.
 
 ## 1. Scope
@@ -114,9 +114,8 @@ S1 [blocker|should|nit] <file>:<line> <claim>. Fix: <suggestion> (stable ids)
 
 ## 2b. Review panel
 
-Send the brief to each `review panel` member in `models.md` (DeepSeek and Muse
-by default), in parallel, read-only; then send Astra the brief plus their
-replies. Astra's consolidated list is what the ledger resolves.
+Send the brief to each `review panel` member in `models.md` (Muse by
+default), read-only; then send Astra the brief plus its reply. Astra's consolidated list is what the ledger resolves.
 
 ## 3. Answer findings
 

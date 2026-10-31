@@ -15,7 +15,7 @@ Every finding from {{N}} review rounds, split into small PRs:
 - Round 2 ({{date}}): {{e.g. compared X with the reference at `~/templates/<ref>` (version or commit)}}.
 - {{Later rounds: who reviewed (council, or one reviewer plus read-only survey agents), what they compared, and the commit their line numbers are from.}}
 
-Council: {{Claude Opus 5.5 (medium)}}, {{GPT-6.1-Sol (high)}}, {{DeepSeek V4.1 Flash (high)}} and {{Muse Spark 1.3 (medium)}}. {{Use the members the user's instructions name, at their efforts. Say when a named member was unavailable.}}
+Council: {{DeepSeek V4.1 Flash (high)}} and {{Muse Spark 1.3 (high)}}; the orchestrator synthesises. {{Use the members the user's instructions name, at their efforts. Say when a named member was unavailable.}}
 
 | Delegate | R1 {{product}} ({{axes, e.g. UX / Perf}}) | R2 {{product}} ({{axes}}) |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ Council: {{Claude Opus 5.5 (medium)}}, {{GPT-6.1-Sol (high)}}, {{DeepSeek V4.1 F
 - **Roles.** {{Use the roles the user named; this is the default.}}
   - {{Claude}} orchestrates: it briefs each PR, does the final review of the diff, runs the gate, merges, and checks the change on prod.
   - {{GPT-6.1-Sol}} writes the code through `cm implement`, in the PR's own worktree, and fixes accepted findings once.
-  - {{DeepSeek and Muse}} review each change in parallel; {{Astra}} reviews it with their findings and returns one list (`cm brief`, `cm review`). Claude takes the final call, Sol fixes once, Claude verifies and records the approval (`cm approve`). Every model runs as a subagent. Efforts live in `models.md`.
+  - {{Muse}} reviews each change first; {{Astra}} reviews it with its findings and returns one list (`cm brief`, `cm review`). Claude takes the final call, Sol fixes once, Claude verifies and records the approval (`cm approve`). Every model runs as a subagent. Efforts live in `models.md`.
   - {{The Codex GitHub bot (`chatgpt-codex-connector`)}} reviews every PR on GitHub. `cm ship` waits for its review of the head commit and merges only with no unresolved bot thread. P0 and P1 findings, and real P2 bugs, get fixed and pushed; the bot reviews the new commit itself. Threads judged not worth fixing are resolved with the reason in the PR body.
 - **Proof.** Before a PR: covering tests with pass counts, and for UI the real app in a browser; `cm verify` binds it to the change.
 - **Gate.** Every PR runs the deploy gate before it opens and again before merge: main plus the branch, install, lint, typecheck and the builds the deploy runs.
@@ -54,7 +54,7 @@ Council: {{Claude Opus 5.5 (medium)}}, {{GPT-6.1-Sol (high)}}, {{DeepSeek V4.1 F
 
 {{Optional: one paragraph of context for the phase: where the findings came from, what to keep, the shared root cause.}}
 
-### [ ] PR 1 — {{Short outcome, in the user's words}} ({{S|M|L}}) {{**Bug**}} {{*(who found it: Opus, Sol, DeepSeek, Muse, all 4)*}}
+### [ ] PR 1 — {{Short outcome, in the user's words}} ({{S|M|L}}) {{**Bug**}} {{*(who found it: DeepSeek, Muse, both)*}}
 - Root cause: {{what is wrong and why, with `file.ts:line`}}.
 - Files: {{`path/a.ts:12`, `path/b.tsx:40-60`}}.
 - {{Ref}}: {{how the reference does it, `RefFile.tsx:120-140`}}.

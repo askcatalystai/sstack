@@ -62,9 +62,9 @@ plan is `<repo>-adhoc` (create it once with `cm init --adhoc --repo <dir>
    it, then `cm implemented <n>`. For a trivial change Claude may edit the
    worktree itself instead. Every model runs as a subagent, never from the
    terminal.
-3. **Review** (see `review-loop`): `cm brief <n> 1`, DeepSeek and Muse as
-   parallel subagents, `cm brief <n> 1 gate-after-panel`, Astra as a subagent
-   with their findings, `cm review <n> 1`. Claude takes the final call on
+3. **Review** (see `review-loop`): `cm brief <n> 1`, Muse as a
+   subagent, `cm brief <n> 1 gate-after-panel`, Astra as a subagent
+   with its findings, `cm review <n> 1`. Claude takes the final call on
    Astra's list, Sol fixes once, Claude verifies each fix, `cm approve <n>
    ledger.md`. Skip the fix pass if Astra approved cleanly.
 4. **Prove it.** Run the real thing (see "Proof") and write
