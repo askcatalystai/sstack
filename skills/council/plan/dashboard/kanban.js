@@ -189,7 +189,7 @@ function metadata(task){
   const meta=node('div','task-meta');meta.append(node('span','pr-number','PR '+task.number),phaseLabel(task));return meta;
 }
 
-function taskCard(task,variant='board'){
+function taskCard(task,variant='board',agent=null){
   const card=node('article','task-card');card.tabIndex=0;card.dataset.taskNumber=task.number;card.dataset.column=task.column;
   card.setAttribute('aria-label','PR '+task.number+' · '+cleanTitle(task.title)+' · '+task.status);
   const merged=task.column==='merged';
@@ -208,11 +208,8 @@ function taskCard(task,variant='board'){
   card.classList.toggle('is-active',Boolean(task.active));
   card.setAttribute('aria-haspopup','dialog');
   const header=node('div','task-header');header.append(node('span','pr-number',String(task.number)),phaseLabel(task));
-  if(task.jobs?.length){
-    const stack=node('span','agent-stack');
-    for(const job of task.jobs){const mark=providerMark(job.provider,job.model);mark.title=(job.model||'')+(job.effort?' · '+job.effort:'');stack.append(mark);}
-    header.append(stack);
-  }
+  // One card per agent: the card names the agent it stands for.
+  if(agent){const chip=modelChip(agent);chip.classList.add('card-agent');header.append(chip);}
   card.append(header,node('h4','',cleanTitle(task.title)));
   const link=githubLink(task);
   if(link){const footer=node('div','task-footer');footer.append(link);card.append(footer);}
@@ -267,8 +264,11 @@ function renderBoard(jobs){
       const scroll=list.scrollTop;
       const open=new Set([...list.querySelectorAll('details[open]')].map(detail=>detail.dataset.historyKey));
       const fragment=document.createDocumentFragment();
-      if(!entries.length)fragment.append(node('p','column-empty','No tasks'));
-      for(const task of entries){const card=taskCard(task);card.setAttribute('role','listitem');fragment.append(card);}
+      if(!entries.length)fragment.append(node('p','column-empty','None'));
+      for(const task of entries){
+        const agents=(key==='progress'||key==='review')&&task.jobs?.length?task.jobs:[null];
+        for(const agent of agents){const card=taskCard(task,'board',agent);if(agent)card.dataset.jobId=agent.id;card.setAttribute('role','listitem');fragment.append(card);}
+      }
       list.replaceChildren(fragment);list.scrollTop=scroll;list.dataset.signature=signature;
       for(const detail of list.querySelectorAll('details'))if(open.has(detail.dataset.historyKey))detail.open=true;
     }
@@ -374,15 +374,23 @@ function renderJobs(data){
   renderBoard(data.jobs);
   console.log('kanban-check',JSON.stringify({columns:Object.fromEntries(Object.keys(states).map(key=>[key,[...taskByNumber.values()].filter(t=>t.column===key).length])),running:running.map(job=>job.plan),phaseCards:document.querySelectorAll('.phase-card').length}));
   const fragment=document.createDocumentFragment();
-  for(const job of [...running].sort((a,b)=>Number(a.plan)-Number(b.plan))){
-    const number=Number(job.plan);const task=taskByNumber.get(number);
-    const card=node('button','agent-card'+(job.stalled?' job-stalled':''));card.type='button';card.dataset.jobId=job.id;
-    const title=task?cleanTitle(task.title):'Helper';
-    const role=isReviewJob(job)?'Review':job.role==='implement'?'Code':'Work';
-    card.setAttribute('aria-label','PR '+number+' · '+title+' · '+role+' · '+(job.model||''));
-    const top=node('div','agent-top');top.append(node('span','agent-title',title),node('span','agent-time',duration((now-Date.parse(job.startedAt))/1000)));
-    const meta=node('div','agent-meta');meta.append(node('span','pr-number',number?'#'+number:'·'),node('span','agent-role agent-role-'+role.toLowerCase(),role),modelChip(job));
-    card.append(top,meta);
+  const byPr=new Map();
+  for(const job of [...running].sort((a,b)=>Number(a.plan)-Number(b.plan)||String(a.id).localeCompare(String(b.id)))){
+    const number=Number(job.plan);if(!byPr.has(number))byPr.set(number,[]);byPr.get(number).push(job);
+  }
+  for(const [number,jobs] of byPr){
+    const task=taskByNumber.get(number);const title=task?cleanTitle(task.title):'Helper';
+    const card=node('button','pr-group'+(jobs.some(job=>job.stalled)?' job-stalled':''));card.type='button';
+    card.setAttribute('aria-label','PR '+number+' · '+title+' · '+jobs.length+' agents');
+    const top=node('div','agent-top');top.append(node('span','pr-number','#'+number),node('span','agent-title',title));
+    const rows=node('div','agent-rows');
+    for(const job of jobs){
+      const role=isReviewJob(job)?'Review':job.role==='implement'?'Code':'Work';
+      const row=node('div','agent-row');row.dataset.jobId=job.id;
+      row.append(modelChip(job),node('span','agent-role agent-role-'+role.toLowerCase(),role),node('span','agent-time',duration((now-Date.parse(job.startedAt))/1000)));
+      rows.append(row);
+    }
+    card.append(top,rows);
     if(task)card.addEventListener('click',()=>openTaskDialog(card,taskByNumber.get(number)||task));
     fragment.append(card);
   }

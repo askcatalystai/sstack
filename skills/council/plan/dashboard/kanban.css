@@ -150,3 +150,15 @@ h1{font-size:17px}
 .task-header .phase-label{margin-left:0}
 /* Keep the board tall: the top cards scroll past ~3 rows */
 #running-tasks,.next-list{max-height:212px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+
+/* In progress: one card per PR, its agents nested as rows */
+.pr-group{display:flex;flex-direction:column;gap:7px;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--background);color:var(--foreground);text-align:left}
+.pr-group:hover{border-color:#555;background:#0a0a0a}
+.pr-group .agent-top{align-items:center}
+.agent-rows{display:flex;flex-direction:column;gap:4px;padding-left:8px;border-left:1px solid var(--border)}
+.agent-row{display:grid;grid-template-columns:minmax(0,1fr) auto 52px;align-items:center;gap:8px;font-size:11px;color:var(--muted-foreground)}
+.agent-row .model-chip{border:0;padding:0;background:none;min-width:0}
+.agent-row .agent-time{text-align:right}
+/* Board: one card per agent; the agent sits in the header */
+.card-agent{margin-left:auto}
+.task-card .card-agent{border:1px solid var(--border)}
