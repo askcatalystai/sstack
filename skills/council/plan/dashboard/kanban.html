@@ -1,14 +1,16 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{TITLE}} · Kanban</title></head>
 <body><main id="council-progress">
-<header class="app-header"><div><h1>{{TITLE}}</h1><p class="source">{{PLAN}} <span>· Read-only</span></p></div><div class="refresh-status"><span id="observer"></span><small id="checked"></small></div></header>
-<section class="work-panel" aria-labelledby="work-heading"><div class="section-heading"><div class="heading-inline"><span class="status-dot progress-dot" aria-hidden="true"></span><h2 id="work-heading">In progress</h2><span class="count" id="running-count"></span></div><span class="session-status" id="status"></span></div><div class="running-list" id="running-tasks"></div>
-<div class="next-heading"><h3>Next in line</h3></div><ol class="next-list" id="next-tasks" aria-label="Next three tasks"></ol></section>
+<header class="app-header"><div class="title-block"><h1>{{TITLE}}</h1><p class="source">{{PLAN}}</p></div><div class="refresh-status"><span id="observer"></span><small id="checked"></small><button type="button" class="sheet-toggle" id="sheet-toggle" aria-expanded="false" aria-controls="side-sheet" title="Phases and activity" aria-label="Show phases and activity"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/><path d="M18 9h0M18 12h0M18 15h0"/></svg></button></div></header>
+<div class="top-cards">
+<section class="work-panel" aria-labelledby="work-heading"><div class="section-heading"><div class="heading-inline"><span class="status-dot progress-dot" aria-hidden="true"></span><h2 id="work-heading">In progress</h2><span class="count" id="running-count"></span></div><span class="session-status" id="status"></span></div><div class="running-list" id="running-tasks"></div></section>
+<section class="work-panel next-panel" aria-labelledby="next-heading"><div class="section-heading"><div class="heading-inline"><span class="status-dot" aria-hidden="true"></span><h2 id="next-heading">Next in line</h2></div></div><ol class="next-list" id="next-tasks" aria-label="Next three tasks"></ol></section>
+</div>
 <section class="board-section" aria-labelledby="board-heading"><div class="section-heading"><h2 id="board-heading">Board</h2><span class="board-totals" id="board-totals"></span></div><div class="board-scroll"><div class="kanban-board" id="kanban-board" aria-label="Task board"></div></div></section>
-<section class="phases-section" aria-labelledby="phases-heading"><div class="section-heading"><h2 id="phases-heading">All phases</h2></div><div class="phase-grid" id="phase-grid"></div></section>
-<section class="activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><h2 id="activity-heading">Activity feed</h2><span id="activity-time"></span></div><ul class="events" id="events"></ul><p class="checks" id="checks"></p><div class="links" id="links"></div></section>
-
-</main><script id="progress-data" type="application/json">{}</script><script>
+</main><aside class="side-sheet" id="side-sheet" aria-labelledby="sheet-heading" hidden><div class="sheet-header"><h2 id="sheet-heading">Phases and activity</h2><button type="button" class="sheet-close" id="sheet-close" aria-label="Close phases and activity">×</button></div><div class="sheet-body">
+<section class="phases-section" aria-labelledby="phases-heading"><div class="section-heading"><h2 id="phases-heading">Phases</h2></div><div class="phase-grid" id="phase-grid"></div></section>
+<section class="activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><h2 id="activity-heading">Activity</h2><span id="activity-time"></span></div><ul class="events" id="events"></ul><p class="checks" id="checks"></p><div class="links" id="links"></div></section>
+</div></aside><script id="progress-data" type="application/json">{}</script><script>
 (()=>{
 const d=JSON.parse(document.getElementById('progress-data').textContent);if(!d.checkedAt)return;
 const el=id=>document.getElementById(id);

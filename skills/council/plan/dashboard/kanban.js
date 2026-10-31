@@ -135,7 +135,7 @@ function renderPhases(tasks){
   if(!grid.children.length)for(const phase of d.phases){
     const card=node('button','phase-card');card.type='button';card.dataset.phase=phase.number;
     card.setAttribute('aria-haspopup','dialog');card.setAttribute('aria-controls',phaseDialog.id);
-    card.append(node('span','phase-number','Phase '+phase.number),node('h3','',cleanTitle(phase.title)),node('span','phase-card-status'));
+    card.append(node('span','phase-number',String(phase.number)),node('h3','',cleanTitle(phase.title)),node('span','phase-card-status'));
     card.addEventListener('click',()=>openPhaseDialog(card,phase));grid.append(card);
   }
   for(const card of grid.children){
@@ -143,7 +143,7 @@ function renderPhases(tasks){
     const merged=items.filter(task=>task.done&&!task.reverted).length;
     const active=items.filter(task=>task.active).length;
     card.classList.toggle('is-active',active>0);
-    card.querySelector('.phase-card-status').textContent=merged+' / '+items.length+' merged'+(active?' · '+active+' active':'');
+    card.querySelector('.phase-card-status').textContent=merged+' / '+items.length+(active?' · '+active+' live':'');
   }
   if(phaseDialog.open)updatePhaseDialog();
 }
@@ -205,22 +205,19 @@ function taskCard(task,variant='board'){
     card.addEventListener('click',event=>{if(!link?.contains(event.target))openTaskDialog(title,task);});
     return card;
   }
-  const header=node('div','task-header');header.append(metadata(task));
-  if(['progress','review'].includes(task.column)&&task.jobs?.length){
-    const stack=node('div','task-job-labels');
-    for(const job of task.jobs)stack.append(jobLabels(job));
-    header.append(stack);
-  }
   card.classList.toggle('is-active',Boolean(task.active));
+  card.setAttribute('aria-haspopup','dialog');
+  const header=node('div','task-header');header.append(node('span','pr-number',String(task.number)),phaseLabel(task));
+  for(const job of task.jobs||[])header.append(providerMark(job.provider||''));
   card.append(header,node('h4','',cleanTitle(task.title)));
-  if(task.summary)card.append(node('p','task-summary',task.summary));
-  addHistory(task,card,variant);
-  const footer=node('div','task-footer');footer.append(node('span','badge '+badgeClass(task),task.status));
-  const link=githubLink(task);if(link)footer.append(link);else if(task.updatedAt)footer.append(node('time','',fmt(task.updatedAt)+' IST'));
-  card.append(footer);return card;
+  const link=githubLink(task);
+  if(link){const footer=node('div','task-footer');footer.append(link);card.append(footer);}
+  card.addEventListener('click',event=>{if(!link?.contains(event.target)&&!event.target.closest('.phase-label'))openTaskDialog(card,task);});
+  card.addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&event.target===card){event.preventDefault();openTaskDialog(card,task);}});
+  return card;
 }
 
-el('status').textContent='Connecting to live jobs…';
+el('status').textContent='…';
 // Plan order stays stable; only live placement changes between snapshots.
 function isReviewJob(job){
   return job.role==='review';
@@ -276,32 +273,45 @@ function renderBoard(jobs){
   if(el('next-tasks').dataset.signature!==signature){
     el('next-tasks').replaceChildren();el('next-tasks').dataset.signature=signature;
     if(!next.length)el('next-tasks').append(node('li','next-empty','No queued tasks remain.'));
-    for(const [index,task] of next.entries()){
+    for(const task of next){
       const li=node('li','next-item');li.dataset.nextNumber=task.number;
-      const content=node('div','next-content');content.append(metadata(task),node('h4','',cleanTitle(task.title)));
-      if(task.summary)content.append(node('p','task-summary',task.summary));
-      li.append(node('span','queue-number',String(index+1).padStart(2,'0')),content);
-      li.tabIndex=0;li.setAttribute('aria-label','Next '+(index+1)+': PR '+task.number+' '+cleanTitle(task.title));
-      el('next-tasks').append(li);
+      const open=node('button','mini-card');open.type='button';
+      open.setAttribute('aria-haspopup','dialog');open.setAttribute('aria-label','PR '+task.number+' · '+cleanTitle(task.title));
+      open.append(node('span','pr-number',String(task.number)),node('span','mini-title',cleanTitle(task.title)));
+      open.addEventListener('click',()=>openTaskDialog(open,taskByNumber.get(task.number)||task));
+      li.append(open);el('next-tasks').append(li);
     }
   }
   renderPhases(tasks);
-  el('board-totals').textContent=tasks.length+' tasks · '+counts.merged+' merged · '+tasks.filter(task=>task.reverted).length+' reverted';
+  el('board-totals').textContent=counts.merged+' / '+tasks.length;
 }
-el('checked').textContent='Checked '+fmt(d.checkedAt)+' IST';
-el('activity-time').textContent=d.lastEventAt?'Last session event '+fmt(d.lastEventAt)+' IST':'';
+el('checked').textContent=fmt(d.checkedAt);
+el('activity-time').textContent=d.lastEventAt?fmt(d.lastEventAt):'';
 el('events').classList.add('activity-timeline');
 for(const entry of [...activityTimeline(d.events||[]).children])el('events').append(entry);
 el('checks').textContent=d.checks||'';
-for(const url of d.links||[]){const link=node('a','','GitHub PR #'+url.split('/').pop()+' ↗');link.href=url;link.target='_blank';link.rel='noopener';el('links').append(link);}
+for(const url of d.links||[]){const link=node('a','','#'+url.split('/').pop()+' ↗');link.href=url;link.target='_blank';link.rel='noopener';el('links').append(link);}
 
 const age=()=>{const stale=Date.now()-new Date(d.checkedAt)>150000;el('observer').textContent=stale?'Updates delayed':'';el('observer').className=stale?'warning':'';};age();setInterval(age,15000);
+// Phases and activity live in a right sheet, collapsed by default; its state survives the auto-refresh.
+const sheet=el('side-sheet'),sheetToggle=el('sheet-toggle');
+function setSheet(open){
+  sheet.hidden=!open;sheetToggle.setAttribute('aria-expanded',String(open));
+  document.body.classList.toggle('sheet-open',open);
+  if(open)el('sheet-close').focus({preventScroll:true});
+}
+sheetToggle.addEventListener('click',()=>setSheet(sheet.hidden));
+el('sheet-close').addEventListener('click',()=>{setSheet(false);sheetToggle.focus({preventScroll:true});});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!sheet.hidden&&!phaseDialog.open){setSheet(false);sheetToggle.focus({preventScroll:true});}});
+setSheet(Boolean(saved.sheet));
 requestAnimationFrame(()=>{
   for(const list of document.querySelectorAll('[data-scroll-key]'))list.scrollTop=saved.columns?.[list.dataset.scrollKey]||0;
+  if(saved.sheetY)document.querySelector('.sheet-body').scrollTop=saved.sheetY;
   document.querySelector('.board-scroll').scrollLeft=saved.boardX||0;
   if(saved.pageY)window.scrollTo({top:saved.pageY,behavior:'instant'});
 });
 function saveView(){try{sessionStorage.setItem(localStateKey,JSON.stringify({pageY:scrollY,boardX:document.querySelector('.board-scroll').scrollLeft,
+  sheet:!sheet.hidden,sheetY:document.querySelector('.sheet-body').scrollTop,
   columns:Object.fromEntries([...document.querySelectorAll('[data-scroll-key]')].map(list=>[list.dataset.scrollKey,list.scrollTop])),
   open:[...document.querySelectorAll('details[data-history-key][open]')].map(details=>details.dataset.historyKey)}));}catch{}}
 const refresh=()=>{if(phaseDialog.open){setTimeout(refresh,4000);return;}saveView();const url=new URL(location.href);url.searchParams.set('progressRefresh',Date.now().toString());location.replace(url.href);};
@@ -343,19 +353,19 @@ function renderJobs(data){
   const fragment=document.createDocumentFragment();
   for(const job of [...running].sort((a,b)=>Number(a.plan)-Number(b.plan))){
     const number=Number(job.plan);const task=taskByNumber.get(number);
-    const card=node('article','job-card'+(job.stalled?' job-stalled':''));card.dataset.jobId=job.id;
-    card.append(node('span','pr-number',number?'PR '+number:'Dashboard helper'),
-      node('h3','job-plan',task?cleanTitle(task.title):number?'Plan title unavailable':'Dashboard helper'),
-      node('strong','job-role',isReviewJob(job)?'Reviewing':job.role==='implement'?'Coding':job.role||'Working'),
-      node('span','job-elapsed',duration((now-Date.parse(job.startedAt))/1000)+' elapsed'),
-      jobLabels(job),node('span','badge '+(job.stalled?'review':'active'),job.stalled?'Stalled':'Running'));
+    const card=node('button','mini-card job-card'+(job.stalled?' job-stalled':''));card.type='button';card.dataset.jobId=job.id;
+    const title=task?cleanTitle(task.title):'Helper';
+    card.setAttribute('aria-label','PR '+number+' · '+title+' · '+(isReviewJob(job)?'reviewing':'coding'));
+    card.append(node('span','pr-number',number?String(number):'·'),node('span','mini-title',title),
+      providerMark(job.provider||''),node('span','mini-time',duration((now-Date.parse(job.startedAt))/1000)));
+    if(task)card.addEventListener('click',()=>openTaskDialog(card,taskByNumber.get(number)||task));
     fragment.append(card);
   }
-  if(!running.length)fragment.append(node('p','muted','No running jobs.'));
+  if(!running.length)fragment.append(node('p','muted','Idle'));
   const scroll=el('running-tasks').scrollLeft;
   el('running-tasks').replaceChildren(fragment);el('running-tasks').scrollLeft=scroll;
-  el('running-count').textContent=running.length+' running';
-  el('status').textContent='Live · '+fmt(data.checkedAt)+' IST';
+  el('running-count').textContent=running.length||'';
+  el('status').textContent=fmt(data.checkedAt);
   el('status').classList.remove('warning');
 }
 let jobsTimer, jobsFetching=false;
