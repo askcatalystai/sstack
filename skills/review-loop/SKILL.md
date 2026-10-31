@@ -11,6 +11,9 @@ until Astra has reviewed.
 
 ## The sequence
 
+Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
+"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+
 1. **Panel round 1**: DeepSeek and Muse (`review panel`), in parallel, full
    review of the change.
 2. **Panel round 2**: DeepSeek and Muse again, in parallel, on the same code

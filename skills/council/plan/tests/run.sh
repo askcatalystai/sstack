@@ -43,13 +43,23 @@ cat > "$T/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 if [ "${1:-} ${2:-}" = 'pr list' ]; then echo 1
 elif [ "${1:-} ${2:-}" = 'pr view' ]; then echo 'test change'
-elif [ "${1:-} ${2:-}" = 'pr merge' ]; then exit 0
+elif [ "${1:-} ${2:-}" = 'pr merge' ]; then
+  if [ -n "${FAKE_MERGE_CALLS:-}" ]; then
+    echo started >> "$FAKE_MERGE_CALLS"
+    sleep 3
+    echo merged >> "$FAKE_MERGE_CALLS"
+  fi
+  exit 0
 else echo 'https://example.test/pull/1'; fi
 FAKE
 cat > "$T/bin/git" <<'FAKE'
 #!/usr/bin/env bash
 if [ "${FAKE_STAGE_EDIT:-}" = 1 ] && [ -z "${GIT_INDEX_FILE:-}" ] && [[ " $* " = *' add -A '* ]]; then
   echo stage-race >> "$2/file"
+fi
+if [ "${FAKE_MOVE_HEAD:-}" = 1 ] && [[ " $* " = *' push -q '* ]]; then
+  moved=$(echo local-head-race | "$REAL_GIT" -C "$2" commit-tree 'HEAD^{tree}' -p HEAD)
+  "$REAL_GIT" -C "$2" update-ref HEAD "$moved"
 fi
 "$REAL_GIT" "$@"; rc=$?
 if [ "${FAKE_FIRST_PUSH:-}" = 1 ] && [[ " $* " = *' ls-remote --exit-code '* ]]; then
@@ -105,14 +115,17 @@ with tempfile.NamedTemporaryFile(mode='w') as f:
     assert len(models['review panel'])==2
 PYCODE
 echo 'ok: model parsing, per-entry notes, refresh and explicit pinning'
-# Fresh implementations must clear all old evidence.
-for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do echo stale > "$S/$file"; done
+# Fresh implementations clear review evidence, but preserve branch ownership.
+echo owned > "$S/state/pr1.remote"
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof; do echo stale > "$S/$file"; done
 bash "$CM" new 1 >/dev/null
-for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do [ ! -e "$S/$file" ]; done
-for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do echo stale > "$S/$file"; done
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof; do [ ! -e "$S/$file" ]; done
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof; do echo stale > "$S/$file"; done
 bash "$CM" implement 1 >/dev/null
-for file in state/pr1.approval state/pr1.verified runs/pr1.proof runs/pr1.remote; do [ ! -e "$S/$file" ]; done
-echo 'ok: new and implement clear stale evidence'
+for file in state/pr1.approval state/pr1.verified runs/pr1.proof; do [ ! -e "$S/$file" ]; done
+[ "$(cat "$S/state/pr1.remote")" = owned ]
+rm "$S/state/pr1.remote"
+echo 'ok: new and implement clear evidence and preserve branch ownership'
 # Direct runner defaults match jobs.py, and its worker publishes its PID first.
 mkdir -p "$T/home/.local/state/council"
 ln -s "$S" "$T/home/.local/state/council/current"
@@ -203,8 +216,9 @@ base=$(cat "$S/runs/pr1.base")
 git -C "$W" add file
 git -C "$W" commit -qm changed
 git -C "$W" push -q origin HEAD:refs/heads/moved
-expect 9 gate merge 1 moved "$base"
+expect 9 gate merge 1 moved "$base" 1
 echo 'ok g: merge rejects moved head'
+rm -f "$S/state/pr1.approval"
 # Move the remote from inside the build, after fetch but before merge.
 # The fake gh merge succeeds, so only the ls-remote re-check can catch this.
 new_head=$(echo remote-race | git -C "$W" commit-tree 'HEAD^{tree}' -p HEAD)
@@ -216,12 +230,18 @@ p,origin,head=sys.argv[1:]; c=json.load(open(p))
 c['gate']='git --git-dir='+shlex.quote(origin)+' update-ref refs/heads/moved '+head
 json.dump(c,open(p,'w'))
 PYCODE
-expect 9 gate merge 1 moved "$head"
+expect 8 gate merge 1 moved "$head" 1
+no_approval
+expect 0 review 1 16 gate
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
+echo "$head" > "$S/state/pr1.head"
+expect 9 gate merge 1 moved "$head" 1
 python3 - "$S/config.json" <<'PYCODE'
 import json,sys
 p=sys.argv[1]; c=json.load(open(p)); c['gate']='true'; json.dump(c,open(p,'w'))
 PYCODE
-echo 'ok: remote head moving after fetch refuses merge'
+echo 'ok: direct gate merge requires approval and rejects a moved remote head'
 export FAKE_SLEEP=1
 bash "$CM" review 1 7 gate > "$T/sleep.log" 2>&1 &
 runner=$!
@@ -331,6 +351,26 @@ echo fresh-proof > "$S/runs/pr1.proof"
 expect 0 verify 1
 expect 0 review 1 15 gate
 echo 'ok: staged race, file mode, symlink type and plan exclusion'
+# A hook's staged edit must not enter an approved commit unnoticed.
+before=$(git -C "$W" rev-parse HEAD)
+hooks=$T/hooks; mkdir "$hooks"
+cat > "$hooks/pre-commit" <<'HOOK'
+#!/usr/bin/env bash
+echo hook-edit >> file
+git add file
+HOOK
+chmod +x "$hooks/pre-commit"
+git -C "$W" config core.hooksPath "$hooks"
+expect 8 ship 1
+[ "$(git -C "$W" rev-parse HEAD)" = "$before" ]
+grep -q hook-edit "$W/file"
+git -C "$W" diff --cached -- file | grep -q hook-edit
+grep -q 'committed change differs' "$S/state/pr1"
+rm "$hooks/pre-commit"
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
+expect 0 review 1 17 gate
+echo 'ok: commit hook edit refuses ship and soft reset preserves staged changes'
 # A branch appearing after an absent ls-remote must be protected by an empty lease.
 export TEST_ORIGIN=$T/origin.git TEST_BRANCH=refs/heads/council/repo-plan-1 TEST_BASE=$(cat "$S/runs/pr1.base")
 FAKE_FIRST_PUSH=1 expect 1 ship 1
@@ -342,26 +382,82 @@ python3 - "$S/config.json" <<'PYCODE'
 import json,sys
 p=sys.argv[1]; c=json.load(open(p)); c['gate']='false'; json.dump(c,open(p,'w'))
 PYCODE
-expect 1 ship 1
+FAKE_MOVE_HEAD=1 expect 1 ship 1
+[ "$(cat "$S/state/pr1.head")" != "$(git -C "$W" rev-parse HEAD)" ]
+[ "$(cat "$S/state/pr1.head")" = "$(git --git-dir="$T/origin.git" rev-parse "$TEST_BRANCH")" ]
+echo 'ok: push uses the approved commit SHA even when local HEAD moves'
 grep -q 'gate check failed' "$S/state/pr1"
 echo 'ok: failing gate command prevents ship'
-old=$(cat "$S/runs/pr1.head")
+old=$(cat "$S/state/pr1.head")
 branch=council/repo-plan-1
 moved=$(echo concurrent | git -C "$W" commit-tree 'HEAD^{tree}' -p HEAD)
 git -C "$W" push -q origin "$moved:refs/heads/$branch"
+expect 0 implement 1
+[ "$(cat "$S/state/pr1.remote")" = "$old" ]
 expect 0 review 1 12 gate
+echo fresh-proof > "$S/runs/pr1.proof"
 expect 0 verify 1
 expect 1 ship 1
 [ "$(cat "$S/state/pr1")" = 'needs-attention: push lease refused' ]
 [ "$(git --git-dir="$T/origin.git" rev-parse "refs/heads/$branch")" = "$moved" ]
-git --git-dir="$T/origin.git" update-ref "refs/heads/$branch" "$old"
+# Missing ownership must refuse an already-existing branch until explicit adoption.
+rm "$S/state/pr1.remote"
+expect 11 ship 1
+grep -q 'branch exists on origin and we never pushed it' "$T/output"
+[ ! -e "$S/state/pr1.remote" ]
+expect 0 adopt 1
+[ "$(cat "$S/state/pr1.remote")" = "$moved" ]
 python3 - "$S/config.json" <<'PYCODE'
 import json,sys
 p=sys.argv[1]; c=json.load(open(p)); c['gate']='true'; json.dump(c,open(p,'w'))
 PYCODE
-echo 'ok extra: push lease preserves a concurrent remote update'
+echo 'ok: retry preserves remote ownership, unowned branch refuses ship, adopt allows push'
+# Stop while the slow merge command is pending: no merge may finish.
+export FAKE_MERGE_CALLS=$T/merge-calls
+bash "$CM" ship 1 > "$T/ship-stop.log" 2>&1 &
+shipper=$!
+for ((i=0; i<1000; i++)); do
+  [ -s "$FAKE_MERGE_CALLS" ] && break
+  kill -0 "$shipper" 2>/dev/null || { cat "$T/ship-stop.log"; exit 1; }
+  sleep .02
+done
+[ -s "$FAKE_MERGE_CALLS" ]
+expect 0 stop 1
+rc=0; wait "$shipper" || rc=$?
+[ "$rc" = 1 ]
+[ "$(cat "$S/state/pr1")" = 'stopped: stopped by the orchestrator' ]
+[ "$(cat "$FAKE_MERGE_CALLS")" = started ]
+[ "$(cat "$S/state/pr1.remote")" = "$(git --git-dir="$T/origin.git" rev-parse "refs/heads/$branch")" ]
+expect 1 gate merge 1 "$branch" "$(cat "$S/state/pr1.head")"
+echo 'ok: stop during slow merge cancels merge and preserves stopped state and ownership'
+unset FAKE_MERGE_CALLS
+expect 0 review 1 18 gate
+echo fresh-proof > "$S/runs/pr1.proof"
+expect 0 verify 1
+# Direct merge requires verification and the exact shipped head as well as approval.
+head=$(cat "$S/state/pr1.head")
+mv "$S/state/pr1.verified" "$T/verified"
+expect 10 gate merge 1 "$branch" "$head"
+mv "$T/verified" "$S/state/pr1.verified"
+echo wrong > "$S/state/pr1.head"
+expect 9 gate merge 1 "$branch" "$head"
+echo "$head" > "$S/state/pr1.head"
+echo 'ok: direct gate merge requires verification and matching shipped head'
 expect 0 ship 1
 [ "$(cat "$S/state/pr1")" = 'merged #1' ]
-[ "$(cat "$S/runs/pr1.head")" = "$(git --git-dir="$T/origin.git" rev-parse 'refs/heads/council/repo-plan-1')" ]
+[ "$(cat "$S/state/pr1.head")" = "$(git --git-dir="$T/origin.git" rev-parse 'refs/heads/council/repo-plan-1')" ]
 echo 'ok extra: verdict, untracked hash, proof binding and complete local ship'
+python3 - "$(dirname "$CM")" <<'PYCODE'
+from pathlib import Path
+import sys
+plan=Path(sys.argv[1])
+policy=('Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.',
+        '"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.')
+for path in (plan/'cm.sh', plan.parent/'SKILL.md',
+             plan.parent.parent/'review-loop/SKILL.md', plan.parent.parent/'sid-mode/SKILL.md'):
+    text=path.read_text()
+    assert all(line in text for line in policy), path
+    assert 'Stop early only if a round returns nothing but nits.' not in text, path
+PYCODE
+echo 'ok: review instructions agree on default, light review and sol loop rounds'
 echo 'All plan-runner tests passed.'

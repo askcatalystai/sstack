@@ -118,6 +118,9 @@ own `--port`). Without it, `cm` uses whichever plan was initialised last.
 
 ### 3. Each PR item
 
+Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
+"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+
 Work phase by phase. Inside a phase, PRs that touch disjoint files can run in
 parallel, each in its own worktree. Never switch the main checkout's branch.
 
@@ -165,6 +168,10 @@ parallel, each in its own worktree. Never switch the main checkout's branch.
    - Exit 8 means no gate approval for the current change; exit 10 means no
      verification for it. Review and verify again after edits. Exit 9 means the
      remote head moved after shipping; do not merge it on the old approval.
+   - Exit 11 means the origin branch exists without an ownership record. Inspect
+     it, then use `cm adopt <n>` to explicitly record its SHA before retrying.
+     Ownership lives in `state/pr<n>.remote` and survives new, implement and stop.
+     The exact pushed commit is recorded in `state/pr<n>.head`.
    - Exit 6 means bot findings; they're printed with severity and thread id.
      Fix P0 and P1 findings, and real P2 bugs, in the worktree, rerun the gate review
      and verification, and run `cm ship <n>` again; the bot re-reviews new commits by itself.

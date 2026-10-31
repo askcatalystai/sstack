@@ -8,6 +8,7 @@
 #   cm.sh new <n>                      worktree + branch for plan PR <n>, from origin/<default>
 #   cm.sh implement <n> [extra.md...]    Codex implementer (config implementer) writes the change in the worktree
 #   cm.sh stop <n> [reason]            mark a PR stopped (not active) and close its running jobs
+#   cm.sh adopt <n>                   explicitly take over the current origin branch SHA
 #   cm.sh verify <n>                  bind runs/pr<n>.proof to the current change
 #   cm.sh stop-job <id>               stop one job process group
 #   cm.sh review <n> <round> [panel|gate]           read-only review of the uncommitted change (needs runs/pr<n>.report);
@@ -15,14 +16,16 @@
 #                                      (needs runs/pr<n>.title and runs/pr<n>.body)
 #   cm.sh bot-review <pr> [head-sha]   wait for the GitHub review bot (config botReview) to finish on the head commit;
 #                                      exit 0 clean, 6 unresolved findings (printed), 7 failed or timed out
-#   cm.sh gate check <ref> | gate merge <pr> <ref> <expected-head>
+#   cm.sh gate check <ref> | gate merge <pr> <ref> <expected-head> [n]
 #   cm.sh status                       one line per PR from the state dir
 #   cm.sh dashboard [--transcript F] [--port N] | dashboard stop
 #   cm.sh path                         print the state dir (runs/, state/, dashboard/)
 #
 # With more than one plan, name yours on every call: COUNCIL_PLAN=<slug> cm.sh <command> (slug: printed by init).
 # State lives in ~/.local/state/council/<slug>/ (current plan: ~/.local/state/council/current).
-# Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification.
+# Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
+# "light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+# Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification, 11 unowned branch.
 # Gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused, 9 head moved.
 set -u
 SKILL=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
@@ -103,10 +106,49 @@ job() { python3 "$SKILL/dashboard/jobs.py" upsert "$@"; }
 
 # Hash the snapshot ship stages, including Git modes and addition metadata.
 change_hash() {
-  python3 "$SKILL/change.py" "$(wt "$1")" "$(cat "$S/runs/pr$1.base")" "$PLAN" "${2:-worktree}"
+  python3 "$SKILL/change.py" "$(wt "$1")" "$(cat "$S/runs/pr$1.base")" "$PLAN" "${2:-worktree}" "${3:-HEAD}"
 }
 clear_evidence() {
-  rm -f "$S/state/pr$1.approval" "$S/state/pr$1.verified" "$S/runs/pr$1.proof" "$S/runs/pr$1.remote"
+  rm -f "$S/state/pr$1.approval" "$S/state/pr$1.verified" "$S/runs/pr$1.proof"
+}
+# Shipping never holds the stop lock while waiting for an external command.
+active() {
+  [[ $(cat "$S/state/pr$1" 2>/dev/null) != stopped* ]] || { echo "cm: PR $1 is stopped; cannot ship" >&2; exit 1; }
+}
+shipst() {
+  exec 7>"$S/state/pr$1.lock"; flock 7
+  active "$1"
+  setst "$1" "$2"
+  flock -u 7
+}
+# Cancel a pending merge (and its children) if stop arrives while gh is running.
+merge_active() {
+  active "$n"
+  setsid "$@" &
+  local pid=$! rc=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ $(cat "$S/state/pr$n" 2>/dev/null) = stopped* ]]; then
+      kill -TERM -- "-$pid" 2>/dev/null || true
+      wait "$pid" || true
+      active "$n"
+    fi
+    sleep .1
+  done
+  wait "$pid" || rc=$?
+  active "$n"
+  return "$rc"
+}
+shipping_evidence() {
+  local hash=$1 approved="" reviewer="" round="" verified="" proof=""
+  active "$n"
+  read -r approved reviewer round 2>/dev/null < "$S/state/pr$n.approval" || true
+  if [ "$approved" != "$hash" ] || [ "$reviewer" != "$(conf reviewer)" ]; then
+    shipst "$n" "needs-attention: no approval for the current change"; exit 8
+  fi
+  read -r verified proof 2>/dev/null < "$S/state/pr$n.verified" || true
+  if [ "$verified" != "$hash" ] || [ -z "$proof" ] || [ "$proof" != "$(sha256sum "$S/runs/pr$n.proof" 2>/dev/null | cut -d' ' -f1)" ]; then
+    shipst "$n" "needs-attention: no verification for the current change"; exit 10
+  fi
 }
 stop_jobs() {
   python3 - "$S" "$1" "$2" <<'EOF'
@@ -214,6 +256,12 @@ stop)
   stop_jobs plan "$n"
   echo "PR $n stopped";;
 
+adopt)
+  n=${1:?plan PR number}; b=$(br "$n")
+  seen=$(git -C "$R" ls-remote --exit-code origin "refs/heads/$b") || die "cannot read remote branch $b"
+  echo "${seen%%$'\t'*}" > "$S/state/pr$n.remote"
+  echo "adopted $b at ${seen%%$'\t'*}";;
+
 stop-job)
   stop_jobs id "${1:?job id}";;
 
@@ -301,17 +349,19 @@ bot-review)
   # Waits for a PR review bot that keeps a codex-review-state summary comment (chatgpt-codex-connector).
   # It re-reviews new commits by itself. Unresolved bot threads block; resolve a thread on GitHub once it is
   # fixed or judged not worth fixing.
+  n=${3:-}; [ -z "$n" ] || active "$n"
   pr=${1:?pr}; bot=$(conf botReview); [ -n "$bot" ] || { echo "no botReview configured; skipping"; exit 0; }
   head=${2:-$(gh pr view "$pr" --repo "$GH" --json headRefOid -q .headRefOid)}
   limit=$(conf botTimeout); limit=${limit:-900}; t0=$(date +%s); poked=""
   while :; do
+    [ -z "$n" ] || active "$n"
     read -r sha status < <(python3 "$SKILL/bot_review.py" state "$GH" "$pr" "$bot" 2>/dev/null || echo "- -")
     if [ "$sha" = "$head" ] && [ "$status" = completed ]; then break; fi
     [ "$sha" = "$head" ] && [ "$status" = failed ] && { echo "bot review failed on ${head:0:8}"; exit 7; }
     el=$(( $(date +%s) - t0 ))
     [ $el -ge "$limit" ] && { echo "bot review not finished on ${head:0:8} after ${limit}s (last: ${sha:0:8} $status)"; exit 7; }
     # Nudge once if the bot has not picked up the head commit after 5 minutes.
-    [ -z "$poked" ] && [ $el -ge 300 ] && [ "$sha" != "$head" ] && { gh pr comment "$pr" --repo "$GH" --body "@codex review" >/dev/null; poked=1; }
+    [ -z "$poked" ] && [ $el -ge 300 ] && [ "$sha" != "$head" ] && { [ -z "$n" ] || active "$n"; gh pr comment "$pr" --repo "$GH" --body "@codex review" >/dev/null; poked=1; }
     sleep 20
   done
   open=$(python3 "$SKILL/bot_review.py" open "$GH" "$pr" "$bot") || { echo "could not read review threads"; exit 7; }
@@ -320,88 +370,130 @@ bot-review)
 
 gate)
   mode=${1:?check|merge}; shift
-  if [ "$mode" = merge ]; then pr=${1:?pr}; ref=${2:?ref}; expected=${3:?expected head sha}; else ref=${1:?ref}; fi
+  if [ "$mode" = merge ]; then pr=${1:?pr}; ref=${2:?ref}; expected=${3:?expected head sha}; n=${4:-}; else ref=${1:?ref}; n=${2:-}; fi
+  if [ -z "$n" ] && [[ $ref = council/"$SLUG"-* ]]; then n=${ref##*-}; fi
+  if [ "$mode" = merge ]; then [[ $n =~ ^[0-9]+$ ]] || die "gate merge needs the plan PR number"; fi
+  [ -z "$n" ] || active "$n"
   # One gate per repo: every plan builds in the same verify worktree.
   exec 9>"$ROOT/gate-$(basename "$R").lock"; flock 9
+  [ -z "$n" ] || active "$n"
   git -C "$R" fetch -q origin "$BASE" "$ref" || exit 5
   main=$(git -C "$R" rev-parse "origin/$BASE")
   head=$(git -C "$R" rev-parse "origin/$ref" 2>/dev/null || git -C "$R" rev-parse FETCH_HEAD)
   if [ "$mode" = merge ] && [ "$head" != "$expected" ]; then echo "head moved: expected $expected, got $head"; exit 9; fi
+  if [ "$mode" = merge ]; then
+    shipping_evidence "$(change_hash "$n" committed "$expected")"
+    [ "$(cat "$S/state/pr$n.head" 2>/dev/null)" = "$expected" ] || { echo "head does not match shipped commit"; exit 9; }
+  fi
+  [ -z "$n" ] || active "$n"
   [ -d "$V" ] || git -C "$R" worktree add -q --detach "$V" "$main"
+  [ -z "$n" ] || active "$n"
   out=$(git -C "$V" merge-tree --write-tree "$main" "$head") || { echo "conflicts with $BASE"; exit 3; }; tree=${out%%$'\n'*}
-  git -C "$V" checkout -q --detach -f "$main" && git -C "$V" read-tree -u --reset "$tree"
+  [ -z "$n" ] || active "$n"
+  git -C "$V" checkout -q --detach -f "$main" || exit 1
+  [ -z "$n" ] || active "$n"
+  git -C "$V" read-tree -u --reset "$tree" || exit 1
   log=$S/runs/gate-${ref//\//_}.log
+  [ -z "$n" ] || active "$n"
   ( cd "$V/$(conf gateDir)" && set -e; echo "== gate: $BASE ${main:0:8} + $ref ${head:0:8}"; eval "$(conf gate)" ) > "$log" 2>&1; rc=$?
-  git -C "$V" checkout -q --detach -f "$main"; git -C "$V" clean -qfd
+  [ -z "$n" ] || active "$n"
+  git -C "$V" checkout -q --detach -f "$main"
+  [ -z "$n" ] || active "$n"
+  git -C "$V" clean -qfd
   [ $rc = 0 ] || { echo "gate FAILED: $log"; tail -n 20 "$log"; exit 1; }
   echo "gate passed: $BASE ${main:0:8} + $ref ${head:0:8}"
   [ "$mode" = merge ] || exit 0
   [ "$(git -C "$R" ls-remote origin "refs/heads/$BASE" | cut -f1)" = "$main" ] || { echo "$BASE moved"; exit 4; }
   [ "$(git -C "$R" ls-remote origin "refs/heads/$ref" | cut -f1)" = "$expected" ] || { echo "head moved"; exit 9; }
   subject="$(gh pr view "$pr" --repo "$GH" --json title -q .title) (#$pr)"
-  gh pr merge "$pr" --repo "$GH" --squash --subject "$subject" --match-head-commit "$head" >/dev/null 2>&1 || exit 5
+  shipping_evidence "$(change_hash "$n" committed "$expected")"
+  [ "$(cat "$S/state/pr$n.head" 2>/dev/null)" = "$expected" ] || exit 9
+  active "$n"
+  merge_active gh pr merge "$pr" --repo "$GH" --squash --subject "$subject" --match-head-commit "$head" >/dev/null 2>&1 || exit 5
   echo "merged #$pr onto ${main:0:8}";;
 
 ship)
   n=${1:?plan PR number}; W=$(wt "$n") b=$(br "$n")
-  exec 7>"$S/state/pr$n.lock"; flock 7
-  [[ $(cat "$S/state/pr$n" 2>/dev/null) = stopped* ]] && { echo "cm: PR $n is stopped; cannot ship" >&2; exit 1; }
+  # Serialize staging and commits without blocking cm stop.
+  exec 6>"$S/state/pr$n.ship.lock"; flock 6
+  active "$n"
   hash=$(change_hash "$n") || exit 1
-  read -r approved reviewer round 2>/dev/null < "$S/state/pr$n.approval" || approved=""
-  if [ "$approved" != "$hash" ] || [ "${reviewer:-}" != "$(conf reviewer)" ]; then
-    setst "$n" "needs-attention: no approval for the current change"; exit 8
-  fi
-  verified=""; proof=""
-  read -r verified proof 2>/dev/null < "$S/state/pr$n.verified" || true
-  if [ "$verified" != "$hash" ] || [ -z "$proof" ] || [ "$proof" != "$(sha256sum "$S/runs/pr$n.proof" 2>/dev/null | cut -d' ' -f1)" ]; then
-    setst "$n" "needs-attention: no verification for the current change"; exit 10
-  fi
+  shipping_evidence "$hash"
+  approved=$hash
   [ -s "$S/runs/pr$n.title" ] && [ -s "$S/runs/pr$n.body" ] || die "write $S/runs/pr$n.title and pr$n.body first"
-  setst "$n" "shipping: commit + gate"
+  shipst "$n" "shipping: commit + gate"
   if [ -n "$(git -C "$W" status --porcelain -- . ":!$PLAN")" ]; then
+    active "$n"
     git -C "$W" add -A -- . ":!$PLAN" || die "cannot stage change"
+    active "$n"
     git -C "$W" reset -q HEAD -- "$PLAN" || die "cannot exclude plan"
     while IFS= read -r -d '' dep; do
+      active "$n"
       git -C "$W" reset -q -- "${dep#./}" || die "cannot exclude $dep"
     done < <(cd "$W" && find . -maxdepth 4 -name node_modules -type l -print0)
     [ "$(change_hash "$n" staged)" = "$approved" ] || { echo "cm: staged change differs from approval" >&2; exit 8; }
+    active "$n"
     { cat "$S/runs/pr$n.title"; echo; echo "PR $n in $PLAN."; t=$(conf trailer); [ -n "$t" ] && { echo; echo "$t"; }; } > "$S/runs/pr$n.msg"
-    git -C "$W" commit -q -F "$S/runs/pr$n.msg" || { setst "$n" "needs-attention: commit failed"; die "commit failed"; }
+    before=$(git -C "$W" rev-parse HEAD)
+    active "$n"
+    git -C "$W" commit -q -F "$S/runs/pr$n.msg" || { shipst "$n" "needs-attention: commit failed"; die "commit failed"; }
+    active "$n"
+    if [ "$(change_hash "$n" committed)" != "$approved" ]; then
+      active "$n"
+      git -C "$W" reset --soft "$before" || die "cannot undo unapproved commit"
+      shipst "$n" "needs-attention: committed change differs from approval"; exit 8
+    fi
   fi
-  [ "$(git -C "$W" rev-parse HEAD)" != "$(cat "$S/runs/pr$n.base")" ] || { setst "$n" "needs-attention: nothing to ship"; die "nothing to ship"; }
-  flock -u 7
+  active "$n"
+  head=$(git -C "$W" rev-parse HEAD)
+  shipping_evidence "$(change_hash "$n" committed "$head")"
+  [ "$(git -C "$W" rev-parse HEAD)" != "$(cat "$S/runs/pr$n.base")" ] || { shipst "$n" "needs-attention: nothing to ship"; die "nothing to ship"; }
+  flock -u 6
   # Keep the last observed remote SHA; never overwrite an intervening push.
-  seen_file=$S/runs/pr$n.remote
+  seen_file=$S/state/pr$n.remote
   if [ ! -f "$seen_file" ]; then
+    active "$n"
     git -C "$W" ls-remote --exit-code origin "refs/heads/$b" > "$seen_file.tmp"; rc=$?
     [ $rc = 0 ] || [ $rc = 2 ] || { rm -f "$seen_file.tmp"; die "cannot read remote head"; }
+    active "$n"
+    if [ $rc = 0 ]; then
+      rm -f "$seen_file.tmp"
+      echo "cm: branch exists on origin and we never pushed it; take it over explicitly with \`cm adopt $n\`" >&2; exit 11
+    fi
     cut -f1 "$seen_file.tmp" > "$seen_file"; rm -f "$seen_file.tmp"
   fi
   seen=$(cat "$seen_file")
+  active "$n"
   if [ -n "$seen" ]; then
-    git -C "$W" push -q "--force-with-lease=refs/heads/$b:$seen" origin "HEAD:refs/heads/$b" || { setst "$n" "needs-attention: push lease refused"; exit 1; }
+    git -C "$W" push -q "--force-with-lease=refs/heads/$b:$seen" origin "$head:refs/heads/$b" || { shipst "$n" "needs-attention: push lease refused"; exit 1; }
   else
-    git -C "$W" push -q "--force-with-lease=refs/heads/$b:" origin "HEAD:refs/heads/$b" || { setst "$n" "needs-attention: push failed"; exit 1; }
+    git -C "$W" push -q "--force-with-lease=refs/heads/$b:" origin "$head:refs/heads/$b" || { shipst "$n" "needs-attention: push failed"; exit 1; }
   fi
-  head=$(git -C "$W" rev-parse HEAD)
-  echo "$head" > "$S/runs/pr$n.head"
+  active "$n"
+  echo "$head" > "$S/state/pr$n.head"
+  active "$n"
   echo "$head" > "$seen_file"
-  "$0" gate check "$b"; rc=$?
-  [ $rc = 3 ] && { setst "$n" "needs-attention: conflicts with $BASE (merge origin/$BASE in $W, resolve, commit, ship again)"; exit 3; }
-  [ $rc = 0 ] || { setst "$n" "needs-attention: gate check failed ($S/runs/gate-${b//\//_}.log)"; exit 1; }
+  active "$n"
+  "$0" gate check "$b" "$n"; rc=$?
+  active "$n"
+  [ $rc = 3 ] && { shipst "$n" "needs-attention: conflicts with $BASE (merge origin/$BASE in $W, resolve, commit, ship again)"; exit 3; }
+  [ $rc = 0 ] || { shipst "$n" "needs-attention: gate check failed ($S/runs/gate-${b//\//_}.log)"; exit 1; }
   pr=$(gh pr list --repo "$GH" --head "$b" --state open --json number -q '.[0].number')
   if [ -z "$pr" ]; then
+    active "$n"
     url=$(cd "$R" && gh pr create --repo "$GH" --head "$b" --base "$BASE" --title "$(cat "$S/runs/pr$n.title")" --body-file "$S/runs/pr$n.body" 2>&1 | tail -1)
-    pr=${url##*/}; [[ $pr =~ ^[0-9]+$ ]] || { setst "$n" "needs-attention: pr create failed: $url"; die "$url"; }
+    pr=${url##*/}; [[ $pr =~ ^[0-9]+$ ]] || { shipst "$n" "needs-attention: pr create failed: $url"; die "$url"; }
   fi
-  setst "$n" "opened #$pr: waiting for bot review"
-  "$0" bot-review "$pr" "$head"; rc=$?
-  [ $rc = 6 ] && { setst "$n" "needs-attention: bot findings on #$pr (fix and ship again, or resolve the threads)"; exit 6; }
-  [ $rc = 0 ] || { setst "$n" "needs-attention: bot review did not finish on #$pr"; exit 7; }
-  setst "$n" "opened #$pr: bot review clean"
-  for i in 1 2 3; do "$0" gate merge "$pr" "$b" "$head"; rc=$?; [ $rc = 4 ] || [ $rc = 1 ] && [ $i -lt 3 ] && continue; break; done
-  if [ $rc = 0 ]; then setst "$n" "merged #$pr"; git -C "$R" worktree remove --force "$W"; git -C "$R" branch -D "$b" >/dev/null 2>&1; echo "merged #$pr"
-  else setst "$n" "needs-attention: merge rc=$rc for #$pr"; exit $rc; fi;;
+  shipst "$n" "opened #$pr: waiting for bot review"
+  active "$n"
+  "$0" bot-review "$pr" "$head" "$n"; rc=$?
+  active "$n"
+  [ $rc = 6 ] && { shipst "$n" "needs-attention: bot findings on #$pr (fix and ship again, or resolve the threads)"; exit 6; }
+  [ $rc = 0 ] || { shipst "$n" "needs-attention: bot review did not finish on #$pr"; exit 7; }
+  shipst "$n" "opened #$pr: bot review clean"
+  for i in 1 2 3; do active "$n"; "$0" gate merge "$pr" "$b" "$head" "$n"; rc=$?; active "$n"; [ $rc = 4 ] || [ $rc = 1 ] && [ $i -lt 3 ] && continue; break; done
+  if [ $rc = 0 ]; then shipst "$n" "merged #$pr"; active "$n"; git -C "$R" worktree remove --force "$W"; active "$n"; git -C "$R" branch -D "$b" >/dev/null 2>&1; echo "merged #$pr"
+  else shipst "$n" "needs-attention: merge rc=$rc for #$pr"; exit $rc; fi;;
 
 status)
   for f in "$S"/state/pr*; do [[ ${f##*/} =~ ^pr[0-9]+$ ]] && [ -e "$f" ] && printf '%s: %s\n' "${f##*/pr}" "$(head -1 "$f")"; done | sort -n;;

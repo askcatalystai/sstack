@@ -50,6 +50,9 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 
 ## Gates (every PR)
 
+Default: two panel rounds (DeepSeek and Muse in parallel, no fixes between) + one gate round (Astra), then Sol fixes once.
+"light review": one panel round + gate, then Sol once; "sol loop": Sol only, up to 3 rounds.
+
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, `pnpm lint` (or the repo's lint), with no new failures against main.
 2. `review-loop`: DeepSeek ×2 and Muse ×2, then Astra ×1, then Sol fixes once; the orchestrator verifies each fix and records the approval. Decline nits with a reason. Light review (when the user asks): one panel round, Astra, Sol once.
 3. Behavioural verification before the PR: run covering tests with pass counts; for UI, run the app in a browser and save a screenshot. Green mocked tests alone are not proof. Write `runs/pr<n>.proof`, then `cm verify <n>` to bind it to the current change. Edits require fresh gate approval and verification.
