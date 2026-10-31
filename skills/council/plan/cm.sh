@@ -8,7 +8,7 @@
 #                                      one-off PRs without a plan file (slug <repo>-adhoc); full send / full stop use it
 #   cm.sh use <slug>                   make another initialised plan current
 #   cm.sh new <n> [task.md]            worktree + branch for PR <n>, from origin/<default>; adhoc plans need task.md
-#   cm.sh implement <n> [--hardest] [extra.md...]  write the implementer's brief; the orchestrator runs it as a subagent
+#   cm.sh implement <n> [--effort L] [--hardest] [extra.md...]  write the implementer's brief; the orchestrator runs it as a subagent
 #   cm.sh implemented <n>              record that the implementer subagent wrote runs/pr<n>.report
 #   cm.sh stop <n> [reason]            mark a PR stopped (not active) and close its running jobs
 #   cm.sh adopt <n>                   explicitly take over the current origin branch SHA
@@ -241,6 +241,8 @@ implement)
   n=${1:?plan PR number}; W=$(wt "$n"); P=$S/runs/pr$n-impl.prompt; shift
   [ -d "$W" ] || die "run cm.sh new $n first"
   provider=$(conf implementerProvider); model=$(conf implementer); impl_effort=$(effort_for implementer)
+  # --effort records the level the subagent actually runs at (shown on the board).
+  if [ "${1:-}" = --effort ]; then impl_effort=${2:?effort}; shift 2; fi
   if [ "${1:-}" = --hardest ]; then
     read -r provider model impl_effort < <(python3 - "$S/config.json" <<'EOF'
 import json,sys

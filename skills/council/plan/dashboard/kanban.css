@@ -123,3 +123,10 @@ h1{font-size:17px}
 .side-sheet{background:var(--background);box-shadow:-1px 0 0 var(--border),-24px 0 48px #000c}
 .phase-label,.badge{border-radius:4px}
 ::selection{background:#0a72ef55}
+
+/* Model chip: brand logo, short model name, reasoning level */
+.model-chip{display:inline-flex;align-items:center;gap:5px;flex:none;padding:1px 6px 1px 4px;border:1px solid var(--border);border-radius:999px;font-size:11px;line-height:1.5;color:var(--foreground);white-space:nowrap}
+.model-chip .provider-mark svg{width:13px;height:13px}
+.model-effort{color:var(--muted-foreground)}
+.task-header .model-chip:first-of-type{margin-left:auto}
+.task-header .provider-mark{margin-left:0}
