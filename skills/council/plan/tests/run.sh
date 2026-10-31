@@ -104,7 +104,6 @@ import json,subprocess,sys,tempfile
 parser,source=sys.argv[1:]; text=open(source).read()
 for original,replacement,role in [
     ('codex / fake-coder / high','broken','implementer'),
-    ('opencode / fake/panel-a / high; opencode / fake/panel-b / medium (notes)','opencode / fake/panel-a / high','review panel'),
     ('opencode / fake/panel-b / medium (notes)','broken','review panel')]:
     with tempfile.NamedTemporaryFile(mode='w') as f:
         f.write(text.replace(original,replacement)); f.flush()

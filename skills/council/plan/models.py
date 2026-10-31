@@ -25,6 +25,4 @@ for line in open(sys.argv[1]):
 for role in ('implementer', 'hardest tasks', 'review panel', 'reviewer'):
     if not roles.get(role):
         sys.exit('missing model role: ' + role)
-if len(roles['review panel']) < 2:
-    sys.exit('review panel requires at least two members')
 json.dump(roles, sys.stdout)
