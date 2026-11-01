@@ -74,10 +74,11 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    restart doesn't kill it, and wait with a background check and
    `t3_background_wait`. Open the PR (`file-pr`), `link_pull_request`, then
    `watch_pull_request`, and end the turn.
-6. **On each wake**, check the PR. Bot findings: Claude triages, Sol fixes once,
-   Claude verifies, push, resolve the threads. Conflicts: merge the default branch
-   in the worktree and gate again. If the bot is quiet on the head commit, comment
-   `@codex review` once.
+6. **Risky PRs only: ask the PR bot.** For auth, payments, data, migrations, or a PR
+   that skipped a review step, comment `@codex review` and merge with `--bot`. Findings:
+   Claude triages (fix, dismiss with a reason, or ask), Sol fixes once, Claude verifies,
+   push, resolve the threads. On any PR, conflicts: merge the default branch in the
+   worktree and gate again.
 7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is really ready, reruns the
    gate if the default branch moved, squash-merges using the PR body as the commit
    message, and removes the worktree and branch. Then `unwatch_pull_request`.
@@ -147,9 +148,9 @@ Full confidence means all of these are true on the latest commit:
 
 - Your proof covers every change in the diff.
 - Required checks are green.
-- Review bots have finished, and each finding is fixed or dismissed with a
-  written reason. The `pr bot` in `models.md` (the Codex GitHub bot) must have
-  reviewed the head commit; `sid-merge.sh` checks this.
+- Each review finding is fixed or dismissed with a written reason. The `pr bot` in
+  `models.md` runs on request for risky PRs; then `sid-merge.sh --bot` requires its
+  review of the head commit. Open bot threads block any merge.
 - The deploy gate passed on the head merged onto the latest default branch.
 - No human review still requests changes.
 - The branch is up to date with the default branch, and GitHub reports it as

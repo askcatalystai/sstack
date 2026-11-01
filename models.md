@@ -13,7 +13,7 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - bug pass: cursor / composer-2.5 / fastMode=false (first, before any review; pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix; user 2026-11-01)
 - review panel: none (user 2026-11-01: Sol → bug pass → Astra directly; Muse stays on the council)
 - reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; Claude takes the final call, Sol fixes once)
-- pr bot: chatgpt-codex-connector (GitHub app; every PR; merge waits for its review of the head commit)
+- pr bot: chatgpt-codex-connector (GitHub app; on request only since user 2026-11-01: comment `@codex review` on risky PRs, such as auth, payments, data, migrations or a PR that skipped review, then merge with `sid-merge.sh --bot`; open bot threads always block)
 - judgment and prose: claudesahitya / claude-opus-5-5 / medium
 
 ## Panels (one subagent per entry)

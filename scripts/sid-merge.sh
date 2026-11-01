@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# sid-merge [--check] <pr>: merge a PR only when it is really ready, then remove its worktree and branch.
-# Ready means: open and not a draft; the body has "## Proof" and "## Review" sections with content; the PR bot
-# finished on the head commit with no open threads; and the gate passed on this head merged with the latest
+# sid-merge [--check] [--bot] <pr>: merge a PR only when it is really ready, then remove its worktree and branch.
+# Ready means: open and not a draft; the body has "## Proof" and "## Review" sections with content; no open PR bot
+# threads; with --bot, the PR bot finished on the head commit (for risky PRs, after commenting '@codex review');
+# and the gate passed on this head merged with the latest
 # default branch (it reruns the gate if the default branch moved). --check stops before merging.
 # Exit: 0 merged or ready, 1 not ready, 6 open bot findings, 7 bot not finished on the head, 3 conflicts.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-check=false; [ "${1:-}" = --check ] && { check=true; shift; }
+check=false; need_bot=false
+while [ "${1:-}" = --check ] || [ "${1:-}" = --bot ]; do
+  [ "$1" = --check ] && check=true
+  [ "$1" = --bot ] && need_bot=true
+  shift
+done
 pr=${1:?usage: sid-merge [--check] <pr>}
 bot=${SID_PR_BOT:-chatgpt-codex-connector}
 repo=$(git rev-parse --show-toplevel) || exit 1
@@ -22,9 +28,11 @@ import re,sys
 missing=[n for n in ("Proof","Review") if not re.search(r"^## %s[^\n]*\n+(?!## )\S"%n, sys.argv[1], re.M)]
 if missing: sys.exit("PR body needs content under: "+", ".join("## "+n for n in missing))
 ' "$body" || exit 1
-read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
-[ "$sha" = "$head" ] || { echo "bot has not reviewed ${head:0:8} yet (last: ${sha:0:8} $status); comment '@codex review' if it stays quiet"; exit 7; }
-[ "$status" = completed ] || { echo "bot status on ${head:0:8}: $status"; exit 7; }
+if [ "$need_bot" = true ]; then
+  read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
+  [ "$sha" = "$head" ] || { echo "bot has not reviewed ${head:0:8} yet (last: ${sha:0:8} $status); comment '@codex review' if it stays quiet"; exit 7; }
+  [ "$status" = completed ] || { echo "bot status on ${head:0:8}: $status"; exit 7; }
+fi
 open=$(python3 "$here/bot_review.py" open "$gh" "$pr" "$bot") || { echo "could not read review threads"; exit 7; }
 [ -z "$open" ] || { echo "open bot findings:"; echo "$open"; exit 6; }
 for attempt in 1 2 3; do

@@ -84,8 +84,7 @@ If the repo has `.macroscope/check-run-agents/*.md`, read those rules before you
 reply to a Macroscope finding. Its findings cite them.
 
 The Codex GitHub bot (`chatgpt-codex-connector`, the `pr bot` in
-`~/.local/share/sidstack/models.md`) reviews every PR and again on each new
-commit. Its summary comment carries a `codex-review-state` line with the
+`~/.local/share/sidstack/models.md`) reviews on request (`@codex review`), and only risky PRs need it. Its summary comment carries a `codex-review-state` line with the
 reviewed commit and status; wait for it on the head before calling the PR
 ready (`sid-merge.sh --check <pr>` does this). Its security review needs Codex
 credit on the paying account; a failed security review is not a code finding.

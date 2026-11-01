@@ -18,7 +18,7 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
 - **Reviews** run through `review-loop`: the Composer bug pass first, then Astra reviews with its report and returns one list. Claude takes the final call on it and on slop, Sol fixes once, Claude verifies each fix and approves.
 - **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command.
-- **PR bot** (Codex GitHub bot) reviews every PR. Merge waits for its review of the head commit.
+- **PR bot** (Codex GitHub bot) reviews risky PRs on request. Open bot threads block a merge.
 - **Council** (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek) for plans, contested designs and UX reviews, through `council`.
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it in memory if it's lasting.
 
@@ -58,7 +58,7 @@ One review round per PR: bug pass, then Astra once. After Sol fixes, the orchest
 2. `review-loop`: bug pass, then Astra; Claude takes the final call, Sol fixes once, Claude verifies each fix. Decline nits with a reason.
 3. Behavioural verification before the PR: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. It goes in the PR's `## Proof` section.
 4. The gate (`sid-gate.sh <branch>`): the default branch plus the branch, running the repo's `.sidstack/gate.sh`, which must include tests.
-5. Open the PR (`file-pr`), link and watch it in T3, fix real P0/P1 and real P2 bug findings, resolve the rest with a reason.
+5. Open the PR (`file-pr`), link and watch it in T3. Risky PRs ask the bot; fix real P0/P1 and real P2 bug findings, resolve the rest with a reason.
 6. `sid-merge.sh <pr>`: checks the PR body, the bot and the gate on the latest main, squash-merges, removes the worktree and branch.
 7. Check the change on prod once deployed, in the browser, signed in. Say what was not checked live.
 

@@ -29,7 +29,7 @@ Default (user, 2026-11-01): Sol builds → **bug pass** (Composer) → Astra rev
 3. **The orchestrator takes the final call** on Astra's list (ledger: accepted, or declined with a reason) and reads the diff for slop.
 4. **Sol fixes once**: every accepted finding in one brief.
 5. **The orchestrator verifies each fix** (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote). Each finding and its outcome goes in the PR's `## Review` section.
-6. File the PR. The **PR bot** (Codex GitHub bot) reviews it; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), Sol fixes the accepted ones, the orchestrator resolves the threads and pushes.
+6. File the PR. For a risky PR, ask the **PR bot** (Codex GitHub bot) with `@codex review`; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), Sol fixes the accepted ones, the orchestrator resolves the threads and pushes.
 
 If Astra approves with no blocker or should, steps 4 and 5 are skipped.
 
