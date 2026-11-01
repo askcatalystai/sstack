@@ -32,8 +32,7 @@ Needs `gh`, `python3`, the Codex CLI, and for council/OpenCode seats the `openco
 
 ## Checks and upstream
 
-Run `scripts/check.sh` for shell and Python syntax checks
-and the offline plan-runner tests. See `UPSTREAM.md` for copied skill origins
+Run `scripts/check.sh` for shell and Python syntax checks. See `UPSTREAM.md` for copied skill origins
 and `scripts/upstream-check.sh` for upstream change reports.
 
 ## Licenses
