@@ -23,6 +23,10 @@ sstack is three things on T3 Code:
 - `review loop` (Astra) / `sol loop` (Sol).
 - `/setup-sidstack`: change a model, smoke-test it, relink.
 
+## The board
+
+Kanzo at http://localhost:4242 is the source of truth, run from a small local patch (`patches/kanzo-sstack.patch`, on tag v0.2.1). Doing is coding, Review is the bug pass and Astra, Deployment is the gate, a manual Codex cloud review and waiting on deploy, and Done means checked on prod. `scripts/sid-card.py` sets labels and elapsed time, posts screenshots, and reads the user's comments.
+
 ## Roles
 
 See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Composer runs a bug pass and Astra reviews, returning one list; every model runs as a subagent; the Codex GitHub bot reviews risky PRs; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.

@@ -116,9 +116,10 @@ merge, prod check): what happened, what's next, and anything waiting on the user
 user follows work from the board and may not read the chat. The card is the
 record of what the work asks for; Kanzo is the source of truth, not a plan file.
 
-Each time a worker starts, show it on the card with
+Card labels are coloured provider, model and reasoning, plus time in the column, and the
+`#` is the `pr-<n>` tag. Put neither in the title. Each time a worker starts, show it on the card with
 `scripts/sid-card.py work <oe#n> <provider> <model> <effort> [status]`. While the PR
-bot reviews, use `codex-bot chatgpt-codex-connector - review`. Doing and review cards
+bot reviews, use `codex-bot chatgpt-codex-connector - deployment`. Doing and review cards
 show those tags plus time in the column; a one-minute timer (`sid-card.timer`)
 refreshes it, and moving a card elsewhere clears them.
 

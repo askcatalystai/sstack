@@ -84,7 +84,9 @@ Kanzo is the source of truth, not a file. Where the project has no board, ask.
 1. Make one card per PR item, holding its full detail: root cause, files, reference, fix,
    depends-on, and the behaviour to prove. Don't write "a test finds X": name the behaviour,
    and let the test rule in `full-send` decide whether a test or the running app proves it.
-   Tag cards by area. One card per concern; split anything that isn't small.
+   One card per concern; split anything that isn't small. Each area of work, such as Sidebar
+   or Settings, is its own Kanzo project. The title is plain words with no number; a `pr-<n>`
+   tag gives the number shown as `#<n>` on the card.
 2. Todo holds what's next; Backlog holds what waits. Put the council's scores and any decisions
    on a council card.
 3. Ask the user only for real decisions, with the question tool: 2-4 options, recommendation
