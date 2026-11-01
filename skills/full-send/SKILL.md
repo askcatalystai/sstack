@@ -108,8 +108,9 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
 If you stop before the merge, call `unwatch_pull_request` first.
 
 If the project is on the user's Kanzo board (http://localhost:4242, MCP `kanzo`),
-keep its card current: doing when work starts, review once the PR is open, done
-once it's merged and checked, with a comment linking the PR. Also comment at every
+keep its card current: Doing while it's being coded; Review for the Composer bug pass and
+Astra; Deployment for the gate, a manual Codex cloud review, and waiting on deploy; Done
+once it's merged and checked on prod, with a comment linking the PR. Also comment at every
 step (worker started or finished, review findings, gate result, PR opened, bot result,
 merge, prod check): what happened, what's next, and anything waiting on the user. The
 user follows work from the board and may not read the chat. The card is the

@@ -12,7 +12,7 @@ The user's comments carry a "new-comment" tag until inbox reads them. Screenshot
 A card more than 2 hours in one column gets a "stale" tag, so stuck work shows without opening it.
 
 The clock is time in the current column: it restarts when a card moves, not when the worker changes.
-Only doing and review cards show tags; moving a card anywhere else clears them.
+Only doing, review and deployment cards show tags; moving a card anywhere else clears them.
 """
 import datetime as dt, json, os, re, subprocess, sys, urllib.request
 from pathlib import Path
@@ -21,7 +21,7 @@ KANZO = os.path.expanduser("~/.local/bin/kanzo")
 URL = "http://127.0.0.1:4242/mcp"
 STATE = Path(os.path.expanduser("~/.local/state/sidstack/cards.json"))
 ELAPSED = re.compile(r"^(<1m|\d+m|\d+h( \d+m)?|\d+d( \d+h)?|stale)$")
-ACTIVE = ("doing", "review")
+ACTIVE = ("doing", "review", "deployment")
 session, seq = None, 0
 
 
