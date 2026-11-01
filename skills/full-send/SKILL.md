@@ -89,7 +89,10 @@ If you stop before the merge, call `unwatch_pull_request` first.
 
 If the project is on the user's Kanzo board (http://localhost:4242, MCP `kanzo`),
 keep its card current: doing when work starts, review once the PR is open, done
-once it's merged and checked, with a comment linking the PR. The plan doc stays
+once it's merged and checked, with a comment linking the PR. Also comment at every
+step (worker started or finished, review findings, gate result, PR opened, bot result,
+merge, prod check): what happened, what's next, and anything waiting on the user. The
+user follows work from the board and may not read the chat. The plan doc stays
 the record of what each item asks for.
 
 Each time a worker starts, show it on the card with
