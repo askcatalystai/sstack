@@ -33,15 +33,17 @@ Read `<pstack>/skills/principle-experience-first/SKILL.md` first. Use `<pstack>/
 
 ## Screenshots
 
-Terra runs as a `delegate_task` on the `screenshots` role with no worktree. It uses T3's in-app browser (`preview_*` tools, loading them with tool search if needed), because that's where local and prod are already signed in. Never Chromium or Playwright. Each brief lists the card, URLs, screens, states and widths, and says:
+Terra runs as a `delegate_task` on the `screenshots` role with no worktree. It uses T3's in-app browser (`preview_*` tools, loading them with tool search if needed), because that's where local and prod are already signed in. Never Chromium or Playwright. Each brief lists the card, URLs, and an exact numbered shot list with the selector to wait for and click (a vague brief makes it stop early), and says "finish the whole list and post it". It also says:
 
 - Open your own tab with `reuseExistingTab=false` and `open=false`, wait until the page's content has loaded (`preview_wait_for` or `preview_evaluate`), not just the title, and close the tab at the end.
 - Don't click anything that changes data. Don't print customer details. Leave appearance as you found it.
 - Capture dark and light at the default width and at narrow width, plus each state asked for, using `preview_snapshot` with `save=true`. Look at each image, and retake anything that's blank, mid-load, or shows the wrong page.
 - Post with `~/.local/share/sidstack/scripts/sid-card.py shots <oe#n> "<caption>" <images...>`. The caption says the stage (before, after local, after prod), environment, screen and commit, and starts with "Terra:", because these comments show as "me" on the board.
-- Don't judge the design. Reply with the paths and anything that failed to load.
+- Don't judge the design. Reply with what posted and anything missing.
+- Any popover that changes data when closed, such as Notifications marking items read: shoot it last, then close the tab without clicking.
+- Check the card has the images (`kanzo` `get_task`) before moving on. Nothing posted means rerun it.
 
-Local commerce pages may not load while the local store rejects the account's key. Say so rather than posting an empty screen, and capture prod instead.
+Local commerce pages may not load while the local store rejects the account's key. Say so rather than posting an empty screen, and capture prod instead. A 502 in a panel the card isn't about is fine: carry on.
 
 ## Taste rules
 

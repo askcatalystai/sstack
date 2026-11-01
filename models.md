@@ -14,7 +14,7 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - review panel: none (user 2026-11-01: Sol → bug pass → Astra directly; Muse stays on the council)
 - reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; Claude takes the final call, Sol fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
 - ui lead: claudesahitya / claude-opus-5-5 / medium (judges all visible UI before other review and does the final test; writes no code; user 2026-11-01; see the `ui-lead` skill)
-- screenshots: codex / gpt-6.1-terra / low (before and after shots in T3's in-app browser, posted on the Kanzo card; user 2026-11-01)
+- screenshots: codex / gpt-6.1-terra / medium (low stopped after two shots and posted nothing, 2026-11-01; before and after shots in T3's in-app browser, posted on the Kanzo card; user 2026-11-01)
 - pr bot: chatgpt-codex-connector (GitHub app; on request only since user 2026-11-01: comment `@codex review` on risky PRs, such as auth, payments, data, migrations or a PR that skipped review, then merge with `sid-merge.sh --bot`; open bot threads always block)
 - judgment and prose: claudesahitya / claude-opus-5-5 / medium
 
