@@ -91,6 +91,12 @@ keep its card current: doing when work starts, review once the PR is open, done
 once it's merged and checked, with a comment linking the PR. The plan doc stays
 the record of what each item asks for.
 
+Each time a worker starts, show it on the card with
+`scripts/sid-card.py work <oe#n> <provider> <model> <effort> [status]`. While the PR
+bot reviews, use `codex-bot chatgpt-codex-connector - review`. Doing and review cards
+show those tags plus time in the column; a one-minute timer (`sid-card.timer`)
+refreshes it, and moving a card elsewhere clears them.
+
 ## Proof
 
 Proof is evidence you observed yourself in this session: command output, a
