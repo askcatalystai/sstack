@@ -1,6 +1,6 @@
 ---
 name: council
-description: Trigger this if the user says 'council'. Also use it when the user wants a council-researched plan file worked through to merged PRs ("council plan", "council to completion", "start a council task"); see "Plan to completion".
+description: Trigger this if the user says 'council'. Also use it when the user wants a council-researched plan worked through to merged PRs ("council plan", "council to completion", "start a council task"); see "Plan to completion".
 ---
 
 # Council
