@@ -87,7 +87,7 @@ The Codex GitHub bot (`chatgpt-codex-connector`, the `pr bot` in
 `~/.local/share/sidstack/models.md`) reviews every PR and again on each new
 commit. Its summary comment carries a `codex-review-state` line with the
 reviewed commit and status; wait for it on the head before calling the PR
-ready (`cm.sh bot-review <pr>` does this). Its security review needs Codex
+ready (`sid-merge.sh --check <pr>` does this). Its security review needs Codex
 credit on the paying account; a failed security review is not a code finding.
 
 CodeRabbit is advisory. Treat its findings like any other finding, but never

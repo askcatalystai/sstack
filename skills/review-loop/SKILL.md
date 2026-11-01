@@ -23,24 +23,23 @@ Default (user, 2026-11-01): Sol builds → **bug pass** (Composer) → Astra rev
    - **Root-cause:** trace each reproduced symptom to the first wrong decision; fix there, not where it surfaced. Guards, retries and swallowed errors are not fixes unless the state is legitimate. Check for the same fault elsewhere in the change.
    - **Fix minimally:** the smallest change the evidence justifies, failing test first, then the fix; revert anything a refuted hypothesis motivated.
    - **Adversarial fixtures:** equal timestamps, ids that sort differently from time, empty and huge inputs, malformed config (could an error print a secret?). A fixture that spaces everything neatly hides ordering bugs (PR 54, 2026-11-01).
-   - **Report** (`runs/pr<n>.bugpass`): each finding with repro command, failing-then-passing output, root cause, fix; and a list of hypotheses it ruled out. It never commits or pushes.
-   In a plan, record it on the board: `cm bugpass <n> start` before starting the subagent, `cm bugpass <n> done` (or `failed`) after; it shows as its own "Bug finding" card in In review.
-   If the bug pass can't run (provider error), note it in the ledger and go on to Astra.
-2. **Astra reviews** (`reviewer`) the change including the bug-pass fixes and report: confirms, rejects with evidence, or adds what was missed, and returns one list (`cm brief <n> 1 gate`).
+   - **Report**: each finding with repro command, failing-then-passing output, root cause, fix; and a list of hypotheses it ruled out. It never commits or pushes.
+   If the bug pass can't run (provider error), retry once, then say so in the PR's `## Review` section and go on to Astra.
+2. **Astra reviews** (`reviewer`) the change including the bug-pass fixes and report: confirms, rejects with evidence, or adds what was missed,, and returns one list.
 3. **The orchestrator takes the final call** on Astra's list (ledger: accepted, or declined with a reason) and reads the diff for slop.
 4. **Sol fixes once**: every accepted finding in one brief.
-5. **The orchestrator verifies each fix** (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote) and records approval (`cm approve <n> <ledger.md>`, each finding as `pr<n>-rev1:S<k>`).
-6. File the PR. The **PR bot** (Codex GitHub bot) reviews it; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), Sol fixes the accepted ones, the orchestrator resolves the threads and re-ships.
+5. **The orchestrator verifies each fix** (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote). Each finding and its outcome goes in the PR's `## Review` section.
+6. File the PR. The **PR bot** (Codex GitHub bot) reviews it; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), Sol fixes the accepted ones, the orchestrator resolves the threads and pushes.
 
 If Astra approves with no blocker or should, steps 4 and 5 are skipped.
 
 ## Rules
 
-- **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, Muse and Astra, one subagent per reviewer per round, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`). `cm` only writes briefs and records the replies the orchestrator saves.
-- Muse gets the brief; Astra gets it plus Muse's reply.
-  Outside a plan, a diff over ~20 files is split by area, one brief per area. Never send secrets or customer data (Muse trains on
+- **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, Composer and Astra, one subagent per job, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`).
+- Astra gets the brief plus the bug-pass report.
+  A diff over ~20 files is split by area, one brief per area. Never send secrets or customer data (Muse trains on
   requests).
-- A panel member that times out or errors is noted in the ledger and the
+- A reviewer that times out or errors is noted in the ledger and the
   round goes on without it.
 - Reviewers must not start subagents or reviewers.
 - Keep one ledger across all rounds: id, source (Muse/Astra/bot),
@@ -91,7 +90,9 @@ Review only. Do not edit, commit, push, comment on PRs, or start subagents.
 Repo: <abs path> Base: <sha> Intent: <intent> Out of scope: <scope> Checks: <results>
 See: git diff <base> [-- <paths>]; git status --short (read untracked).
 Read surrounding code. Find bugs, broken callers, mismatch with intent.
-Skip style unless it hides a bug. Hold to the smallest change. Flag code,
+Skip style unless it hides a bug. Hold to the smallest change. For each new or
+changed test: would it fail if the behavior broke, and pass if only internals
+changed? If not, or if the change doesn't need it, flag it to rewrite or delete. Flag code,
 tests, or guards the intent does not need. Other paths, rare cases, small
 perf, extra compat: nits.
 blocker = intended case wrong. should = real bug callers will hit, in intent. nit = rest.
@@ -99,11 +100,6 @@ Reply:
 VERDICT: APPROVE or CHANGES
 S1 [blocker|should|nit] <file>:<line> <claim>. Fix: <suggestion> (stable ids)
 ```
-
-## 2b. Review panel
-
-Send the brief to each `review panel` member in `models.md` (Muse by
-default), read-only; then send Astra the brief plus its reply. Astra's consolidated list is what the ledger resolves.
 
 ## 3. Answer findings
 

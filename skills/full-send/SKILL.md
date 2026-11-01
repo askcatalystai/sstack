@@ -49,40 +49,42 @@ for the session wins.
 
 ## Steps
 
-Every full send runs through the plan runner, so the gates are enforced in
-code. `cm` is `~/.local/share/sidstack/skills/council/plan/cm.sh`; the one-off
-plan is `<repo>-adhoc` (create it once with `cm init --adhoc --repo <dir>
---gate '<the commands the deploy runs>'`), and every call below is
-`COUNCIL_PLAN=<repo>-adhoc cm ...`. Pick the next free PR number from
-`cm status`.
+T3 Code is the orchestrator: every worker is a `delegate_task` thread, the PR is
+linked to this thread, and `watch_pull_request` wakes you. Two scripts in
+`~/.local/share/sidstack/scripts/` hold the checks that shouldn't depend on
+judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
 
-1. **Brief.** Write `task.md`: the user's goal in their words, the smallest
-   change that meets it, and the acceptance check. `cm new <n> task.md`.
-2. **Code.** `cm implement <n>` writes Sol's brief; run Sol as a subagent with
-   it, then `cm implemented <n>`. For a trivial change Claude may edit the
-   worktree itself instead. Every model runs as a subagent, never from the
-   terminal.
-3. **Review** (see `review-loop`): `cm brief <n> 1`, Muse as a
-   subagent, `cm brief <n> 1 gate-after-panel`, Astra as a subagent
-   with its findings, `cm review <n> 1`. Claude takes the final call on
-   Astra's list, Sol fixes once, Claude verifies each fix, `cm approve <n>
-   ledger.md`. Skip the fix pass if Astra approved cleanly.
-4. **Prove it.** Run the real thing (see "Proof") and write
-   `runs/pr<n>.proof`; `cm verify <n>`.
-5. **Ship.** Write `runs/pr<n>.title` and `runs/pr<n>.body` (`file-pr` style;
-   one line on how you proved it). `cm ship <n>`: commit, lease push, deploy
-   gate, PR, PR-bot review, gate again on the latest base, squash-merge,
-   worktree removed. Exit codes tell you what to fix (see `council`).
-6. **Fix bot findings** the same way: Claude triages, Sol fixes once, Claude
-   verifies, `cm approve`, `cm verify`, `cm ship <n>` again.
-7. **Report** in your final message: the PR link, the merge commit, your proof,
-   and each decision you made for the user.
+1. **Brief.** The user's goal in their words, the smallest change that meets it,
+   the acceptance check, the area to work in, and any files parallel PRs own.
+2. **Code.** `delegate_task` on the implementer role with `isolation: "worktree"`.
+   T3 makes the worktree and a `t3/...` branch but doesn't run setup scripts for
+   delegates, so the brief starts with the repo's setup command (project
+   instructions name it). Sol reports its `pwd` and branch; it doesn't commit.
+   For a trivial change Claude may do this in a worktree itself.
+3. **Review** (see `review-loop`): Composer bug pass, then Astra, each a
+   `delegate_task` whose brief names Sol's worktree path. Claude takes the final
+   call, Sol fixes once through a new `delegate_task` naming the same path, and
+   Claude verifies each fix. Skip the fix pass if Astra approved cleanly. If any
+   step is skipped, the PR's `## Review` section says so and why.
+4. **Prove it.** Run the real thing (see "Proof"). The evidence goes in the PR's
+   `## Proof` section: commands, pass counts, screenshot paths, and what wasn't
+   checked. It can't be a copy of the review notes.
+5. **Ship.** Claude commits in the worktree and pushes with `--force-with-lease`.
+   Run `sid-gate.sh <branch>` as a background command and wait with
+   `t3_background_wait`. Open the PR (`file-pr`), `link_pull_request`, then
+   `watch_pull_request`, and end the turn.
+6. **On each wake**, check the PR. Bot findings: Claude triages, Sol fixes once,
+   Claude verifies, push, resolve the threads. Conflicts: merge the default branch
+   in the worktree and gate again. If the bot is quiet on the head commit, comment
+   `@codex review` once.
+7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is really ready, reruns the
+   gate if the default branch moved, squash-merges using the PR body as the commit
+   message, and removes the worktree and branch. Then `unwatch_pull_request`.
+8. **Check it live** once deployed, then report: the PR link, the merge commit,
+   your proof, what was checked on prod and what wasn't, and each decision you
+   made for the user.
 
-Stay active from step 1 to step 7. If you end your turn while checks or bots are
-pending, the work stops, because nobody will prompt you again. Wait with the
-watcher from `babysit-pr`, so something wakes you when the PR changes. In T3
-Code that is `watch_pull_request`. If you stop before the merge, call
-`unwatch_pull_request` first.
+If you stop before the merge, call `unwatch_pull_request` first.
 
 ## Proof
 
@@ -92,14 +94,37 @@ reproduction, a screenshot. Use the most direct proof the change allows:
 - Reproduce the original failure, apply the fix, then watch the same
   reproduction pass.
 - Run the checks that the repo's CI runs (typecheck, lint, tests).
-- Add one focused test that fails without the fix, when the behavior has none
-  and the repo has a test setup.
+- For a bug with a cheap, obvious test target, write the test first and watch it
+  fail for the right reason. See "Tests".
 - For UI and runtime behavior, run the app and look at the change. Green mocked
   tests do not prove that the user experience works. Attach screenshots to the
   PR when they help and you have a way to upload them.
 
 When you cannot find a way to prove a change, you do not have full confidence.
 Ask the user.
+
+## Tests
+
+Follow pstack's `principle-test-behavior-not-implementation` and `tdd`. Prefer no
+new test over a bad test; a change doesn't need a test just because it's a change.
+
+Judge every test you write, change or keep with two imagined edits:
+
+- **Break the behavior.** The test must fail. If it still passes, it proves nothing.
+- **Change only the internals.** The test must still pass. If it fails, it's pinned
+  to the implementation.
+
+Keep the tests that do both; rewrite or delete the rest.
+
+- Write one for a bug with a cheap target, or a rule users or another service rely
+  on. Skip it when it would mostly test mocks, need broad setup, depend on timing,
+  or only prove a small UI change; the running app is that proof.
+- Don't mock what you can run. Mock only outside services, and assert what they
+  receive.
+- Never read source text, pin prompt wording, or pin an exact message no caller reads.
+- A failing test on the default branch gets fixed or deleted, never skipped.
+- The gate runs tests for the changed area. Don't run a whole large suite to check
+  a small change.
 
 ## Merge gate
 
@@ -109,7 +134,7 @@ Full confidence means all of these are true on the latest commit:
 - Required checks are green.
 - Review bots have finished, and each finding is fixed or dismissed with a
   written reason. The `pr bot` in `models.md` (the Codex GitHub bot) must have
-  reviewed the head commit; `cm.sh bot-review <pr>` waits for it.
+  reviewed the head commit; `sid-merge.sh` checks this.
 - The deploy gate passed on the head merged onto the latest default branch.
 - No human review still requests changes.
 - The branch is up to date with the default branch, and GitHub reports it as

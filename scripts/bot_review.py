@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read a PR review bot's state. Used by cm.sh bot-review.
+"""Read a PR review bot's state. Used by sid-merge.
 
   bot_review.py state <owner/repo> <pr> <bot-login>     -> "<sha> <status>" of the bot's last code review
   bot_review.py open  <owner/repo> <pr> <bot-login>     -> one line per unresolved bot thread

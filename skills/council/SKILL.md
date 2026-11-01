@@ -25,10 +25,6 @@ In T3 Code, use `orchestrator_capabilities` to resolve the models, then
 `delegate_task` to start one delegate per model in parallel. Elsewhere, use
 the harness's subagent tools. If a seat is unavailable, report it instead of substituting.
 
-With a plan on the board, record every seat so the board shows each model:
-`cm seat <name> <provider> <model> <effort> start [reply-file]` when the delegate
-starts, and `done` or `failed` when it returns.
-
 Give each delegate the request and relevant context. For review or feedback,
 keep their work read-only. Collect their responses and summarize the useful
 findings, disagreements, and recommended next steps.
@@ -67,16 +63,7 @@ keep scope limited.
 
 Use this when the user wants a council task carried from research to merged
 PRs: "council plan", "council to completion", or a council request followed by
-"and fix everything". Everything lives in `plan/` next to this file:
-
-- `plan/todo-template.md`: the plan file's shape. Copy it, fill it, and keep
-  the `## Phase <n> — <title>` and `### [ ] PR <n> — <title> (S|M|L)` headings
-  exact: the board and the scripts read them.
-- `plan/cm.sh`: one script for the loop (worktree, review, gate, ship). Run
-  it with no arguments to see its commands.
-- `plan/dashboard/`: the progress board (kanban, live jobs, phases, activity
-  feed) on `http://127.0.0.1:<port>`. It reads the plan file, this session's
-  transcript, and `cm.sh`'s state. Always use it; never build a new one.
+"and fix everything".
 
 ### 1. Research and council
 
@@ -86,124 +73,37 @@ PRs: "council plan", "council to completion", or a council request followed by
    for every finding.
 3. Run the council above, read-only, with the research attached. Ask each
    delegate for findings with file:line, effort (S/M/L), an acceptance
-   check, and scores per axis. One reviewer with read-only survey agents
-   counts as a round too; say so in the file.
+   check, and scores per axis.
 
 ### 2. The plan file
 
-1. Copy `plan/todo-template.md` to the repo (for example
-   `app/<TOPIC>-FIXES.md`). Fill the header (rounds, council members, the
-   scores table), "How to read", and "How this file gets done".
+1. Write one plan doc in the repo (for example `app/<TOPIC>-FIXES.md`), or add
+   phases to the current one. Start with the goal, council members and scores.
+   Use `## Phase <n> — <title>` and `### [ ] PR <n> — <title> (S|M|L)` headings.
 2. Group findings into phases by area. One PR item per concern: root cause,
-   files, reference, fix, depends-on, acceptance. Number PRs once, never
+   files, reference, fix, depends-on, and the behaviour to prove. Don't write
+   "a test finds X" as the acceptance: name the behaviour, and let the test rule
+   in `full-send` decide whether a test or the running app proves it. Number PRs once, never
    renumber; later finds take the next free number.
 3. Ask the user only for real decisions, with the question tool: 2-4
    options, recommendation first. Record answers under "Decisions" and
    choices that stay on purpose under "Kept on purpose".
-4. Land the plan file as its own docs PR through the gate (step 4), then:
-
-```bash
-cm=<this skill>/plan/cm.sh
-$cm init <repo>/<plan>.md --gh <owner/repo> --title "<short title>" \
-  --gate-dir <dir> --gate '<exact install, typecheck and build commands the deploy runs>' \
-  --trailer '<the commit attribution line, if any>' --port 8787 \
-  [--bot-review chatgpt-codex-connector]
-$cm dashboard --transcript <this session's .jsonl>   # open the URL for the user
-```
-
-Model defaults (implementer, hardest tasks, review panel and gate reviewer) come
-from `~/.local/share/sidstack/models.md`; set `SIDSTACK_MODELS` to use another
-file at init. Provider, model and effort are saved in `config.json`.
-`--reviewer`, `--implementer`, `--effort`, `--implementer-effort` and
-`--reviewer-effort` override defaults. Model overrides keep the role's provider.
-`--implementer claude` means the orchestrator writes the code itself.
-
-`--bot-review <login>` names the GitHub review bot; it does not replace local
-review. `--bot-timeout` sets the wait in seconds (default 900).
-
-`init` prints the plan's slug. Other sessions may run their own plans, so put
-`COUNCIL_PLAN=<slug>` in front of every later `cm` call (and give each plan its
-own `--port`). Without it, `cm` uses whichever plan was initialised last.
+4. Land the plan file as its own docs PR.
 
 ### 3. Each PR item
 
-Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
-One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
-
-Work phase by phase. Inside a phase, PRs that touch disjoint files can run in
-parallel, each in its own worktree. Never switch the main checkout's branch.
-
-1. `cm new <n>`: a worktree and branch from the default branch, with the
-   item in `runs/pr<n>.task`. Read the item, check its line numbers, and check
-   history before undoing a deliberate choice (`git log -S`).
-2. Implement the smallest change that meets the acceptance check. With a
-   Codex implementer, run `cm implement <n> [brief.md]` instead and review its
-   diff and report before step 4. Use `cm implement <n> --hardest [brief.md]`
-   for the `hardest tasks` model and effort from models.md. Add a
-   regression test that fails without the fix. Run the affected tests and
-   the typecheck. Compare any failure against the default branch before
-   calling it pre-existing, and name stale builds or isolation failures as
-   such.
-3. Write `runs/pr<n>.report`: what was wrong, what changed (files), the proof
-   (tests and counts, what failed before), and what was not checked live.
-   To pause or drop a PR, run `cm stop <n> [reason]` so the board stops
-   showing it as active. It kills running process groups and clears approval.
-   `cm stop-job <id>` stops one job and clears its PR approval.
-4. Review with models from models.md:
-   - `cm brief <n> 1`: prints the panel briefs and where to save each reply.
-     Run Muse as a subagent; save its reply verbatim.
-   - `cm brief <n> 1 gate-after-panel`: Astra's brief with both replies. Run
-     Astra as a subagent; save its reply. `cm review <n> 1` records the round.
-   - The orchestrator triages Astra's consolidated list into a ledger and takes
-     the final call; `cm implement <n> <findings.md>` writes Sol's brief, Sol
-     runs as a subagent, then `cm implemented <n>`; the orchestrator verifies
-     each fix; `cm approve <n> <ledger.md>`.
-   - No second review round: for risky areas the orchestrator reruns the
-     critical tests itself before approving.
-   If Astra returns an exact `VERDICT: APPROVE` with no blocker or should,
-   that is the approval itself, while the change stays unchanged. After
-   fixes, `cm approve` requires that round and a complete resolution ledger.
-5. Write `runs/pr<n>.title` (a conventional commit title in plain words) and
-   `runs/pr<n>.body`: the plan reference, what was wrong, the bullets of what
-   changed, the tests, "Reviewed by <reviewer> (approved in round N)", what
-   is not checked live, and the harness attribution line.
-6. Run the real thing: tests covering the change (commands and pass counts),
-   and for UI the app in a browser with a screenshot path. Green mocked tests
-   alone are not proof. Write what ran, how and the result to `runs/pr<n>.proof`,
-   then `cm verify <n>`. This binds the proof to the current change.
-7. `cm ship <n>`. It commits (never the plan file), pushes, runs the gate on
-   the default branch plus the branch, opens the PR, runs the gate again,
-   squash-merges, and removes the worktree. With `botReview` set, it waits
-   between opening and merging until the bot has finished reviewing the
-   head commit (`cm bot-review <pr>`), and merges only if no bot thread is
-   unresolved.
-   - Exit 8 means no gate approval for the current change; exit 10 means no
-     verification for it. Review and verify again after edits. Exit 9 means the
-     remote head moved after shipping; do not merge it on the old approval.
-   - Exit 11 means the origin branch exists without an ownership record. Inspect
-     it, then use `cm adopt <n>` to explicitly record its SHA before retrying.
-     Ownership lives in `state/pr<n>.remote` and survives new, implement and stop.
-     The exact pushed commit is recorded in `state/pr<n>.head`.
-   - Exit 6 means bot findings; they're printed with severity and thread id.
-     Fix P0 and P1 findings, and real P2 bugs, in the worktree, rerun the gate review
-     and verification, and run `cm ship <n>` again; the bot re-reviews new commits by itself.
-     Resolve each thread once it's fixed, or once you judge it not worth
-     fixing (say why in the PR body):
-     `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}}}'`.
-   - Exit 7 means the bot review failed or timed out. Check the PR; don't
-     merge around it without telling the user.
-   - Exit 3 means conflicts: merge `origin/<default>` in the worktree, resolve,
-     rerun the gate review and verification, and run `cm ship <n>` again.
-   - A gate log ending in `Killed` means memory pressure from parallel
-     builds. Rerun it; it's not a code failure.
-8. Let the next item proceed while gates run in the background. Wait on
-   them with background commands, never sleep loops in the foreground.
+Work each item the `full-send` way: a `delegate_task` worktree for Sol, the
+bug pass, Astra, Claude's final call, Sol's one fix, proof, `sid-gate.sh`, PR,
+watch, `sid-merge.sh`, then a live check. Inside a phase, PRs that touch disjoint
+files run in parallel, each in its own worktree. Each brief names the item in
+full: read it, check its line numbers, and check history before undoing a
+deliberate choice (`git log -S`). Never switch the main checkout's branch.
 
 ### 4. After each phase or batch
 
-1. Tick the items in one docs PR through the gate: `[x]`, then `- Done
-   (#<github>).` under each. Check that each merged PR shipped what its item
-   asked for. If it did not, leave the box open and say what shipped instead.
+1. Tick the items in one docs PR: `[x]`, then `- Done (#<github>).` under each.
+   Check that each merged PR shipped what its item asked for. If it did not,
+   leave the box open and say what shipped instead.
 2. Once the deploy is live, check the change on prod (browser, DOM queries,
    screenshots), and record it under "Live checks". List anything only tests
    covered under "Not verified".

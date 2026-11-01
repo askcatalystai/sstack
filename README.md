@@ -3,14 +3,14 @@
 Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models and my repos.
 
 - **From pstack** ([cursor/plugins/pstack](https://github.com/cursor/plugins/tree/main/pstack), MIT, by Lauren Tan): the playbooks, the principles, and the tools (`how`, `why`, `architect`, `interrogate`, `arena`, `swarm`, `unslop`, `blast-radius`, `tdd`, `show-me-your-work`…). They stay installed from upstream and run here through `docs/adapter.md`, so upstream fixes keep flowing.
-- **From tstack** ([t3dotgg/tstack](https://github.com/t3dotgg/tstack), MIT): `full-send`, `full-stop`, `council` (with the plan runner and board), `file-pr`, `babysit-pr`, `takeover`, `modernize`, `leaving-pr-comments`, forked and tailored here. `sol-loop` became `review-loop`.
+- **From tstack** ([t3dotgg/tstack](https://github.com/t3dotgg/tstack), MIT): `full-send`, `full-stop`, `council`, `file-pr`, `babysit-pr`, `takeover`, `modernize`, `leaving-pr-comments`, forked and tailored here. `sol-loop` became `review-loop`.
 - **New**: `sid-mode` (the entry point), `models.md` (one file for every role), `setup-sidstack`, `install.sh`.
 
 ## Use
 
 - `sid mode <task>`: matches a playbook, runs it with my roles and gates.
 - `full send` / `full stop`: one change to a merged / ready PR.
-- `council` / `council plan`: seven-seat council review (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek); a plan worked to merged PRs on a live board.
+- `council` / `council plan`: seven-seat council review (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek); a plan doc worked to merged PRs through T3.
 - `review loop` (Astra) / `sol loop` (Sol).
 - `/setup-sidstack`: change a model, smoke-test it, relink.
 
@@ -32,7 +32,7 @@ Needs `gh`, `python3`, the Codex CLI, and for council/OpenCode seats the `openco
 
 ## Checks and upstream
 
-Run `scripts/check.sh` for shell, dashboard JavaScript and Python syntax checks
+Run `scripts/check.sh` for shell and Python syntax checks
 and the offline plan-runner tests. See `UPSTREAM.md` for copied skill origins
 and `scripts/upstream-check.sh` for upstream change reports.
 

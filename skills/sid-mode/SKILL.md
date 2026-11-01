@@ -14,10 +14,10 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 ## Roles
 
 - **Claude (orchestrator)** reads, plans, briefs, reviews every diff line by line, runs the checks, tests in the real app, files and merges PRs, and reports. Claude doesn't take a subagent's summary on trust: read the diff, rerun the checks outside the subagent's sandbox.
-- **Implementer** (Sol) writes the code, one PR per brief, in its own worktree. Never commits or pushes.
+- **Implementer** (Sol) writes the code, one PR per brief, in a T3 worktree (`delegate_task` with `isolation: "worktree"`). Never commits or pushes.
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
-- **Reviews** run through `review-loop`: Muse first, then Astra reviews with its findings and returns one list. Claude takes the final call on it and on slop, Sol fixes once, Claude verifies each fix and approves.
-- **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command. `cm` writes briefs and records replies.
+- **Reviews** run through `review-loop`: the Composer bug pass first, then Astra reviews with its report and returns one list. Claude takes the final call on it and on slop, Sol fixes once, Claude verifies each fix and approves.
+- **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command.
 - **PR bot** (Codex GitHub bot) reviews every PR. Merge waits for its review of the head commit.
 - **Council** (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek) for plans, contested designs and UX reviews, through `council`.
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it in memory if it's lasting.
@@ -40,11 +40,11 @@ From pstack (`<pstack>/skills/poteto-mode/playbooks/<file>.md`, adapted through 
 From sidstack (these replace pstack's babysit, shipping, autopilot, orchestrate and PR playbooks):
 
 - **Ship one change**: `full-send` (merge) or `full-stop` (stop at ready).
-- **Plan to completion**: `council` ("council plan"). Research with the council, write the plan from `skills/council/plan/todo-template.md`, then work it with `cm.sh` and the progress board.
-- **Review a diff**: `review-loop` (panel, then Astra consolidates; "sol loop" uses Sol alone).
+- **Plan to completion**: `council` ("council plan"). Research with the council, write one plan doc, then work each item the `full-send` way, tracked in the plan doc and T3 threads.
+- **Review a diff**: `review-loop` (bug pass, then Astra; "sol loop" uses Sol alone).
 - **PRs**: `file-pr`, `babysit-pr`, `leaving-pr-comments`.
 - **Someone else's work**: `takeover`; **old PR**: `modernize`.
-- **Session pickup**: read the prior transcript (`~/.claude/projects/` and `~/.claude_2/projects/`), the plan file, the board state and the worktrees before acting. Treat the handoff as context, not proof.
+- **Session pickup**: read the prior transcript (`~/.claude/projects/` and `~/.claude_2/projects/`), the plan file, the T3 threads and the worktrees before acting. Treat the handoff as context, not proof.
 - **Worktree cleanup** (`<pstack>/skills/poteto-mode/playbooks/worktree-cleanup.md`): remove merged worktrees; keep branches with unmerged commits.
 
 No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
@@ -54,12 +54,12 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
 One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
 
-1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, `pnpm lint` (or the repo's lint), with no new failures against main.
-2. `review-loop`: Muse first, then Astra consolidates; Claude takes the final call, Sol fixes once, Claude verifies and approves. Decline nits with a reason.
-3. Behavioural verification before the PR: run covering tests with pass counts; for UI, run the app in a browser and save a screenshot. Green mocked tests alone are not proof. Write `runs/pr<n>.proof`, then `cm verify <n>` to bind it to the current change. Edits require fresh gate approval and verification.
-4. The deploy gate: main plus the branch, fresh install, lint, typecheck, and the builds the deploy runs (`cm.sh gate check`).
-5. Open the PR (`file-pr`), wait for the PR bot (`cm.sh bot-review`), fix real P0/P1 and real P2 bugs, resolve the rest with a reason.
-6. Gate again on the latest main, squash-merge (`cm.sh gate merge`), delete the worktree and branch.
+1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, lint, with no new failures against main.
+2. `review-loop`: bug pass, then Astra; Claude takes the final call, Sol fixes once, Claude verifies each fix. Decline nits with a reason.
+3. Behavioural verification before the PR: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. It goes in the PR's `## Proof` section.
+4. The gate (`sid-gate.sh <branch>`): the default branch plus the branch, running the repo's `.sidstack/gate.sh`, which must include tests.
+5. Open the PR (`file-pr`), link and watch it in T3, fix real P0/P1 and real P2 bug findings, resolve the rest with a reason.
+6. `sid-merge.sh <pr>`: checks the PR body, the bot and the gate on the latest main, squash-merges, removes the worktree and branch.
 7. Check the change on prod once deployed, in the browser, signed in. Say what was not checked live.
 
 ## Principles
@@ -67,15 +67,16 @@ One review round per PR: bug pass, then Astra once. After Sol fixes, the orchest
 Apply pstack's principles; read the leaf skill (`principle-<name>`) before citing one. The ones that matter most here:
 
 - **Prove it works**: verify on the real artifact. Mocked tests don't prove a UI works.
+- **Test behavior, not implementation**: see "Tests" in `full-send`. Prefer no new test over a bad test.
 - **Fix root causes**; **attack the premise** after two failed fixes on one premise.
 - **Laziness protocol** and **subtract before you add**: the smallest change; prefer deleting.
-- **Test behavior, not implementation**: when a test breaks after a deliberate change, update the test to the new behavior, and say which change it follows.
+- When a test breaks after a deliberate change, update the test to the new behavior, and say which change it follows.
 - **Guard the context window**: route bulk reading to explorers; keep summaries here.
 - **Never block on the human** for reversible work.
 
 ## Repos and worktrees
 
-- The main checkout never switches branch. Parallel work gets one worktree per PR or phase, under `<repo>-wt/`, removed right after merge. Disk is tight.
+- The main checkout never switches branch. Parallel work gets one worktree per PR or phase, under `~/.t3/worktrees/` (T3 makes them), removed right after merge. Disk is tight.
 - Before a plan item undoes a deliberate UX choice, check its history (`git log -S`) and ask the user. Plans list those under "Kept on purpose".
 - Rebuild a monorepo's local packages before trusting local typecheck or test failures; stale `dist` output looks like real errors.
 
