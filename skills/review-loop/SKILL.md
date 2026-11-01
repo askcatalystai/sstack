@@ -17,7 +17,7 @@ One review round per PR: bug pass, then Astra once. After Sol fixes, the orchest
 
 Default (user, 2026-11-01): Sol builds → **bug pass** (Composer) → Astra reviews → the orchestrator takes the final call → Sol fixes once → the orchestrator verifies → PR → PR bot → Sol fixes bot findings → merge → live check. No Muse panel per PR. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
 
-1. **Bug pass** (`bug pass` in models.md, Cursor Composer 2.5), before any review. It follows pstack's poteto-mode bug-fix playbook (`~/.local/share/pstack-src/pstack/skills/poteto-mode/playbooks/bug-fix.md`) and the fix-root-causes principle, applied to the change:
+1. **Bug pass** (`bug pass` in models.md, Cursor Composer 2.5, started with `options: { fastMode: "false" }` — Plus rejects Composer without it), before any review. It follows pstack's poteto-mode bug-fix playbook (`~/.local/share/pstack-src/pstack/skills/poteto-mode/playbooks/bug-fix.md`) and the fix-root-causes principle, applied to the change:
    - **Hunt:** read the diff and the code it touches; list candidate defects (correctness, races, data loss, security/privacy, auth, idempotency, error paths, regressions in callers).
    - **Reproduce each one:** a failing test (or a scripted run) that shows the defect. No repro, no finding: a hypothesis it cannot reproduce is reported as "unconfirmed", never fixed.
    - **Root-cause:** trace each reproduced symptom to the first wrong decision; fix there, not where it surfaced. Guards, retries and swallowed errors are not fixes unless the state is legitimate. Check for the same fault elsewhere in the change.
