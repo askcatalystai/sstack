@@ -18,11 +18,16 @@ for line in open(sys.argv[1]):
         # Prose entries (such as the GitHub app) are not model roles.
         if role == 'pr bot':
             continue
+        # "none" disables a panel role (e.g. review panel: none).
+        if entry.lower() == 'none':
+            continue
         if len(parts) != 3 or not all(parts):
             sys.exit('malformed model entry for role: ' + role)
         entries.append(dict(zip(('provider', 'model', 'effort'), parts)))
     roles[role] = entries
-for role in ('implementer', 'hardest tasks', 'review panel', 'reviewer'):
+for role in ('implementer', 'hardest tasks', 'reviewer'):
     if not roles.get(role):
         sys.exit('missing model role: ' + role)
+if 'review panel' not in roles:
+    sys.exit('missing model role: review panel')
 json.dump(roles, sys.stdout)

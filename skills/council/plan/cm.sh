@@ -30,9 +30,9 @@
 #
 # With more than one plan, name yours on every call: COUNCIL_PLAN=<slug> cm.sh <command> (slug: printed by init).
 # State lives in ~/.local/state/council/<slug>/ (current plan: ~/.local/state/council/current).
-# Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
+# Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
 # Every model runs as a subagent the orchestrator starts; cm writes briefs and records replies.
-# One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
+# One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
 # Exit codes: 8 missing/stale approval, 9 remote head moved, 10 missing/stale verification, 11 unowned branch, 12 incomplete resolution ledger or missing gate round.
 # Gate: 0 pass/merged, 1 build failed, 3 conflicts with main, 4 main moved, 5 merge refused, 9 head moved.
 set -u

@@ -583,8 +583,8 @@ python3 - "$(dirname "$CM")" <<'PYCODE'
 from pathlib import Path
 import sys
 plan=Path(sys.argv[1])
-policy=('Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.',
-        'One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.')
+policy=('Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.',
+        'One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.')
 for path in (plan/'cm.sh', plan.parent/'SKILL.md',
              plan.parent.parent/'review-loop/SKILL.md', plan.parent.parent/'sid-mode/SKILL.md'):
     text=path.read_text()

@@ -1,50 +1,36 @@
 ---
 name: review-loop
-description: Muse reviews first, Astra consolidates its findings into one list, Claude takes the final call, Sol fixes once, Claude approves, then the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
+description: A Composer bug pass (pstack poteto bug-fix playbook) runs first, then Astra reviews, Claude takes the final call, Sol fixes once, Claude verifies and approves, then the PR bot reviews the PR. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
 ---
 
 # review-loop
 
 Make your change more correct before filing a PR. Models come from
 `~/.local/share/sidstack/models.md`. Every model runs as a subagent the orchestrator starts, never as a terminal
-command. Sol changes nothing until Astra has consolidated and Claude has
+command. Sol changes nothing until the bug pass and Astra are done and Claude has
 triaged.
 
 ## The sequence
 
-Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
+Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
+One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
 
-1. **Panel.** Muse (`review panel`) reviews the change as its own
-   subagent. Its findings do not go to Sol.
-2. **Astra consolidates.** Astra (`reviewer`) reviews the change with the
-   panel reply in its brief: it confirms each finding, rejects it with
-   evidence, or adds what both missed, and returns the one list Sol works from.
-   A panel member with no reply is noted in Astra's brief.
-3. **The orchestrator takes the final call.** Claude (Opus) checks Astra's
-   list against the code and keeps a ledger (accepted, or declined with a
-   reason). Claude also reads the diff itself for slop: dead code, needless
-   guards, comments that restate code, names that lie.
+Default (user, 2026-11-01): Sol builds → **bug pass** (Composer) → Astra reviews → the orchestrator takes the final call → Sol fixes once → the orchestrator verifies → PR → PR bot → Sol fixes bot findings → merge → live check. No Muse panel per PR. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
+
+1. **Bug pass** (`bug pass` in models.md, Cursor Composer 2.5), before any review. It follows pstack's poteto-mode bug-fix playbook (`~/.local/share/pstack-src/pstack/skills/poteto-mode/playbooks/bug-fix.md`) and the fix-root-causes principle, applied to the change:
+   - **Hunt:** read the diff and the code it touches; list candidate defects (correctness, races, data loss, security/privacy, auth, idempotency, error paths, regressions in callers).
+   - **Reproduce each one:** a failing test (or a scripted run) that shows the defect. No repro, no finding: a hypothesis it cannot reproduce is reported as "unconfirmed", never fixed.
+   - **Root-cause:** trace each reproduced symptom to the first wrong decision; fix there, not where it surfaced. Guards, retries and swallowed errors are not fixes unless the state is legitimate. Check for the same fault elsewhere in the change.
+   - **Fix minimally:** the smallest change the evidence justifies, failing test first, then the fix; revert anything a refuted hypothesis motivated.
+   - **Report** (`runs/pr<n>.bugpass`): each finding with repro command, failing-then-passing output, root cause, fix; and a list of hypotheses it ruled out. It never commits or pushes.
+   If the bug pass can't run (provider error), note it in the ledger and go on to Astra.
+2. **Astra reviews** (`reviewer`) the change including the bug-pass fixes and report: confirms, rejects with evidence, or adds what was missed, and returns one list (`cm brief <n> 1 gate`).
+3. **The orchestrator takes the final call** on Astra's list (ledger: accepted, or declined with a reason) and reads the diff for slop.
 4. **Sol fixes once**: every accepted finding in one brief.
-5. **The orchestrator verifies each fix** (diff, checks, a focused test where
-   the finding needs one) and records the approval for the fixed change
-   (`cm approve <n> <ledger.md>`).
-6. File the PR. The **PR bot** (Codex GitHub bot) reviews it automatically;
-   `babysit-pr` / `cm bot-review` handle its findings the same way.
+5. **The orchestrator verifies each fix** (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote) and records approval (`cm approve <n> <ledger.md>`, each finding as `pr<n>-rev1:S<k>`).
+6. File the PR. The **PR bot** (Codex GitHub bot) reviews it; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), Sol fixes the accepted ones, the orchestrator resolves the threads and re-ships.
 
-If Astra approves with no blocker or should, its verdict is the approval and
-steps 4 and 5 are skipped.
-
-In a plan: `cm brief <n> <r>` prints the panel briefs and where to save each
-reply; `cm brief <n> <r> gate-after-panel` builds Astra's brief from them;
-`cm review <n> <r>` records the round and applies the gates.
-
-One round only: Muse first, Astra consolidates once, Sol
-fixes once, the orchestrator verifies every fix itself (rerun tests, read the
-diff) and approves. No second panel round, even for risky changes: the user
-found two rounds too slow (2026-10-31). For risky areas the orchestrator reruns
-the critical tests itself before approving. "sol loop": Sol reviews alone, up to
-3 rounds. A model or round count the user names wins.
+If Astra approves with no blocker or should, steps 4 and 5 are skipped.
 
 ## Rules
 

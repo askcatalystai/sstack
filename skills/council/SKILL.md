@@ -123,8 +123,8 @@ own `--port`). Without it, `cm` uses whichever plan was initialised last.
 
 ### 3. Each PR item
 
-Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
+Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
+One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
 
 Work phase by phase. Inside a phase, PRs that touch disjoint files can run in
 parallel, each in its own worktree. Never switch the main checkout's branch.

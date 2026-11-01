@@ -51,8 +51,8 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 
 ## Gates (every PR)
 
-Default: Muse reviews first, then Astra reviews with its findings and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator approves.
-One review round per PR: Muse first, then Astra consolidates once. After Sol fixes, the orchestrator verifies the fixes itself; no second panel round (the user found two rounds too slow, 2026-10-31). "sol loop": Sol only, up to 3 rounds.
+Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
+One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
 
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, `pnpm lint` (or the repo's lint), with no new failures against main.
 2. `review-loop`: Muse first, then Astra consolidates; Claude takes the final call, Sol fixes once, Claude verifies and approves. Decline nits with a reason.

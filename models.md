@@ -10,8 +10,9 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - claude fallback: claudeAgent_claude_2 / claude-opus-5-5 / medium (only after a usage or rate limit on the orchestrator's instance; same model, never a different one)
 - implementer: codex / gpt-6.1-sol / high
 - hardest tasks: codex / gpt-6.1-sol / xhigh
-- review panel: opencode / opencode-go/muse-spark-1.3-contributor / high (first; its findings go to Astra, not to Sol)
-- reviewer: codex / gpt-6-astra / medium (after the panel, with its findings; returns the one consolidated list; Claude takes the final call, Sol fixes once)
+- bug pass: cursor / composer-2.5 / - (first, before any review; pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix; user 2026-11-01)
+- review panel: none (user 2026-11-01: Sol → bug pass → Astra directly; Muse stays on the council)
+- reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; Claude takes the final call, Sol fixes once)
 - pr bot: chatgpt-codex-connector (GitHub app; every PR; merge waits for its review of the head commit)
 - judgment and prose: claudesahitya / claude-opus-5-5 / medium
 
