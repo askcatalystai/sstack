@@ -11,14 +11,14 @@ Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models 
 sstack is three things on T3 Code:
 
 - **pstack is how we write:** code, tests, reviews and bug work follow its playbooks and principles as closely as this setup allows.
-- **Council is how we plan:** several models plan the work once, at the start.
+- **Council is how we plan:** several models plan the work once, at the start, onto Kanzo cards, which are the source of truth.
 - **tstack's full send is how we ship:** fast and autonomous, from brief to merged PR.
 
 ## Use
 
 - `sid mode <task>`: matches a playbook, runs it with my roles and gates.
 - `full send` / `full stop`: one change to a merged / ready PR.
-- `council` / `council plan`: seven seats for big plans, three for smaller ones; one plan doc worked to merged PRs through T3.
+- `council` / `council plan`: seven seats for big plans, three for smaller ones; the plan goes on Kanzo cards, worked to merged PRs through T3.
 - `review loop` (Astra) / `sol loop` (Sol).
 - `/setup-sidstack`: change a model, smoke-test it, relink.
 

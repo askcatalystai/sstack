@@ -42,11 +42,11 @@ From pstack (`<pstack>/skills/poteto-mode/playbooks/<file>.md`, adapted through 
 From sidstack (these replace pstack's babysit, shipping, autopilot, orchestrate and PR playbooks):
 
 - **Ship one change**: `full-send` (merge) or `full-stop` (stop at ready).
-- **Plan to completion**: `council` ("council plan"). Research with the council, write one plan doc, then work each item the `full-send` way, tracked in the plan doc and T3 threads.
+- **Plan to completion**: `council` ("council plan"). Research with the council, put the plan on Kanzo cards, then work each card the `full-send` way.
 - **Review a diff**: `review-loop` (bug pass, then Astra; "sol loop" uses Sol alone).
 - **PRs**: `file-pr`, `babysit-pr`, `leaving-pr-comments`.
 - **Someone else's work**: `takeover`; **old PR**: `modernize`.
-- **Session pickup**: read the prior transcript (`~/.claude/projects/` and `~/.claude_2/projects/`), the plan file, the T3 threads and the worktrees before acting. Treat the handoff as context, not proof.
+- **Session pickup**: read the prior transcript (`~/.claude/projects/` and `~/.claude_2/projects/`), the Kanzo board, the T3 threads and the worktrees before acting. Treat the handoff as context, not proof.
 - **Worktree cleanup** (`<pstack>/skills/poteto-mode/playbooks/worktree-cleanup.md`): remove merged worktrees; keep branches with unmerged commits.
 
 No playbook fits, or the work is large and cross-cutting → `figure-it-out`.

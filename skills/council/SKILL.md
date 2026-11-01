@@ -25,6 +25,9 @@ In T3 Code, use `orchestrator_capabilities` to resolve the models, then
 `delegate_task` to start one delegate per model in parallel. Elsewhere, use
 the harness's subagent tools. If a seat is unavailable, report it instead of substituting.
 
+If the project is on the user's Kanzo board, make a card before starting the seats and
+comment each seat's reply on it as it returns, so results show as they arrive.
+
 Give each delegate the request and relevant context. For review or feedback,
 keep their work read-only. Collect their responses and summarize the useful
 findings, disagreements, and recommended next steps.
@@ -74,44 +77,41 @@ PRs: "council plan", "council to completion", or a council request followed by
    delegate for findings with file:line, effort (S/M/L), an acceptance
    check, and scores per axis.
 
-### 2. The plan file
+### 2. The plan goes on the board
 
-1. Write one plan doc in the repo (for example `app/<TOPIC>-FIXES.md`), or add
-   phases to the current one. Start with the goal, council members and scores.
-   Use `## Phase <n> — <title>` and `### [ ] PR <n> — <title> (S|M|L)` headings.
-2. Group findings into phases by area. One PR item per concern: root cause,
-   files, reference, fix, depends-on, and the behaviour to prove. Don't write
-   "a test finds X" as the acceptance: name the behaviour, and let the test rule
-   in `full-send` decide whether a test or the running app proves it. Number PRs once, never
-   renumber; later finds take the next free number.
-3. Ask the user only for real decisions, with the question tool: 2-4
-   options, recommendation first. Record answers under "Decisions" and
-   choices that stay on purpose under "Kept on purpose".
-4. Land the plan file as its own docs PR.
+Kanzo is the source of truth, not a file. Where the project has no board, ask.
+
+1. Make one card per PR item, holding its full detail: root cause, files, reference, fix,
+   depends-on, and the behaviour to prove. Don't write "a test finds X": name the behaviour,
+   and let the test rule in `full-send` decide whether a test or the running app proves it.
+   Tag cards by area. One card per concern; split anything that isn't small.
+2. Todo holds what's next; Backlog holds what waits. Put the council's scores and any decisions
+   on a council card.
+3. Ask the user only for real decisions, with the question tool: 2-4 options, recommendation
+   first. Record the answers on the cards they affect. A choice that stays on purpose goes on
+   its card, and in the project's instructions if it should outlast the work.
+4. The user may edit, reorder or delete cards. Read the board before picking the next item.
 
 ### 3. Each PR item
 
 Work each item the `full-send` way: a `delegate_task` worktree for Sol, the
 bug pass, Astra, Claude's final call, Sol's one fix, proof, `sid-gate.sh`, PR,
 watch, `sid-merge.sh`, then a live check. Inside a phase, PRs that touch disjoint
-files run in parallel, each in its own worktree. Each brief names the item in
+files run in parallel, each in its own worktree. Each brief carries the card in
 full: read it, check its line numbers, and check history before undoing a
 deliberate choice (`git log -S`). Never switch the main checkout's branch.
 
-### 4. After each phase or batch
+### 4. After each batch
 
-1. Tick the items in one docs PR: `[x]`, then `- Done (#<github>).` under each.
-   Check that each merged PR shipped what its item asked for. If it did not,
-   leave the box open and say what shipped instead.
-2. Once the deploy is live, check the change on prod (browser, DOM queries,
-   screenshots), and record it under "Live checks". List anything only tests
-   covered under "Not verified".
-3. Delete merged worktrees and local branches; keep worktrees that hold
-   unmerged work or untracked files, and say which.
+1. Check that each merged PR shipped what its card asked for. If it did not, say what shipped
+   on the card and leave it open.
+2. Once the deploy is live, check the change on prod (browser, DOM queries, screenshots), and
+   comment what was checked and what only tests covered.
+3. Delete merged worktrees and local branches; keep worktrees that hold unmerged work or
+   untracked files, and say which.
 
 ### 5. Finish
 
-Run until every item is ticked or blocked on the user. Mid-task requests
-from the user become new numbered items in the same file (for example "user
-request, <date>") and go through the same loop. Final report: the PRs with
+Run until every card is done or blocked on the user. Mid-task requests
+from the user become new cards and go through the same loop. Final report: the PRs with
 links, what was checked live, what wasn't, and the decisions taken.
