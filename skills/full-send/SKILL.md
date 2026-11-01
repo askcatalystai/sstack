@@ -149,8 +149,9 @@ Work that doesn't earn its place gets thrown away, not patched.
 - **The user rejects it:** a `reject: <reason>` comment on the PR means run
   `scripts/sid-scrap.sh <pr> "<reason>"` and move the card back to Backlog with the reason.
   On merged work, `revert: <reason>` means `scripts/sid-scrap.sh --revert <pr> "<reason>"`.
-  Read Kanzo card comments at each step, because they don't wake you; a `flag:` comment
-  from the user comes first.
+  Kanzo comments don't wake you, so run `scripts/sid-card.py inbox` at every step and before
+  ending a turn. Any comment from the user comes first, with or without `flag:`. Reply on the card, saying what
+  you'll do.
 - **Never leave scrapped work half-kept:** the PR, branch and worktree go together.
 
 Report anything scrapped, and why.

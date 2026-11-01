@@ -6,6 +6,9 @@
   sid-card.py shots <oe#1> "<caption>" <image.png> ...           post screenshots as a comment the user can see and flag
   sid-card.py tick                                               refresh the elapsed tag (a timer runs this each minute)
 
+  sid-card.py inbox                                              print the user's new comments on any card, once each
+
+The user's comments carry a "new-comment" tag until inbox reads them. Screenshot comments start "Terra:" and don't count.
 A card more than 2 hours in one column gets a "stale" tag, so stuck work shows without opening it.
 
 The clock is time in the current column: it restarts when a card moves, not when the worker changes.
@@ -81,6 +84,21 @@ def shots(task, caption, images):
     urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:4242/api/tasks/{number}/comments", body, {"Content-Type": "application/json"}), timeout=10)
 
 
+def user_comments(task):
+    return [c for c in task.get("comments", []) if c.get("author") == "me" and not c.get("body", "").startswith("Terra:")]
+
+
+def inbox(state, found):
+    seen = state.setdefault("_comments_seen", {})
+    for key, task in found.items():
+        for comment in user_comments(task):
+            if comment["id"] not in seen.get(key, []):
+                print(f"{key} ({task['status']}) {task['title'][:50]}: {comment['body']}")
+                seen.setdefault(key, []).append(comment["id"])
+        if "new-comment" in task["tags"]:
+            update(key, tags=", ".join(tag for tag in task["tags"] if tag != "new-comment"))
+
+
 def load():
     return json.loads(STATE.read_text()) if STATE.exists() else {}
 
@@ -97,7 +115,11 @@ def own_tags(tags, record):
 
 def tick(state):
     now = dt.datetime.now(dt.timezone.utc).isoformat()
+    seen = state.setdefault("_comments_seen", {})
     for task_id, task in tasks().items():
+        if any(c["id"] not in seen.get(task_id, []) for c in user_comments(task)) and "new-comment" not in task["tags"]:
+            task["tags"] = task["tags"] + ["new-comment"]
+            update(task_id, tags=", ".join(task["tags"]))
         record = state.get(task_id)
         if task["status"] not in ACTIVE:
             if record:
@@ -134,6 +156,8 @@ def main():
             record["worker"] = []
     elif command == "shots":
         shots(sys.argv[2], sys.argv[3], sys.argv[4:])
+    elif command == "inbox":
+        inbox(state, tasks())
     elif command != "tick":
         sys.exit(__doc__)
     tick(state)

@@ -29,7 +29,7 @@ Read `<pstack>/skills/principle-experience-first/SKILL.md` first. Use `<pstack>/
 5. **After screenshots, local.** Run `sid-preview.sh <worktree>`, then Terra captures the same screens and states, and posts them on the card next to the before set.
 6. **Opus judges it, before Composer and Astra.** Read the screenshots and the diff against the Taste rules. In the app only if a screenshot can't answer it, such as an interaction. Send it back to Sol with exact changes, once. If it's still wrong, scrap it (`full-send`'s Scrap section).
 7. **Composer, then Astra,** for logic. Then the gate, PR and merge.
-8. **After deploy,** Terra captures prod and posts it, and Opus does the final test in the app. **Check the card for founder flags at each step:** a comment with `flag:` means stop and deal with it first.
+8. **After deploy,** Terra captures prod and posts it, and Opus does the final test in the app. **Run `sid-card.py inbox` at each step:** any comment from the founder comes first. Reply on the card, and if it's outside this PR, make it a new card.
 
 ## Screenshots
 
