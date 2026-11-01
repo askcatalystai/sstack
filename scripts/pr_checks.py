@@ -10,8 +10,10 @@ import json, re, sys
 RISKY = re.compile(r"(^|[/_.-])(auth|oauth|payments?|billing|migrations?)([/_.-]|$)|^commerce/|^\.sidstack/|^app/scripts/test-batches", re.I)
 VISIBLE_UI = re.compile(r"^app/apps/(app|desktop)/src/.*\.(tsx|css)$")
 NOT_UI = re.compile(r"\.(test|spec)\.tsx$")
-EVIDENCE = re.compile(r"\b(pass(ed|es)?|fail(ed|s)?|ran|exit|measured|screenshot|reproduc\w*)\b", re.I)
-REVIEWER = re.compile(r"\b(astra|composer|bot|skipp?ed)\b", re.I)
+# These catch empty and careless sections. They can't tell whether the words are true; review of the PR does that.
+EVIDENCE = re.compile(r"\b\d+ (pass|passed|fail|failed)\b|\b(passed|exit 0|measured|reproduced)\b|\S\.png\b", re.I)
+OUTCOME = re.compile(r"\b(approved|changes|found|fixed|declined|no (new )?(bugs|findings|issues))\b|\b(skipped|not run)\b", re.I)
+SKIPPED = re.compile(r"(?<!no steps )(?<!nothing )(?<!not )\bskipp?ed\b|\bnot run\b|\bdidn't run\b", re.I)
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
@@ -46,17 +48,17 @@ def problems(pr, files=()):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
     if not EVIDENCE.search(proof):
         found.append("## Proof must show what ran and the result, not just a commit")
-    if not REVIEWER.search(review):
-        found.append("## Review must say who reviewed it, or what was skipped and why")
+    if not OUTCOME.search(review):
+        found.append("## Review must say what each reviewer concluded, or what was skipped and why")
     ui = [file for file in files if VISIBLE_UI.search(file) and not NOT_UI.search(file)]
-    if ui and not re.search(r"screenshot|\.png\b|no visible change", proof, re.I):
-        found.append(f"## Proof needs a screenshot, or \"no visible change\" and why; UI changed: {ui[0]}")
+    if ui and not re.search(r"\S\.png\b|no visible change", proof, re.I):
+        found.append(f"## Proof needs a screenshot path, or \"no visible change\" and why; UI changed: {ui[0]}")
     return found
 
 
 def bot_reasons(pr, files):
     reasons = [f"risky path {file}" for file in files if RISKY.search(file)][:3]
-    if re.search(r"\bskipp?ed\b|\bdidn't run\b", section(pr["body"], "Review"), re.I):
+    if SKIPPED.search(section(pr["body"], "Review")):
         reasons.append("## Review records a skipped step")
     return reasons
 

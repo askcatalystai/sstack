@@ -20,24 +20,30 @@ common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir); repo
 cd "$repo" || exit 1
 gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-# One read, and any failure stops here: an API error must never look like "nothing wrong".
-gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
-gh pr diff "$pr" --repo "$gh" --name-only > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
 field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$tmp/pr.json" "$1"; }
-body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
-required=$(python3 "$here/pr_checks.py" "$tmp/pr.json" "$tmp/files") || exit 1
-if [ -n "$required" ]; then echo "$required"; need_bot=true; fi
-if [ "$need_bot" = true ]; then
-  read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
-  [ "$sha" = "$head" ] || { echo "bot has not reviewed ${head:0:8} yet (last: ${sha:0:8} $status); comment '@codex review' if it stays quiet"; exit 7; }
-  [ "$status" = completed ] || { echo "bot status on ${head:0:8}: $status"; exit 7; }
-fi
-open=$(python3 "$here/bot_review.py" open "$gh" "$pr" "$bot") || { echo "could not read review threads"; exit 7; }
-[ -z "$open" ] || { echo "open bot findings:"; echo "$open"; exit 6; }
-for attempt in 1 2 3; do
+# Read everything fresh, and stop on any failure: an API error must never look like "nothing wrong".
+ready() {
+  gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
+  gh pr diff "$pr" --repo "$gh" --name-only > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
+  body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
+  required=$(python3 "$here/pr_checks.py" "$tmp/pr.json" "$tmp/files") || exit 1
+  bot_needed=$need_bot
+  if [ -n "$required" ]; then echo "$required"; bot_needed=true; fi
+  if [ "$bot_needed" = true ]; then
+    read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
+    [ "$sha" = "$head" ] || { echo "bot has not reviewed ${head:0:8} yet (last: ${sha:0:8} $status); comment '@codex review' if it stays quiet"; exit 7; }
+    [ "$status" = completed ] || { echo "bot status on ${head:0:8}: $status"; exit 7; }
+  fi
+  open=$(python3 "$here/bot_review.py" open "$gh" "$pr" "$bot") || { echo "could not read review threads"; exit 7; }
+  [ -z "$open" ] || { echo "open bot findings:"; echo "$open"; exit 6; }
+}
+# The gate can take minutes, so every merge attempt rereads the PR with no gate in between.
+for attempt in 1 2 3 4; do
+  ready
   git fetch -q origin "$base" || exit 1
   main=$(git rev-parse "origin/$base")
-  if [ "$(cat "$common/sid-gate/$head" 2>/dev/null)" != "$main" ]; then
+  stamp=$common/sid-gate/${branch//\//_}.pass
+  if [ "$(cat "$stamp" 2>/dev/null)" != "$head $main" ]; then
     "$here/sid-gate.sh" "$branch"; rc=$?; [ "$rc" = 0 ] || exit "$rc"
     continue
   fi
@@ -48,6 +54,7 @@ for attempt in 1 2 3; do
   message=$body; [ -z "$trailers" ] || message=$(printf '%s\n\n%s' "$body" "$trailers")
   gh pr merge "$pr" --repo "$gh" --squash --subject "$title (#$pr)" --body "$message" --match-head-commit "$head" >/dev/null || { echo "merge refused; retrying if $base moved"; sleep 5; continue; }
   echo "merged #$pr: $(gh pr view "$pr" --repo "$gh" --json mergeCommit -q .mergeCommit.oid)"
+  rm -f "$stamp"
   wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '/^worktree /{w=$2} $0=="branch "b{print w}')
   if [ -n "$wt" ]; then git worktree remove "$wt" || echo "kept $wt: it has uncommitted or untracked files"; fi
   git branch -qD "$branch" 2>/dev/null

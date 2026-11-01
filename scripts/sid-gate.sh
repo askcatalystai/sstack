@@ -12,11 +12,12 @@ base=$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
 verify=$repo-wt/verify
 mkdir -p "$common/sid-gate"
 exec 9>"$common/sid-gate/lock"; flock 9
+# Clear the branch's pass first, so a rerun that fails or dies at any point leaves nothing standing.
+stamp=$common/sid-gate/${branch//\//_}.pass
+rm -f "$stamp"
 git -C "$repo" fetch -q origin "$base" "$branch" || { echo "cannot fetch $branch; push it first"; exit 1; }
 main=$(git -C "$repo" rev-parse "origin/$base")
 head=$(git -C "$repo" rev-parse "origin/$branch")
-# A rerun that fails or dies must not leave an older pass standing.
-rm -f "$common/sid-gate/$head"
 [ -d "$verify" ] || git -C "$repo" worktree add -q --detach "$verify" "$main" || exit 1
 out=$(git -C "$verify" merge-tree --write-tree "$main" "$head") || { echo "conflicts with $base: merge origin/$base into $branch, then gate again"; exit 3; }
 # A gate killed midway leaves files behind, so start clean.
@@ -29,5 +30,5 @@ log=$common/sid-gate/${branch//\//_}.log
 git -C "$verify" checkout -q --detach -f "$main"
 git -C "$verify" clean -qfd
 if [ "$rc" != 0 ]; then echo "gate FAILED: $log"; tail -n 25 "$log"; exit 1; fi
-echo "$main" > "$common/sid-gate/$head"
+echo "$head $main" > "$stamp"
 echo "gate passed: $base ${main:0:8} + $branch ${head:0:8}"
