@@ -10,7 +10,7 @@ Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models 
 
 sstack is three things on T3 Code:
 
-- **Claude Opus leads UI and UX:** the `ui-lead` skill adapts pstack's experience-first, prototype and visual-parity, with our taste rules.
+- **Claude Opus judges UI and UX:** Sol writes it to the `ui-lead` rules, Terra posts before and after screenshots on the card, and Opus decides before any other review.
 - **pstack is how we write:** code, tests, reviews and bug work follow its playbooks and principles as closely as this setup allows.
 - **Council is how we plan:** several models plan the work once, at the start, onto Kanzo cards, which are the source of truth.
 - **tstack's full send is how we ship:** fast and autonomous, from brief to merged PR.

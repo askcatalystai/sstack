@@ -1,11 +1,11 @@
 ---
 name: ui-lead
-description: "How visible UI gets designed, built and proved in sstack. Claude Opus leads all UI and UX; GPT models don't decide or write visible UI. Use for any change a user can see: layout, styling, components, copy, interaction, or a UI review. Built on pstack's experience-first, prototype and visual-parity."
+description: "How visible UI gets built and proved in sstack. Sol writes it to these rules, Terra screenshots it, and Claude Opus judges it before any other review and tests it at the end. Use for any change a user can see: layout, styling, components, copy, interaction, or a UI review. Built on pstack's experience-first, prototype and visual-parity."
 ---
 
 # UI lead
 
-Claude Opus owns every visible decision. The founder's verdict is that GPT models are sloppy at UI, so they don't design it, write it, or judge it. Keep the bar here: clean, minimal, tasteful.
+Claude Opus owns every visible decision and has the final say, but it doesn't write the code, which saves its tokens for judgment. Keep the bar here: clean, minimal, tasteful. The founder has found GPT models sloppy at UI when left to judge it, so Sol works to these rules and nothing ships on its taste alone.
 
 Read `<pstack>/skills/principle-experience-first/SKILL.md` first. Use `<pstack>/skills/poteto-mode/playbooks/prototype.md` for open design choices, and `visual-parity.md` when the target is an exact match.
 
@@ -13,21 +13,35 @@ Read `<pstack>/skills/principle-experience-first/SKILL.md` first. Use `<pstack>/
 
 | Work | Who |
 |---|---|
-| Design decisions, visible components, styles, copy | Opus. The orchestrator for small changes, otherwise a `delegate_task` on the `ui lead` role in a worktree. |
-| Data, stores, server and wiring with no visible output | Sol, in a separate brief or PR |
-| Bug pass and code review | Composer and Astra, for logic only. Ignore their taste findings. |
-| Browser proof | Opus |
+| Direction, brief, final call on anything visible | Opus |
+| Writing the UI and its logic | Sol, with these rules in its brief |
+| Screenshots, in T3's in-app browser | Terra |
+| Judging the UI, before any other review | Opus |
+| Bug pass and code review, after Opus approves | Composer and Astra, for logic only. Ignore their taste findings. |
+| Final test in the app, local and prod | Opus |
 
 ## Steps
 
-1. **See it first.** Screenshot the current screen in the real app, in light and dark, at the widths it's really used. Never design from code alone.
-2. **Read the reference.** Open its source before designing: T3 Code for chat and settings (`~/templates/t3code`), OpenDots for Spaces (`~/templates/opendots`), Medusa admin for tables and commerce (`~/templates/medusa`). Adapt the idea, using our components and tokens. If the reference is out of date, pull it first.
-3. **Subtract.** Every control must justify itself. List what can go before adding anything, and ship less, better. Check `git log -S` before removing a choice that looks deliberate.
-4. **Pick a direction.** If the layout or interaction is genuinely open, build 2 or 3 throwaway variants in plain HTML behind one switcher, show them with `html_preview` and `html_render`, recommend one, and let the founder choose. Skip this for a clear fix, and don't ask about a fact you can see by rendering it.
-5. **Build.** Our components and design tokens only, with the smallest diff that gets it right.
-6. **Check against the taste rules** below, and fix what fails.
-7. **Prove it** (see Proof), looking at each screenshot yourself.
-8. **Say what you'd cut next.** If the answer is something in this PR, cut it now.
+1. **Before screenshots, before any code changes.** Run `sid-preview.sh main`, then Terra captures the affected screens on local and on prod and posts them on the card (see Screenshots).
+2. **Direction.** Opus looks at the before shots and reads the reference: T3 Code for chat and settings (`~/templates/t3code`), OpenDots for Spaces (`~/templates/opendots`), Medusa admin for tables and commerce (`~/templates/medusa`), pulling it first if it's out of date. Then subtract: every control must justify itself, so list what can go before adding anything. Check `git log -S` before removing a choice that looks deliberate.
+3. **If the layout is genuinely open,** Sol builds 2 or 3 throwaway variants in plain HTML behind one switcher, Opus recommends one, and the founder chooses. Skip this for a clear fix, and don't ask about a fact you can see by rendering it.
+4. **Sol builds it.** Its brief has the reference file paths, what to remove, the states to handle and this file's Taste rules: tell it to read this file. Our components and design tokens only, with the smallest diff that gets it right.
+5. **After screenshots, local.** Run `sid-preview.sh <worktree>`, then Terra captures the same screens and states, and posts them on the card next to the before set.
+6. **Opus judges it, before Composer and Astra.** Read the screenshots and the diff against the Taste rules. In the app only if a screenshot can't answer it, such as an interaction. Send it back to Sol with exact changes, once. If it's still wrong, scrap it (`full-send`'s Scrap section).
+7. **Composer, then Astra,** for logic. Then the gate, PR and merge.
+8. **After deploy,** Terra captures prod and posts it, and Opus does the final test in the app. **Check the card for founder flags at each step:** a comment with `flag:` means stop and deal with it first.
+
+## Screenshots
+
+Terra runs as a `delegate_task` on the `screenshots` role with no worktree. It uses T3's in-app browser (`preview_*` tools, loading them with tool search if needed), because that's where local and prod are already signed in. Never Chromium or Playwright. Each brief lists the card, URLs, screens, states and widths, and says:
+
+- Open your own tab with `reuseExistingTab=false` and `open=false`, wait until the page's content has loaded (`preview_wait_for` or `preview_evaluate`), not just the title, and close the tab at the end.
+- Don't click anything that changes data. Don't print customer details. Leave appearance as you found it.
+- Capture dark and light at the default width and at narrow width, plus each state asked for, using `preview_snapshot` with `save=true`. Look at each image, and retake anything that's blank, mid-load, or shows the wrong page.
+- Post with `~/.local/share/sidstack/scripts/sid-card.py shots <oe#n> "<caption>" <images...>`. The caption says the stage (before, after local, after prod), environment, screen and commit, and starts with "Terra:", because these comments show as "me" on the board.
+- Don't judge the design. Reply with the paths and anything that failed to load.
+
+Local commerce pages may not load while the local store rejects the account's key. Say so rather than posting an empty screen, and capture prod instead.
 
 ## Taste rules
 
@@ -51,7 +65,7 @@ Read `<pstack>/skills/principle-experience-first/SKILL.md` first. Use `<pstack>/
 
 In the PR's `## Proof`, naming the head commit:
 
-- Before and after screenshots with their paths: light and dark, default width and narrow.
+- Before and after screenshots with their paths, as posted on the card: light and dark, default width and narrow.
 - Measurements for what you claim about layout, from the DOM: widths, offsets, row heights.
 - Each changed state, and hover, focus and keyboard for any new interaction.
 - For an exact match, an image diff against a baseline, per the visual-parity playbook. A nonzero diff is a failure to explain.

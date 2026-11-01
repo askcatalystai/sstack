@@ -60,8 +60,8 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    through `docs/adapter.md`. For nontrivial work, use `how` first and name the data shape;
    for code crossing a function boundary, use `architect`. Skip a step only by saying why.
    If an answer is a fact you can observe by running something, sketch it instead of asking.
-2. **Brief and code.** Anything a user can see follows the `ui-lead` skill: Opus designs
-   and writes it, not Sol. Otherwise the brief has the user's goal in their words, the smallest change
+2. **Brief and code.** Anything a user can see follows the `ui-lead` skill: Terra's before
+   screenshots come first, and Opus judges Sol's UI before any other review. The brief has the user's goal in their words, the smallest change
    that meets it, the evidence that proves it's done, the area to work in, and any files
    parallel PRs own. It tells the worker to follow that playbook and the Tests section
    below. Use `delegate_task` on the implementer role with `isolation: "worktree"`.
@@ -149,7 +149,8 @@ Work that doesn't earn its place gets thrown away, not patched.
 - **The user rejects it:** a `reject: <reason>` comment on the PR means run
   `scripts/sid-scrap.sh <pr> "<reason>"` and move the card back to Backlog with the reason.
   On merged work, `revert: <reason>` means `scripts/sid-scrap.sh --revert <pr> "<reason>"`.
-  Read Kanzo card comments at each step, because they don't wake you.
+  Read Kanzo card comments at each step, because they don't wake you; a `flag:` comment
+  from the user comes first.
 - **Never leave scrapped work half-kept:** the PR, branch and worktree go together.
 
 Report anything scrapped, and why.

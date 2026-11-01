@@ -15,9 +15,9 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 
 ## Roles
 
-- **Claude (orchestrator)** reads, plans, briefs, reviews every diff line by line, runs the checks, tests in the real app, files and merges PRs, and reports. Claude doesn't take a subagent's summary on trust: read the diff, rerun the checks outside the subagent's sandbox.
-- **UI lead** (Claude Opus) designs and writes everything a user can see, through `ui-lead`. GPT models don't design, write or judge visible UI.
-- **Implementer** (Sol) writes the code that isn't visible UI, one PR per brief, in a T3 worktree (`delegate_task` with `isolation: "worktree"`). Never commits or pushes.
+- **Claude (orchestrator)** plans, briefs, reads every diff, takes the final call, judges visible UI and does the final test in the app, local and prod. It doesn't write code beyond tiny fixes, so its tokens go on judgment. It doesn't take a subagent's summary on trust.
+- **UI lead** (Claude Opus) judges everything visible through `ui-lead`, before Composer and Astra. **Terra** takes before and after screenshots and posts them on the card.
+- **Implementer** (Sol) writes the code, including UI, one PR per brief, in a T3 worktree (`delegate_task` with `isolation: "worktree"`). Never commits or pushes.
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
 - **Reviews** run through `review-loop`: the Composer bug pass first, then Astra reviews with its report and returns one list. Claude takes the final call on it and on slop, Sol fixes once, a behaviour change goes back to Astra, and Claude verifies each fix.
 - **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command.
