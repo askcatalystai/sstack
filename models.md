@@ -18,7 +18,7 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 
 ## Panels (one subagent per entry)
 
-- council: opencode / opencode-go/deepseek-v4.1-flash / high; opencode / opencode-go/muse-spark-1.3-contributor / high (DeepSeek and Muse only, user 2026-10-31; the orchestrator synthesises)
+- council: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; codex / gpt-6-astra / medium; codex / gpt-6.1-terra / high; cursor / composer-2.5 / fastMode=false; opencode / opencode-go/muse-spark-1.3-contributor / high; opencode / opencode-go/deepseek-v4.1-flash / high (seven seats, user 2026-11-01; every seat plans the whole brief, no per-seat categories; the orchestrator synthesises and leads UI and UX itself)
 - interrogate reviewers: opencode / opencode-go/deepseek-v4.1-flash / low; opencode / opencode-go/muse-spark-1.3-contributor / high; codex / gpt-6.1-sol / high
 - arena runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
 - architect runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
@@ -33,6 +33,7 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 
 - DeepSeek V4.1 Flash has no `medium` variant; reviews run it at `low` for speed (it was slow at `high`), the council and explorers keep `high`. It timed out on a 75-file diff (2026-10-31): give panel members narrow briefs, at most ~20 files or one area each, split bigger diffs by area and run the pieces in parallel.
 - Muse Spark 1.3 contributor trains on request data: don't send it secrets, credentials or customer data.
-- Astra is the diff reviewer, not a council seat.
+- Astra is the diff reviewer and also a council seat (user 2026-11-01).
+- Council briefs must require reading the installed Mastra docs where relevant, with citations: replies without them were thin (2026-11-01). Terra at `ultra` and Muse at `xhigh` both work when asked for maximum effort.
 - Cursor on the Plus plan accepts Composer 2.5 only with fast mode off. T3's Cursor SDK path defaults to fast when no option is sent and fails with "Model unavailable on Plus … with fixed settings"; always pass `options: { fastMode: "false" }` (2026-11-01).
 - DeepSeek was removed from PR reviews on 2026-10-31 (user); it stays on the council and explorers.

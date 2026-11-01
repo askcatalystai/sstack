@@ -11,6 +11,7 @@
 #   cm.sh implement <n> [--effort L] [--hardest] [extra.md...]  write the implementer's brief; the orchestrator runs it as a subagent
 #   cm.sh implemented <n>              record that the implementer subagent wrote runs/pr<n>.report
 #   cm.sh bugpass <n> start|done|failed  record the Cursor Composer bug pass (before Astra) as its own board job
+#   cm.sh seat <name> <provider> <model> <effort> start|done|failed [reply-file]  record one council seat as its own board job, under PR 1
 #   cm.sh stop <n> [reason]            mark a PR stopped (not active) and close its running jobs
 #   cm.sh adopt <n>                   explicitly take over the current origin branch SHA
 #   cm.sh verify <n>                  bind runs/pr<n>.proof to the current change
@@ -282,6 +283,16 @@ bugpass)
     *) die "cm bugpass <n> start|done|failed";;
   esac
   echo "PR $n bug pass: $act";;
+
+seat)
+  # Each council seat is its own job on the board. The orchestrator runs the subagent; this only records it.
+  name=${1:?seat name}; prov=${2:?provider}; model=${3:?model}; effort=${4:?effort}; act=${5:?start, done or failed}; log=${6:-$S/runs/seat-$name.reply}
+  case $act in
+    start) COUNCIL_STATE="$S" JOB_TITLE="Council: $name" job "seat-$name" 1 review "$prov" "$model" "$effort" running "$log";;
+    done|failed) COUNCIL_STATE="$S" JOB_TITLE="Council: $name" job "seat-$name" 1 review "$prov" "$model" "$effort" "$act" "$log";;
+    *) die "cm seat <name> <provider> <model> <effort> start|done|failed [reply-file]";;
+  esac
+  echo "seat $name: $act";;
 
 implemented)
   n=${1:?plan PR number}

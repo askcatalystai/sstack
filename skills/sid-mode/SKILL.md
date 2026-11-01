@@ -19,7 +19,7 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 - **Reviews** run through `review-loop`: Muse first, then Astra reviews with its findings and returns one list. Claude takes the final call on it and on slop, Sol fixes once, Claude verifies each fix and approves.
 - **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command. `cm` writes briefs and records replies.
 - **PR bot** (Codex GitHub bot) reviews every PR. Merge waits for its review of the head commit.
-- **Council** (DeepSeek and Muse) for plans, contested designs and UX reviews, through `council`.
+- **Council** (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek) for plans, contested designs and UX reviews, through `council`.
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it in memory if it's lasting.
 
 ## Playbooks

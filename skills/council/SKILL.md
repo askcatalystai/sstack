@@ -25,6 +25,10 @@ In T3 Code, use `orchestrator_capabilities` to resolve the models, then
 `delegate_task` to start one delegate per model in parallel. Elsewhere, use
 the harness's subagent tools. If a seat is unavailable, report it instead of substituting.
 
+With a plan on the board, record every seat so the board shows each model:
+`cm seat <name> <provider> <model> <effort> start [reply-file]` when the delegate
+starts, and `done` or `failed` when it returns.
+
 Give each delegate the request and relevant context. For review or feedback,
 keep their work read-only. Collect their responses and summarize the useful
 findings, disagreements, and recommended next steps.

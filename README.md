@@ -10,13 +10,13 @@ Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models 
 
 - `sid mode <task>`: matches a playbook, runs it with my roles and gates.
 - `full send` / `full stop`: one change to a merged / ready PR.
-- `council` / `council plan`: DeepSeek + Muse council review; a plan worked to merged PRs on a live board.
+- `council` / `council plan`: seven-seat council review (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek); a plan worked to merged PRs on a live board.
 - `review loop` (Astra) / `sol loop` (Sol).
 - `/setup-sidstack`: change a model, smoke-test it, relink.
 
 ## Roles
 
-See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Muse reviews first and Astra consolidates its findings into one list; every model runs as a subagent; the Codex GitHub bot reviews every PR and merges wait for it; the council is DeepSeek and Muse, and the orchestrator synthesises.
+See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Muse reviews first and Astra consolidates its findings into one list; every model runs as a subagent; the Codex GitHub bot reviews every PR and merges wait for it; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.
 
 ## Install
 
