@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # sid-merge [--check] [--bot] <pr>: merge a PR only when it is really ready, then remove its worktree and branch.
-# Ready means: open and not a draft; the body has "## Proof" and "## Review" sections with content; no open PR bot
-# threads; with --bot, the PR bot finished on the head commit (for risky PRs, after commenting '@codex review');
-# and the gate passed on this head merged with the latest
+# Ready means: open, not a draft, no changes requested; "## Proof" names the head commit and "## Review" has content;
+# no open PR bot threads; the PR bot finished on the head commit if it's needed: with --bot, a risky path, or a skipped
+# review step (see pr_checks.py; comment '@codex review' to ask it); and the gate passed on this head merged with the latest
 # default branch (it reruns the gate if the default branch moved). --check stops before merging.
 # Exit: 0 merged or ready, 1 not ready, 6 open bot findings, 7 bot not finished on the head, 3 conflicts.
 set -u
@@ -23,11 +23,11 @@ field() { gh pr view "$pr" --repo "$gh" --json "$1" -q ".$1"; }
 [ "$(field state)" = OPEN ] || { echo "#$pr is not open"; exit 1; }
 [ "$(field isDraft)" = false ] || { echo "#$pr is a draft"; exit 1; }
 body=$(field body); title=$(field title); head=$(field headRefOid); branch=$(field headRefName); base=$(field baseRefName)
-python3 -c '
-import re,sys
-missing=[n for n in ("Proof","Review") if not re.search(r"^## %s[^\n]*\n+(?!## )\S"%n, sys.argv[1], re.M)]
-if missing: sys.exit("PR body needs content under: "+", ".join("## "+n for n in missing))
-' "$body" || exit 1
+[ "$(field reviewDecision)" != CHANGES_REQUESTED ] || { echo "#$pr has changes requested"; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+printf '%s' "$body" > "$tmp/body"; gh pr diff "$pr" --repo "$gh" --name-only > "$tmp/files" || exit 1
+required=$(python3 "$here/pr_checks.py" "$head" "$tmp/body" "$tmp/files") || exit 1
+if [ -n "$required" ]; then echo "$required"; need_bot=true; fi
 if [ "$need_bot" = true ]; then
   read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
   [ "$sha" = "$head" ] || { echo "bot has not reviewed ${head:0:8} yet (last: ${sha:0:8} $status); comment '@codex review' if it stays quiet"; exit 7; }
@@ -43,6 +43,8 @@ for attempt in 1 2 3; do
     continue
   fi
   if [ "$check" = true ]; then echo "ready: #$pr ${head:0:8}"; exit 0; fi
+  # No branch protection on this plan, so narrow the window: main must still be what the gate tested.
+  [ "$(git ls-remote origin "refs/heads/$base" | cut -f1)" = "$main" ] || continue
   trailers=$(git log -1 --format='%(trailers:only,unfold)' "$head")
   message=$body; [ -z "$trailers" ] || message=$(printf '%s\n\n%s' "$body" "$trailers")
   gh pr merge "$pr" --repo "$gh" --squash --subject "$title (#$pr)" --body "$message" --match-head-commit "$head" >/dev/null || { echo "merge refused; retrying if $base moved"; sleep 5; continue; }

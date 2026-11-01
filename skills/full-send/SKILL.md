@@ -74,9 +74,10 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    then `no-comments` (`comment-sicko`), then your own read for dead code and needless guards.
 3. **Review** (see `review-loop`): Composer bug pass, then Astra, each a
    `delegate_task` whose brief names Sol's worktree path. Claude takes the final
-   call, Sol fixes once through a new `delegate_task` naming the same path, and
-   Claude verifies each fix. Skip the fix pass if Astra approved cleanly. If any
-   step is skipped, the PR's `## Review` section says so and why.
+   call, Sol fixes once through a new `delegate_task` naming the same path, a fix that
+   changes behaviour goes back to Astra for the changed code, and Claude verifies each
+   fix. Skip the fix pass if Astra approved cleanly. If any step is skipped, the PR's
+   `## Review` section says "skipped" and why, and `sid-merge.sh` then requires the bot.
 4. **Prove it.** Run the real thing (see "Proof"). The author doesn't verify its own
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
    PR's `## Proof` section, naming the commit it covers: commands, pass counts,
@@ -85,15 +86,18 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
 5. **Ship.** Claude commits in the worktree and pushes with `--force-with-lease`.
    Run `sid-gate.sh <branch>` under `systemd-run --user` when available, so a T3
    restart doesn't kill it, and wait with a background check and
-   `t3_background_wait`. Open the PR (`file-pr`), `link_pull_request`, then
-   `watch_pull_request`, and end the turn.
-6. **Risky PRs only: ask the PR bot.** For auth, payments, data, migrations, or a PR
-   that skipped a review step, comment `@codex review` and merge with `--bot`. Findings:
+   `t3_background_wait`. Open the PR (`file-pr`) and `link_pull_request`.
+   If it needs the PR bot, `watch_pull_request` and end the turn. If not, go straight to
+   step 7: with no CI and no bot, nothing would wake you.
+6. **Risky PRs only: ask the PR bot.** For auth, payments, data, migrations, `commerce/`,
+   the gate, or a PR that skipped a review step, comment `@codex review`. `sid-merge.sh`
+   works out most of these from the paths and forces it; add `--bot` for what it can't see. Findings:
    Claude triages per `<pstack>/skills/poteto-mode/references/bugbot-triage.md` (fix,
    dismiss with a reason, or ask); noise doesn't get code. Sol fixes once, Claude verifies,
    push, resolve the threads. On any PR, conflicts: merge the default branch in the
    worktree and gate again.
-7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is really ready, reruns the
+7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is really ready (`## Proof` must
+   name the head commit, so a later push needs fresh proof), reruns the
    gate if the default branch moved, squash-merges using the PR body as the commit
    message, and removes the worktree and branch. Then `unwatch_pull_request`.
 8. **Check it live** once deployed, then report: the PR link, the merge commit,
@@ -177,10 +181,10 @@ Keep the tests that do both; rewrite or delete the rest.
 Full confidence means all of these are true on the latest commit:
 
 - Your proof covers every change in the diff.
-- Required checks are green.
+- Required checks are green, if the repo has any.
 - Each review finding is fixed or dismissed with a written reason. The `pr bot` in
-  `models.md` runs on request for risky PRs; then `sid-merge.sh --bot` requires its
-  review of the head commit. Open bot threads block any merge.
+  `models.md` reviews risky PRs, and `sid-merge.sh` requires its review of the head
+  commit for those. Open bot threads block any merge.
 - The deploy gate passed on the head merged onto the latest default branch.
 - No human review still requests changes.
 - The branch is up to date with the default branch, and GitHub reports it as

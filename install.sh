@@ -31,4 +31,10 @@ done
 for dir in "$HOME/.claude/agents" "$HOME/.claude_2/agents" "$HOME/.config/opencode/agents"; do
   mkdir -p "$dir"; [ -d "$P/agents" ] && for a in "$P"/agents/*.md; do ln -sfn "$a" "$dir/$(basename "$a")"; done
 done
+# Kanzo card tags refresh on a timer.
+if command -v systemctl >/dev/null 2>&1 && command -v kanzo >/dev/null 2>&1; then
+  mkdir -p "$HOME/.config/systemd/user"
+  cp "$S"/systemd/sid-card.service "$S"/systemd/sid-card.timer "$HOME/.config/systemd/user/"
+  systemctl --user daemon-reload && systemctl --user enable --now sid-card.timer >/dev/null 2>&1
+fi
 echo "sidstack: $(ls "$S/skills" | wc -l) skills linked; pstack: $(ls "$P/skills" 2>/dev/null | wc -l) skills linked; models at ~/.claude/rules/sidstack-models.md"

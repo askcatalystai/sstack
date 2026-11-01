@@ -18,13 +18,13 @@ sstack is three things on T3 Code:
 
 - `sid mode <task>`: matches a playbook, runs it with my roles and gates.
 - `full send` / `full stop`: one change to a merged / ready PR.
-- `council` / `council plan`: seven-seat council review (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek); a plan doc worked to merged PRs through T3.
+- `council` / `council plan`: seven seats for big plans, three for smaller ones; one plan doc worked to merged PRs through T3.
 - `review loop` (Astra) / `sol loop` (Sol).
 - `/setup-sidstack`: change a model, smoke-test it, relink.
 
 ## Roles
 
-See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Muse reviews first and Astra consolidates its findings into one list; every model runs as a subagent; the Codex GitHub bot reviews every PR and merges wait for it; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.
+See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Composer runs a bug pass and Astra reviews, returning one list; every model runs as a subagent; the Codex GitHub bot reviews risky PRs; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.
 
 ## Install
 

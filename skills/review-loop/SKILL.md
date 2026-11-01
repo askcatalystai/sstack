@@ -13,10 +13,7 @@ gate or a wrong shipped doc blocks; the rest is a follow-up or gets declined.
 
 ## The sequence
 
-Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
-One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
-
-Default (user, 2026-11-01): Sol builds → **bug pass** (Composer) → Astra reviews → the orchestrator takes the final call → Sol fixes once → the orchestrator verifies → PR → PR bot → Sol fixes bot findings → merge → live check. No Muse panel per PR. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
+Sol builds → **bug pass** (Composer) → **Astra** reviews and returns one list → the orchestrator takes the final call → Sol fixes once → **a fix that changes behaviour goes back to Astra**, for the changed code only (user, 2026-11-01) → the orchestrator verifies → PR → merge → live check. The PR bot joins on risky PRs. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
 
 1. **Bug pass** (`bug pass` in models.md, Cursor Composer 2.5, started with `options: { fastMode: "false" }` — Plus rejects Composer without it), before any review. It follows pstack's poteto-mode bug-fix playbook (`~/.local/share/pstack-src/pstack/skills/poteto-mode/playbooks/bug-fix.md`) and the fix-root-causes principle, applied to the change:
    - **Hunt:** read the diff and the code it touches; list candidate defects (correctness, races, data loss, security/privacy, auth, idempotency, error paths, regressions in callers).
@@ -25,26 +22,23 @@ Default (user, 2026-11-01): Sol builds → **bug pass** (Composer) → Astra rev
    - **Fix minimally:** the smallest change the evidence justifies, failing test first, then the fix; revert anything a refuted hypothesis motivated.
    - **Adversarial fixtures:** equal timestamps, ids that sort differently from time, empty and huge inputs, malformed config (could an error print a secret?). A fixture that spaces everything neatly hides ordering bugs (PR 54, 2026-11-01).
    - **Report**: each finding with repro command, failing-then-passing output, root cause, fix; and a list of hypotheses it ruled out. It never commits or pushes.
-   If the bug pass can't run (provider error), retry once, then say so in the PR's `## Review` section and go on to Astra.
+   If the bug pass can't run (provider error), retry once, then write it as skipped in the PR's `## Review` section and go on to Astra. `sid-merge.sh` then requires the PR bot.
 2. **Astra reviews** (`reviewer`) the change including the bug-pass fixes and report: confirms, rejects with evidence, or adds what was missed,, and returns one list.
 3. **The orchestrator takes the final call** on Astra's list (ledger: accepted, or declined with a reason) and reads the diff for slop.
 4. **Sol fixes once**: every accepted finding in one brief.
-5. **The orchestrator verifies each fix** (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote). Each finding and its outcome goes in the PR's `## Review` section.
+5. **Fixes get reviewed.** A fix that changes behaviour goes back to Astra with the original finding and the changed code only. The orchestrator verifies every fix (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote). Each finding and its outcome goes in the PR's `## Review` section.
 6. File the PR. For a risky PR, ask the **PR bot** (Codex GitHub bot) with `@codex review`; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), Sol fixes the accepted ones, the orchestrator resolves the threads and pushes.
 
-If Astra approves with no blocker or should, steps 4 and 5 are skipped.
+If Astra approves with no blocker or should, steps 4 and 5 don't apply.
 
 ## Rules
 
 - **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, Composer and Astra, one subagent per job, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`).
 - Astra gets the brief plus the bug-pass report.
-  A diff over ~20 files is split by area, one brief per area. Never send secrets or customer data (Muse trains on
-  requests).
-- A reviewer that times out or errors is noted in the ledger and the
-  round goes on without it.
+  A diff over ~20 files is split by area, one brief per area. Never send secrets or customer data.
+- A reviewer that times out or errors is retried once. If it still fails, write it as skipped in `## Review`, which requires the PR bot.
 - Reviewers must not start subagents or reviewers.
-- Keep one ledger across all rounds: id, source (Muse/Astra/bot),
-  round, severity, outcome. Never guess usage.
+- Keep one list of findings in `## Review`: source, severity, outcome. Never guess usage.
 
 ## 1. Scope
 
@@ -75,14 +69,12 @@ only if exposed. Use `delegate_task` every round (`role: "review"`,
 `childThreadId` is storage, not the next target. Do not use
 `t3_thread_send`, `create_threads`, or `t3_thread_launch` for review.
 
-If T3 tools are not listed, try one direct capability call. Outside T3, run
-a Codex reviewer with `codex exec -m <model> -c model_reasoning_effort=<effort>
---sandbox read-only`. If no route runs the reviewer, report the blocker. Do not
+If T3 tools aren't listed, try one direct capability call. If no route runs the reviewer, report the blocker. Do not
 substitute a model.
 
 Do not edit scoped files while review runs. Wait for the notice. Do not
 poll or start a second reviewer. Timeout, error, or no reply is not
-approval. On failure, cancel, verify stop, restart with the ledger.
+approval.
 
 Round 1 brief (T3 children get no history):
 
@@ -116,29 +108,12 @@ small cost is a nit, whatever label it came with.
 Update the ledger. Re-run checks and `git diff --shortstat <base>`. If
 review grew the diff, cut first. Do not agree just to end the loop.
 
-## 4. Next round
+## 4. Re-review fixes
 
-Start one only if budget remains and a blocker or should is open, behavior code
-changed, or approval does not cover the current behavior diff. Use a fresh
-`delegate_task` in T3, or follow up the saved native ID. Send the round 1 brief,
-the ledger (`fixed:` / `disagree:` / `declined:` + evidence), the same base
-diff, and the change since last round. Tell the reviewer: open ids and changed code only.
-Mark each old id `resolved` or `still open: <reason>`.
+After Sol's fix, a behaviour change gets a fresh `delegate_task` to Astra with the round 1 brief, the findings and their outcomes (`fixed:` / `disagree:` / `declined:` + evidence), and the change since the last review. Tell it: open ids and changed code only. A fix with no behaviour change, such as a rename or a deleted comment, skips this. Sol doesn't get a third pass: two failures means the `Scrap` section in `full-send`.
 
-## 5. Stop and ship
+## 5. Stop
 
-Agreed: APPROVE on the current behavior diff, no blocker or should open,
-no concern of your own. Stuck: an item stays disputed after two replies,
-or budget ends. Show both sides in 2-3 lines each. The user decides.
-Budget end is not approval.
+Agreed: APPROVE on the current behaviour diff, no blocker or should open, no concern of your own. If an item stays disputed after two replies, show both sides in 2-3 lines each, and the user decides.
 
-Do not push during the loop. Push after agreement only if the user asked
-to push, ship, or update the PR. If you push to a PR, add above the model
-blurb:
-
-`Reviewed with review-loop: <N> rounds with <model>. Verdict: approved`.
-
-Add `on <effort>` only if verified.
-
-Report: rounds, model, what the review changed, diff size before/after, fixed and
-declined findings with reasons, usage if exposed (else say not), pushed or not.
+Report: rounds, what the review changed, diff size before and after, fixed and declined findings with reasons.

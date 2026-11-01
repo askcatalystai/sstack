@@ -12,13 +12,14 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - hardest tasks: codex / gpt-6.1-sol / xhigh
 - bug pass: cursor / composer-2.5 / fastMode=false (first, before any review; pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix; user 2026-11-01)
 - review panel: none (user 2026-11-01: Sol → bug pass → Astra directly; Muse stays on the council)
-- reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; Claude takes the final call, Sol fixes once)
+- reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; Claude takes the final call, Sol fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
 - pr bot: chatgpt-codex-connector (GitHub app; on request only since user 2026-11-01: comment `@codex review` on risky PRs, such as auth, payments, data, migrations or a PR that skipped review, then merge with `sid-merge.sh --bot`; open bot threads always block)
 - judgment and prose: claudesahitya / claude-opus-5-5 / medium
 
 ## Panels (one subagent per entry)
 
 - council: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; codex / gpt-6-astra / medium; codex / gpt-6.1-terra / high; cursor / composer-2.5 / fastMode=false; opencode / opencode-go/muse-spark-1.3-contributor / high; opencode / opencode-go/deepseek-v4.1-flash / high (seven seats, user 2026-11-01; every seat plans the whole brief, no per-seat categories; the orchestrator synthesises and leads UI and UX itself)
+- council small: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; cursor / composer-2.5 / fastMode=false (smaller plans, user 2026-11-01)
 - interrogate reviewers: opencode / opencode-go/deepseek-v4.1-flash / low; opencode / opencode-go/muse-spark-1.3-contributor / high; codex / gpt-6.1-sol / high
 - arena runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
 - architect runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high

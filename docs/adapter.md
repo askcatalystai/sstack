@@ -43,6 +43,14 @@ Verification swarms stay on `swarm workers`. Keep a panel's families distinct, s
 | Task model slugs, `pstack-models.mdc` | `models.md` roles. `install.sh` writes `~/.claude/rules/pstack-models.md` from it, so pstack skills read your roles directly. Don't edit that file by hand. |
 | Cursor Automations, cloud-agent dashboards | Skip with one line: `Skipped here: <step>. <reason>.` |
 
+## Playbook steps that change here
+
+| pstack step | Here |
+| --- | --- |
+| `architect` running `arena` as a matter of course (Feature step 2) | A single design sketch. Use `arena` only for a contested design or when the user asks; it's too heavy for this machine on small PRs. |
+| Bug fix step 5, committing the failing repro first | Sol doesn't commit. Put the failing-then-passing output in `## Proof`. Claude may commit the test first when it's cheap to split. |
+| Verifier swarm on each PR | The bug pass and Claude, on the real surface. The author never verifies itself. |
+
 ## Paths
 
 `<pstack>` is `~/.local/share/pstack-src/pstack`. `<sidstack>` is `~/.local/share/sidstack`. Transcripts live in `~/.claude/projects/<slug>/` and `~/.claude_2/projects/<slug>/`.

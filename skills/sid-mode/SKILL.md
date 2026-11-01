@@ -18,10 +18,10 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 - **Claude (orchestrator)** reads, plans, briefs, reviews every diff line by line, runs the checks, tests in the real app, files and merges PRs, and reports. Claude doesn't take a subagent's summary on trust: read the diff, rerun the checks outside the subagent's sandbox.
 - **Implementer** (Sol) writes the code, one PR per brief, in a T3 worktree (`delegate_task` with `isolation: "worktree"`). Never commits or pushes.
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
-- **Reviews** run through `review-loop`: the Composer bug pass first, then Astra reviews with its report and returns one list. Claude takes the final call on it and on slop, Sol fixes once, Claude verifies each fix and approves.
+- **Reviews** run through `review-loop`: the Composer bug pass first, then Astra reviews with its report and returns one list. Claude takes the final call on it and on slop, Sol fixes once, a behaviour change goes back to Astra, and Claude verifies each fix.
 - **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command.
 - **PR bot** (Codex GitHub bot) reviews risky PRs on request. Open bot threads block a merge.
-- **Council** (Claude, Sol, Astra, Terra, Composer, Muse, DeepSeek) for plans, contested designs and UX reviews, through `council`.
+- **Council** for initial planning through `council`: seven seats for big plans, three for smaller ones (`models.md`).
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it in memory if it's lasting.
 
 ## Playbooks
@@ -53,11 +53,8 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 
 ## Gates (every PR)
 
-Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix), then Astra reviews and returns one list; the orchestrator takes the final call, Sol fixes once, the orchestrator verifies and approves.
-One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
-
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, lint, with no new failures against main.
-2. `no-comments` and a slop pass, then `review-loop`: bug pass, then Astra; Claude takes the final call, Sol fixes once, Claude verifies each fix. Decline nits with a reason. Work that doesn't earn its place gets scrapped, not patched.
+2. `no-comments` and a slop pass, then `review-loop`: bug pass, then Astra; Claude takes the final call, Sol fixes once, behaviour changes go back to Astra, Claude verifies each fix. Decline nits with a reason. Work that doesn't earn its place gets scrapped, not patched.
 3. Behavioural verification before the PR: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. The author doesn't verify its own work. It goes in the PR's `## Proof` section, naming the commit it covers.
 4. The gate (`sid-gate.sh <branch>`): the default branch plus the branch, running the repo's `.sidstack/gate.sh`, which must include tests.
 5. Open the PR (`file-pr`), link and watch it in T3. Risky PRs ask the bot; fix real P0/P1 and real P2 bug findings, resolve the rest with a reason.

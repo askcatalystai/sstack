@@ -11,9 +11,9 @@ fixes until reviews return. If the user wants to discard the implementation
 and explore new ideas, skip fixes to code being replaced.
 
 Bring in delegates to help with the user's request, usually for review or
-feedback. The seats are the `council` line in
-`~/.local/share/sidstack/models.md`, one delegate per seat at the effort it
-names. If the user names other members for a run, use those. Plan PRs use the
+feedback. The seats are in `~/.local/share/sidstack/models.md`: the `council` line for
+big plans, the `council small` line for smaller ones, one delegate per seat at the
+effort it names. If the user names other members for a run, use those. Plan PRs use the
 `implementer` and `reviewer` roles from the same file. The council plans once, at
 the start. It doesn't review each PR.
 
@@ -52,9 +52,8 @@ If a delegate gives no score, write `no score`. Do not invent one.
 If the PR is open, edit the description. Do not post a comment for this.
 If there is no PR, put the same results in the final reply only.
 
-If you agree with their recommendations, make the changes and request a fresh
-review after. Continue this process until all delegates are satisfied with the
-outcome.
+If you agree with their recommendations, make the changes. Ask for a fresh round only if
+a decision is still contested. A plan gets one round unless the user asks for more.
 
 Do not let repeated reviews result in scope creep. It is your job to fight to
 keep scope limited.
