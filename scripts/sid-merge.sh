@@ -50,7 +50,8 @@ for attempt in 1 2 3 4; do
   if [ "$check" = true ]; then echo "ready: #$pr ${head:0:8}"; exit 0; fi
   # No branch protection on this plan, so narrow the window: main must still be what the gate tested.
   [ "$(git ls-remote origin "refs/heads/$base" | cut -f1)" = "$main" ] || continue
-  trailers=$(git log -1 --format='%(trailers:only,unfold)' "$head")
+  # Across the branch, because the head can be a merge commit with no trailers of its own.
+  trailers=$(git log "origin/$base..$head" --format='%(trailers:only,unfold)' | sed '/^$/d' | sort -u)
   message=$body; [ -z "$trailers" ] || message=$(printf '%s\n\n%s' "$body" "$trailers")
   gh pr merge "$pr" --repo "$gh" --squash --subject "$title (#$pr)" --body "$message" --match-head-commit "$head" >/dev/null || { echo "merge refused; retrying if $base moved"; sleep 5; continue; }
   echo "merged #$pr: $(gh pr view "$pr" --repo "$gh" --json mergeCommit -q .mergeCommit.oid)"
