@@ -1,0 +1,352 @@
+From 97c04f804e18128be03e7063a14c15fdf48f4212 Mon Sep 17 00:00:00 2001
+From: EcommerceX <160156728+askcatalystai@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 23:38:05 +0530
+Subject: [PATCH] Add deployment column and styled agent labels for local build
+
+Show PR numbers on cards and disable upstream update installation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/app.js     | 69 +++++++++++++++++++++++++++-----------------------
+ src/home.rs    |  4 +--
+ src/index.html | 44 +++++++++++++++++++++++++++++---
+ src/main.rs    |  3 +++
+ src/mcp.rs     |  4 +--
+ src/store.rs   | 21 ++++++++++++---
+ src/update.rs  |  6 +++++
+ 7 files changed, 110 insertions(+), 41 deletions(-)
+
+diff --git a/src/app.js b/src/app.js
+index df44a47..5adacde 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -16,7 +16,7 @@ if (!HTMLFormElement.prototype.requestSubmit) {
+ }
+ 
+ const $ = (sel, root = document) => root.querySelector(sel);
+-const STATUS_COLORS = ["#8a8a83", "#3b82f6", "#e8a317", "#2f9e44", "#ae3ec9", "#e8590c"];
++const STATUS_COLORS = ["#8a8a83", "#3b82f6", "#e8a317", "#ae3ec9", "#2f9e44", "#e8590c"];
+ 
+ const state = {
+   project: "all",        // slug or "all"
+@@ -56,7 +56,14 @@ function el(tag, attrs = {}, ...children) {
+ }
+ 
+ // Line icons (from Lucide, ISC licence), drawn in the text colour.
++// Provider glyphs are simple local drawings, not brand logos.
+ const ICONS = {
++  codex: '<path d="m8 6-6 6 6 6M16 6l6 6-6 6M14 4l-4 16"/>',
++  claude: '<path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M5.6 18.4 18.4 5.6"/>',
++  cursor: '<path d="m5 3 14 10-7 1-3 7Z"/>',
++  opencode: '<path d="m7 5-5 7 5 7M17 5l5 7-5 7M10 16l4-8"/>',
++  "codex-bot": '<rect x="4" y="6" width="16" height="14" rx="3"/><path d="M12 2v4M8 11h.01M16 11h.01M8 16h8"/>',
++  local: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+   newProject: '<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4Z"/>',
+   board: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7M12 7v4M16 7v9"/>',
+   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+@@ -536,7 +543,6 @@ function renderColumns() {
+ 
+   // During a drag the DOM is being moved by hand; refresh once it ends.
+   if (state.dragging) return;
+-  const all = state.project === "all";
+   for (const status of statuses) {
+     const col = columns.querySelector(`[data-status="${CSS.escape(status)}"]`);
+     const mine = tasks.filter((t) => t.status === status);
+@@ -548,7 +554,7 @@ function renderColumns() {
+     const more = hidden
+       ? el("button", { class: "ghost more", onclick: () => { state.allDone = true; loadBoard(); } }, `Show ${hidden} older`)
+       : null;
+-    col.querySelector(".cards").replaceChildren(...[more].filter(Boolean), ...mine.map((t) => card(t, all)));
++    col.querySelector(".cards").replaceChildren(...[more].filter(Boolean), ...mine.map((t) => card(t)));
+   }
+ }
+ 
+@@ -594,17 +600,37 @@ function plainText(md) {
+     .trim();
+ }
+ 
+-function card(t, showProject) {
++const PROVIDERS = ["codex", "claude", "cursor", "opencode", "codex-bot", "local"];
++const EFFORTS = ["low", "medium", "high", "xhigh", "max", "fastmode-off"];
++
++function cardLabel(tag) {
++  if (PROVIDERS.includes(tag)) return { order: 0, className: `label provider-${tag}`, glyph: tag };
++  if (/^(gpt-|claude-|composer-|deepseek|muse|sid-gate|chatgpt-codex-connector)/.test(tag)) {
++    return { order: 1, className: "label label-model" };
++  }
++  if (EFFORTS.includes(tag)) return { order: 2, className: `label effort-${tag}` };
++  if (/^(?:<1m|\d+d(?: \d+h)?(?: \d+m)?|\d+h(?: \d+m)?|\d+m)$/.test(tag)) {
++    return { order: 3, className: "label label-elapsed" };
++  }
++  if (tag === "stale") return { order: 3, className: "label label-stale" };
++  if (tag === "new-comment") return { order: 4, className: "label label-comment", text: "new comment" };
++  return { order: 4, className: "" };
++}
++
++function card(t) {
++  const pr = t.tags.find((tag) => /^pr-\d+$/.test(tag));
++  const labels = t.tags.filter((tag) => !/^pr-\d+$/.test(tag))
++    .map((tag) => ({ tag, ...cardLabel(tag) }))
++    .sort((a, b) => a.order - b.order);
+   const node = el("div", { class: "card" + (state.task === t.id ? " open" : ""), draggable: "true", "data-id": t.id,
+                            onclick: () => openTask(t.id) },
+     el("div", { class: "head" },
+       el("div", { class: "title" }, t.title),
+-      // On "All projects" a dot in the project's colour tells the projects apart.
+       t.human ? el("span", { class: "human-mark", title: "Human task: agents skip it" }, icon("human")) : null,
+-      el("span", { class: "num", title: `Copy ${key(t)}`, onclick: (e) => { e.stopPropagation(); copyKey(key(t)); } },
+-        showProject ? el("span", { class: "dot", style: `background:${projectColor(t.project)}` }) : null, `#${t.id}`)),
++      pr ? el("span", { class: "num", title: `Pull request #${pr.slice(3)}` }, `#${pr.slice(3)}`) : null),
+     t.description ? el("div", { class: "desc" }, plainText(t.description)) : null,
+-    t.tags.length ? el("div", { class: "tags" }, t.tags.map((tag) => el("span", { class: "tag" }, tag))) : null);
++    labels.length ? el("div", { class: "tags" }, labels.map((label) =>
++      el("span", { class: `tag ${label.className}` }, label.glyph ? icon(label.glyph) : null, label.text || label.tag))) : null);
+   node.addEventListener("dragstart", (e) => {
+     state.dragging = t.id;
+     e.dataTransfer.effectAllowed = "move";
+@@ -1295,32 +1321,13 @@ async function checkUpdate() {
+   } catch {}
+ }
+ 
+-function showUpdate({ current, available }) {
+-  const button = $("#update");
+-  button.hidden = !available;
+-  if (!available) return;
+-  $("#update-label").textContent = `Update to ${available}`;
+-  button.title = `You have ${current}`;
+-  button.onclick = () => {
+-    if (confirm(`Update Kanzo from ${current} to ${available}? The board restarts, which takes a few seconds.`)) installUpdate(available);
+-  };
++function showUpdate() {
++  // Keep the upstream update offer hidden on this local patched build.
++  $("#update").hidden = true;
+ }
+ 
+ async function checkForUpdates() {
+-  toast("Checking for updates…");
+-  try {
+-    const status = await api("GET", "/update?now=1");
+-    showUpdate(status);
+-    if (status.available) {
+-      if (confirm(`Kanzo ${status.available} is out (you have ${status.current}). Download and install it now? The board restarts.`)) {
+-        installUpdate(status.available);
+-      }
+-    } else if (status.latest) {
+-      toast(`Kanzo is up to date (${status.current})`);
+-    } else {
+-      toast("Can't reach GitHub to check for updates");
+-    }
+-  } catch (err) { toast(err.message); }
++  toast("This is a local patched build; automatic updates are disabled.");
+ }
+ 
+ async function installUpdate(available) {
+diff --git a/src/home.rs b/src/home.rs
+index ebf57ac..0642492 100644
+--- a/src/home.rs
++++ b/src/home.rs
+@@ -225,7 +225,7 @@ mod tests {
+         let tmp = tempfile::tempdir().unwrap();
+         fs::write(tmp.path().join("config.toml"), "statuses = [\"todo\", \"doing\", \"done\"]\n").unwrap();
+         let home = Home::open(tmp.path().to_path_buf()).unwrap();
+-        assert_eq!(home.store().unwrap().statuses(), ["todo", "doing", "review", "done"]);
++        assert_eq!(home.store().unwrap().statuses(), ["todo", "doing", "review", "deployment", "done"]);
+     }
+ 
+     #[test]
+@@ -243,7 +243,7 @@ mod tests {
+         std::thread::sleep(Duration::from_millis(200));
+         assert!(!waiting.is_finished());
+         drop(lock);
+-        assert_eq!(waiting.join().unwrap().unwrap(), 4);
++        assert_eq!(waiting.join().unwrap().unwrap(), 5);
+     }
+ 
+     #[test]
+diff --git a/src/index.html b/src/index.html
+index 18dd793..07e616b 100644
+--- a/src/index.html
++++ b/src/index.html
+@@ -12,6 +12,15 @@
+   --text: #0d0d0d; --muted: #5d5d5d; --faint: #8f8f8f; --border: #e5e5e5; --card-border: #ebebeb;
+   --accent: #0d0d0d; --accent-text: #ffffff; --danger: #dc2626; --danger-bg: rgba(220, 38, 38, .08);
+   --link: #2563eb; --code: #f2f2f2; --shadow: 0 10px 30px rgba(0,0,0,.12);
++  --pill-green-bg: #e5f3eb; --pill-green-text: #236044;
++  --pill-orange-bg: #fbece3; --pill-orange-text: #91451c;
++  --pill-blue-bg: #e8effc; --pill-blue-text: #305a9b;
++  --pill-cyan-bg: #e0f3f4; --pill-cyan-text: #23646a;
++  --pill-rose-bg: #f9e8ee; --pill-rose-text: #903c59;
++  --pill-neutral-bg: #eeeeef; --pill-neutral-text: #51515b;
++  --pill-violet-bg: #f0eafa; --pill-violet-text: #694394;
++  --pill-warning-bg: #fff0d4; --pill-warning-text: #805210;
++  --effort-text: #305a9b; --effort-1: #f0f5fc; --effort-2: #e8effc; --effort-3: #dfe9fa; --effort-4: #d3e1f7; --effort-5: #c8daf4;
+   color-scheme: light dark;
+ }
+ @media (prefers-color-scheme: dark) {
+@@ -20,6 +29,15 @@
+     --field: #171717; --hover: #1a1a1a; --active: #242424; --menu: #1c1c1c;
+     --text: #ececec; --muted: #a1a1a1; --faint: #6e6e6e; --border: #1f1f1f; --card-border: transparent;
+     --accent: #ffffff; --accent-text: #000000; --danger: #f87171; --danger-bg: rgba(248, 113, 113, .1);
++    --pill-green-bg: #18362a; --pill-green-text: #9ed8b8;
++    --pill-orange-bg: #3d281c; --pill-orange-text: #f2bd98;
++    --pill-blue-bg: #1e2d46; --pill-blue-text: #aecafa;
++    --pill-cyan-bg: #173438; --pill-cyan-text: #9bd7dd;
++    --pill-rose-bg: #3b222d; --pill-rose-text: #edb0c4;
++    --pill-neutral-bg: #2b2b30; --pill-neutral-text: #c3c3cd;
++    --pill-violet-bg: #30243e; --pill-violet-text: #d0b5ed;
++    --pill-warning-bg: #3e301a; --pill-warning-text: #edca88;
++    --effort-text: #bbd4fa; --effort-1: #1c2738; --effort-2: #213049; --effort-3: #263953; --effort-4: #2b425d; --effort-5: #304b68;
+     --link: #7ab7ff; --code: #1c1c1c; --shadow: 0 10px 30px rgba(0,0,0,.6);
+   }
+ }
+@@ -180,12 +198,32 @@ header .repo-link .icon svg { width: 14px; height: 14px; }
+ .card .title { overflow-wrap: anywhere; flex: 1; min-width: 0; }
+ .card .num {
+   display: inline-flex; align-items: center; gap: 5px; flex: none; margin-top: 2px;
+-  color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; cursor: copy;
++  color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums;
+ }
+-.card .num:hover, #p-key:hover { color: var(--text); }
++#p-key:hover { color: var(--text); }
+ #p-key { cursor: copy; }
+-.card .num .dot { width: 6px; height: 6px; }
+ .card .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
++/* Card labels keep tag strings unchanged; only their presentation is typed. */
++.card .label { background: var(--pill-bg); color: var(--pill-text); }
++.card .label .icon svg { width: 12px; height: 12px; }
++.provider-codex { --pill-bg: var(--pill-green-bg); --pill-text: var(--pill-green-text); }
++.provider-claude { --pill-bg: var(--pill-orange-bg); --pill-text: var(--pill-orange-text); }
++.provider-cursor { --pill-bg: var(--pill-blue-bg); --pill-text: var(--pill-blue-text); }
++.provider-opencode { --pill-bg: var(--pill-cyan-bg); --pill-text: var(--pill-cyan-text); }
++.provider-codex-bot { --pill-bg: var(--pill-rose-bg); --pill-text: var(--pill-rose-text); }
++.provider-local { --pill-bg: var(--pill-neutral-bg); --pill-text: var(--pill-neutral-text); }
++.label-model { --pill-bg: var(--pill-violet-bg); --pill-text: var(--pill-violet-text); }
++.label-elapsed { --pill-bg: var(--pill-neutral-bg); --pill-text: var(--pill-neutral-text); }
++.label-stale { --pill-bg: var(--pill-warning-bg); --pill-text: var(--pill-warning-text); }
++.label-comment { --pill-bg: var(--pill-cyan-bg); --pill-text: var(--pill-cyan-text); }
++[class*="effort-"] { --pill-text: var(--effort-text); }
++.effort-low { --pill-bg: var(--effort-1); }
++.effort-medium { --pill-bg: var(--effort-2); }
++.effort-high { --pill-bg: var(--effort-3); }
++.effort-xhigh { --pill-bg: var(--effort-4); }
++.effort-max { --pill-bg: var(--effort-5); }
++.effort-fastmode-off { --pill-bg: var(--effort-5); }
++.label-elapsed { font-variant-numeric: tabular-nums; }
+ .card .human-mark { flex: none; margin-top: 1px; color: var(--muted); display: inline-flex; }
+ .card .human-mark .icon svg { width: 15px; height: 15px; }
+ /* An on/off switch, for the Human field. */
+diff --git a/src/main.rs b/src/main.rs
+index 99a8f5d..b9448f1 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -147,6 +147,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
+ /// `kanzo update`: installs the latest release over this program, then restarts the
+ /// board's service, if there is one, so it runs the new version too.
+ fn update_kanzo() -> anyhow::Result<()> {
++    if update::LOCAL_PATCHED {
++        anyhow::bail!(update::PATCHED_MESSAGE);
++    }
+     let Some(latest) = update::latest(true) else {
+         anyhow::bail!("can't reach GitHub to check for updates");
+     };
+diff --git a/src/mcp.rs b/src/mcp.rs
+index 6f1e5ef..5e0bacf 100644
+--- a/src/mcp.rs
++++ b/src/mcp.rs
+@@ -182,7 +182,7 @@ struct CreateTaskArgs {
+     project: Option<String>,
+     /// Comma-separated.
+     tags: Option<String>,
+-    /// Column; defaults to todo.
++    /// Column: todo, doing, review, deployment or done (also backlog when enabled); defaults to todo.
+     status: Option<String>,
+ }
+ 
+@@ -194,7 +194,7 @@ struct UpdateTaskArgs {
+     title: Option<String>,
+     /// Markdown.
+     description: Option<String>,
+-    /// Column, like review.
++    /// Column: todo, doing, review, deployment or done (also backlog when enabled).
+     status: Option<String>,
+     /// Comma-separated; "" clears.
+     tags: Option<String>,
+diff --git a/src/store.rs b/src/store.rs
+index cfc11aa..ee39eae 100644
+--- a/src/store.rs
++++ b/src/store.rs
+@@ -164,7 +164,7 @@ pub struct TaskPatch {
+ 
+ /// The board's columns, left to right. New tasks go in todo, agents take theirs from
+ /// there and move them to doing, and tasks in done count as done.
+-const STATUSES: [&str; 4] = ["todo", "doing", "review", "done"];
++const STATUSES: [&str; 5] = ["todo", "doing", "review", "deployment", "done"];
+ 
+ /// An optional column before todo, for tasks that agents leave alone.
+ pub const BACKLOG: &str = "backlog";
+@@ -201,7 +201,7 @@ impl Store {
+     }
+ 
+     fn done_status(&self) -> &str {
+-        STATUSES[3]
++        STATUSES[STATUSES.len() - 1]
+     }
+ 
+     /// Shows or hides the backlog column. It must be empty to hide it, or its
+@@ -1303,13 +1303,28 @@ mod tests {
+         assert_eq!(s.get_task(human.id).unwrap().status, "todo");
+     }
+ 
++    #[test]
++    fn deployment_precedes_done_and_accepts_tasks() {
++        let (_dir, s) = store();
++        assert_eq!(s.statuses(), ["todo", "doing", "review", "deployment", "done"]);
++        assert_eq!(s.done_status(), "done");
++        let p = s.create_project("api", "", None).unwrap();
++        let t = s.create_task_in(p.id, Some("deployment"), "Ship it", "").unwrap();
++        assert_eq!(t.status, "deployment");
++        let t = s.update_task(t.id, TaskPatch { status: Some("review".into()), ..Default::default() }).unwrap();
++        assert_eq!(
++            s.update_task(t.id, TaskPatch { status: Some("deployment".into()), ..Default::default() }).unwrap().status,
++            "deployment"
++        );
++    }
++
+     #[test]
+     fn backlog_is_a_column_agents_skip() {
+         let (dir, s) = store();
+         assert_eq!(s.statuses(), STATUSES);
+         s.set_backlog(true).unwrap();
+         let s = Store::open(&dir.path().join("kanzo.db"), None).unwrap();
+-        assert_eq!(s.statuses(), ["backlog", "todo", "doing", "review", "done"]);
++        assert_eq!(s.statuses(), ["backlog", "todo", "doing", "review", "deployment", "done"]);
+         let api = s.create_project("api", "", None).unwrap();
+         let backlog = s.create_task_in(api.id, Some("backlog"), "later", "").unwrap();
+         assert_eq!(backlog.status, "backlog");
+diff --git a/src/update.rs b/src/update.rs
+index 49a1c73..a8e6496 100644
+--- a/src/update.rs
++++ b/src/update.rs
+@@ -9,6 +9,9 @@ use std::process::{Command, Stdio};
+ use std::sync::Mutex;
+ use std::time::{Duration, Instant};
+ 
++pub const LOCAL_PATCHED: bool = true;
++pub const PATCHED_MESSAGE: &str = "This is a local patched build; automatic updates are disabled.";
++
+ pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
+ 
+ /// Where releases are published; `KANZO_RELEASES_URL` points elsewhere, for tests.
+@@ -56,6 +59,9 @@ pub fn newer(version: &str) -> bool {
+ /// Runs the latest release's installer over this program and returns its path,
+ /// ready to restart.
+ pub fn install() -> Result<PathBuf, String> {
++    if LOCAL_PATCHED {
++        return Err(PATCHED_MESSAGE.into());
++    }
+     let exe = std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| e.to_string())?;
+     // The installer writes to <dir>/bin, so it can only replace a program kept in a bin folder.
+     let dir = match exe.parent() {
+-- 
+2.56.0
+
