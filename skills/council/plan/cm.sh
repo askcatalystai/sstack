@@ -10,6 +10,7 @@
 #   cm.sh new <n> [task.md]            worktree + branch for PR <n>, from origin/<default>; adhoc plans need task.md
 #   cm.sh implement <n> [--effort L] [--hardest] [extra.md...]  write the implementer's brief; the orchestrator runs it as a subagent
 #   cm.sh implemented <n>              record that the implementer subagent wrote runs/pr<n>.report
+#   cm.sh bugpass <n> start|done|failed  record the Cursor Composer bug pass (before Astra) as its own board job
 #   cm.sh stop <n> [reason]            mark a PR stopped (not active) and close its running jobs
 #   cm.sh adopt <n>                   explicitly take over the current origin branch SHA
 #   cm.sh verify <n>                  bind runs/pr<n>.proof to the current change
@@ -268,6 +269,19 @@ EOF
   echo "subagent: implementer $provider / $model / $impl_effort"
   echo "brief: $P"
   echo "then: cm implemented $n";;
+
+bugpass)
+  # Records the Cursor Composer bug pass (runs before Astra) as its own job on the board.
+  # cm bugpass <n> start|done|failed   (the orchestrator runs the subagent; this only records it)
+  n=${1:?plan PR number}; act=${2:-start}
+  log="$S/runs/pr$n.bugpass"
+  read -r prov model effort < <(python3 "$SKILL/models.py" "${SIDSTACK_MODELS:-$HOME/.local/share/sidstack/models.md}" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("bug pass") or [{"provider":"cursor","model":"composer-2.5","effort":"-"}]; e=d[0]; print(e["provider"], e["model"], e["effort"])')
+  case $act in
+    start) COUNCIL_STATE="$S" job "pr$n-bugpass" "$n" bugpass "$prov" "$model" "$effort" running "$log"; setst "$n" "bug pass";;
+    done|failed) COUNCIL_STATE="$S" job "pr$n-bugpass" "$n" bugpass "$prov" "$model" "$effort" "$act" "$log";;
+    *) die "cm bugpass <n> start|done|failed";;
+  esac
+  echo "PR $n bug pass: $act";;
 
 implemented)
   n=${1:?plan PR number}
