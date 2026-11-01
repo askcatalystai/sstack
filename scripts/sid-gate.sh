@@ -15,6 +15,8 @@ exec 9>"$common/sid-gate/lock"; flock 9
 git -C "$repo" fetch -q origin "$base" "$branch" || { echo "cannot fetch $branch; push it first"; exit 1; }
 main=$(git -C "$repo" rev-parse "origin/$base")
 head=$(git -C "$repo" rev-parse "origin/$branch")
+# A rerun that fails or dies must not leave an older pass standing.
+rm -f "$common/sid-gate/$head"
 [ -d "$verify" ] || git -C "$repo" worktree add -q --detach "$verify" "$main" || exit 1
 out=$(git -C "$verify" merge-tree --write-tree "$main" "$head") || { echo "conflicts with $base: merge origin/$base into $branch, then gate again"; exit 3; }
 # A gate killed midway leaves files behind, so start clean.

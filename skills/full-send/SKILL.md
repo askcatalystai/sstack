@@ -60,7 +60,8 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    through `docs/adapter.md`. For nontrivial work, use `how` first and name the data shape;
    for code crossing a function boundary, use `architect`. Skip a step only by saying why.
    If an answer is a fact you can observe by running something, sketch it instead of asking.
-2. **Brief and code.** The brief has the user's goal in their words, the smallest change
+2. **Brief and code.** Anything a user can see follows the `ui-lead` skill: Opus designs
+   and writes it, not Sol. Otherwise the brief has the user's goal in their words, the smallest change
    that meets it, the evidence that proves it's done, the area to work in, and any files
    parallel PRs own. It tells the worker to follow that playbook and the Tests section
    below. Use `delegate_task` on the implementer role with `isolation: "worktree"`.

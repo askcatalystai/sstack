@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # sid-merge [--check] [--bot] <pr>: merge a PR only when it is really ready, then remove its worktree and branch.
-# Ready means: open, not a draft, no changes requested; "## Proof" names the head commit and "## Review" has content;
+# Ready means everything in pr_checks.py: open, mergeable, checks passed, no changes requested, real Proof and Review;
 # no open PR bot threads; the PR bot finished on the head commit if it's needed: with --bot, a risky path, or a skipped
 # review step (see pr_checks.py; comment '@codex review' to ask it); and the gate passed on this head merged with the latest
 # default branch (it reruns the gate if the default branch moved). --check stops before merging.
@@ -19,14 +19,13 @@ repo=$(git rev-parse --show-toplevel) || exit 1
 common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir); repo=$(dirname "$common")
 cd "$repo" || exit 1
 gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
-field() { gh pr view "$pr" --repo "$gh" --json "$1" -q ".$1"; }
-[ "$(field state)" = OPEN ] || { echo "#$pr is not open"; exit 1; }
-[ "$(field isDraft)" = false ] || { echo "#$pr is a draft"; exit 1; }
-body=$(field body); title=$(field title); head=$(field headRefOid); branch=$(field headRefName); base=$(field baseRefName)
-[ "$(field reviewDecision)" != CHANGES_REQUESTED ] || { echo "#$pr has changes requested"; exit 1; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-printf '%s' "$body" > "$tmp/body"; gh pr diff "$pr" --repo "$gh" --name-only > "$tmp/files" || exit 1
-required=$(python3 "$here/pr_checks.py" "$head" "$tmp/body" "$tmp/files") || exit 1
+# One read, and any failure stops here: an API error must never look like "nothing wrong".
+gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
+gh pr diff "$pr" --repo "$gh" --name-only > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
+field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$tmp/pr.json" "$1"; }
+body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
+required=$(python3 "$here/pr_checks.py" "$tmp/pr.json" "$tmp/files") || exit 1
 if [ -n "$required" ]; then echo "$required"; need_bot=true; fi
 if [ "$need_bot" = true ]; then
   read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
