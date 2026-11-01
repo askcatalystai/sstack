@@ -22,6 +22,7 @@ Default (user, 2026-11-01): Sol builds → **bug pass** (Composer) → Astra rev
    - **Reproduce each one:** a failing test (or a scripted run) that shows the defect. No repro, no finding: a hypothesis it cannot reproduce is reported as "unconfirmed", never fixed.
    - **Root-cause:** trace each reproduced symptom to the first wrong decision; fix there, not where it surfaced. Guards, retries and swallowed errors are not fixes unless the state is legitimate. Check for the same fault elsewhere in the change.
    - **Fix minimally:** the smallest change the evidence justifies, failing test first, then the fix; revert anything a refuted hypothesis motivated.
+   - **Adversarial fixtures:** equal timestamps, ids that sort differently from time, empty and huge inputs, malformed config (could an error print a secret?). A fixture that spaces everything neatly hides ordering bugs (PR 54, 2026-11-01).
    - **Report** (`runs/pr<n>.bugpass`): each finding with repro command, failing-then-passing output, root cause, fix; and a list of hypotheses it ruled out. It never commits or pushes.
    In a plan, record it on the board: `cm bugpass <n> start` before starting the subagent, `cm bugpass <n> done` (or `failed`) after; it shows as its own "Bug finding" card in In review.
    If the bug pass can't run (provider error), note it in the ledger and go on to Astra.
