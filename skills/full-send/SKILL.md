@@ -86,6 +86,11 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
 
 If you stop before the merge, call `unwatch_pull_request` first.
 
+If the project is on the user's Kanzo board (http://localhost:4242, MCP `kanzo`),
+keep its card current: doing when work starts, review once the PR is open, done
+once it's merged and checked, with a comment linking the PR. The plan doc stays
+the record of what each item asks for.
+
 ## Proof
 
 Proof is evidence you observed yourself in this session: command output, a
