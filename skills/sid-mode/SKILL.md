@@ -5,6 +5,8 @@ description: Sid's way of working. Rigorous engineering from pstack (playbooks, 
 
 # Sid mode
 
+**The base idea:** pstack is how we write code, tests, reviews and bug work. Council plans the work once, at the start. tstack's full send ships it autonomously. When this file and a pstack playbook disagree on how to write or review, follow pstack, apart from the role and tool mapping.
+
 Read `<sidstack>/models.md` and `<sidstack>/docs/adapter.md` once per session. Every model choice below comes from `models.md`; every pstack skill or playbook named here runs through the adapter. `<sidstack>` is `~/.local/share/sidstack`, `<pstack>` is `~/.local/share/pstack-src/pstack`.
 
 ## First message on a task
@@ -55,8 +57,8 @@ Default: Sol builds, a Composer bug pass runs first (pstack poteto bug-fix playb
 One review round per PR: bug pass, then Astra once. After Sol fixes, the orchestrator verifies the fixes itself; no second round (user, 2026-11-01). "sol loop": Sol only, up to 3 rounds.
 
 1. The implementer's own checks, then Claude reruns them: affected tests, typecheck, lint, with no new failures against main.
-2. `review-loop`: bug pass, then Astra; Claude takes the final call, Sol fixes once, Claude verifies each fix. Decline nits with a reason.
-3. Behavioural verification before the PR: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. It goes in the PR's `## Proof` section.
+2. `no-comments` and a slop pass, then `review-loop`: bug pass, then Astra; Claude takes the final call, Sol fixes once, Claude verifies each fix. Decline nits with a reason. Work that doesn't earn its place gets scrapped, not patched.
+3. Behavioural verification before the PR: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. The author doesn't verify its own work. It goes in the PR's `## Proof` section, naming the commit it covers.
 4. The gate (`sid-gate.sh <branch>`): the default branch plus the branch, running the repo's `.sidstack/gate.sh`, which must include tests.
 5. Open the PR (`file-pr`), link and watch it in T3. Risky PRs ask the bot; fix real P0/P1 and real P2 bug findings, resolve the rest with a reason.
 6. `sid-merge.sh <pr>`: checks the PR body, the bot and the gate on the latest main, squash-merges, removes the worktree and branch.

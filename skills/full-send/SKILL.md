@@ -54,21 +54,34 @@ linked to this thread, and `watch_pull_request` wakes you. Two scripts in
 `~/.local/share/sidstack/scripts/` hold the checks that shouldn't depend on
 judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
 
-1. **Brief.** The user's goal in their words, the smallest change that meets it,
-   the acceptance check, the area to work in, and any files parallel PRs own.
-2. **Code.** `delegate_task` on the implementer role with `isolation: "worktree"`.
+1. **Define done and pick the playbook.** State the exit condition as something you
+   can check. Match the task to a pstack playbook (`<pstack>/skills/poteto-mode/playbooks/`:
+   `bug-fix`, `feature`, `refactoring`, `perf-issue` and others) and follow its steps,
+   through `docs/adapter.md`. For nontrivial work, use `how` first and name the data shape;
+   for code crossing a function boundary, use `architect`. Skip a step only by saying why.
+   If an answer is a fact you can observe by running something, sketch it instead of asking.
+2. **Brief and code.** The brief has the user's goal in their words, the smallest change
+   that meets it, the evidence that proves it's done, the area to work in, and any files
+   parallel PRs own. It tells the worker to follow that playbook and the Tests section
+   below. Use `delegate_task` on the implementer role with `isolation: "worktree"`.
    T3 makes the worktree and a `t3/...` branch but doesn't run setup scripts for
    delegates, so the brief starts with the repo's setup command (project
    instructions name it). Sol reports its `pwd` and branch; it doesn't commit.
    For a trivial change Claude may do this in a worktree itself.
+   **Read the diff when it returns, before any review.** If it's bigger than the brief,
+   touches unrelated files or is the wrong approach, scrap it (see "Scrap") and start a
+   fresh worker with a sharper brief. Then run the slop pass: Claude Code's `simplify`,
+   then `no-comments` (`comment-sicko`), then your own read for dead code and needless guards.
 3. **Review** (see `review-loop`): Composer bug pass, then Astra, each a
    `delegate_task` whose brief names Sol's worktree path. Claude takes the final
    call, Sol fixes once through a new `delegate_task` naming the same path, and
    Claude verifies each fix. Skip the fix pass if Astra approved cleanly. If any
    step is skipped, the PR's `## Review` section says so and why.
-4. **Prove it.** Run the real thing (see "Proof"). The evidence goes in the PR's
-   `## Proof` section: commands, pass counts, screenshot paths, and what wasn't
-   checked. It can't be a copy of the review notes.
+4. **Prove it.** Run the real thing (see "Proof"). The author doesn't verify its own
+   work: Claude or the bug pass runs it on the real surface. The evidence goes in the
+   PR's `## Proof` section, naming the commit it covers: commands, pass counts,
+   screenshot paths, and what wasn't checked. It can't be a copy of the review notes.
+   Run checks so a failure stops you before you commit or push.
 5. **Ship.** Claude commits in the worktree and pushes with `--force-with-lease`.
    Run `sid-gate.sh <branch>` under `systemd-run --user` when available, so a T3
    restart doesn't kill it, and wait with a background check and
@@ -76,7 +89,8 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    `watch_pull_request`, and end the turn.
 6. **Risky PRs only: ask the PR bot.** For auth, payments, data, migrations, or a PR
    that skipped a review step, comment `@codex review` and merge with `--bot`. Findings:
-   Claude triages (fix, dismiss with a reason, or ask), Sol fixes once, Claude verifies,
+   Claude triages per `<pstack>/skills/poteto-mode/references/bugbot-triage.md` (fix,
+   dismiss with a reason, or ask); noise doesn't get code. Sol fixes once, Claude verifies,
    push, resolve the threads. On any PR, conflicts: merge the default branch in the
    worktree and gate again.
 7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is really ready, reruns the
@@ -118,6 +132,22 @@ reproduction, a screenshot. Use the most direct proof the change allows:
 
 When you cannot find a way to prove a change, you do not have full confidence.
 Ask the user.
+
+## Scrap
+
+Work that doesn't earn its place gets thrown away, not patched.
+
+- **Two failed attempts at the same goal:** stop. Write down the premise and test it
+  (`principle-attack-the-premise`), then replan, or park it with the reason on the card.
+  This also applies when each review round finds one more case of the same kind of bug.
+- **Discard what didn't help.** A change that might help but has no evidence gets reverted.
+- **The user rejects it:** a `reject: <reason>` comment on the PR means run
+  `scripts/sid-scrap.sh <pr> "<reason>"` and move the card back to Backlog with the reason.
+  On merged work, `revert: <reason>` means `scripts/sid-scrap.sh --revert <pr> "<reason>"`.
+  Read Kanzo card comments at each step, because they don't wake you.
+- **Never leave scrapped work half-kept:** the PR, branch and worktree go together.
+
+Report anything scrapped, and why.
 
 ## Tests
 

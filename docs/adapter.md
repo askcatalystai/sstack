@@ -36,7 +36,7 @@ Verification swarms stay on `swarm workers`. Keep a panel's families distinct, s
 | pstack step | Here |
 | --- | --- |
 | Bugbot (start, wait, triage) | The `pr bot`: `watch_pull_request` wakes you and `sid-merge.sh --check <pr>` confirms it reviewed the head; its threads are ordinary review threads, triaged the same way. |
-| `deslop` before commit | Prose: the `unslop` skill. Code: Claude Code's built-in `simplify`, then Claude's own read of the diff for dead code, needless guards and comments that restate code. |
+| `deslop` before commit, `no-comments` before review | `no-comments` works as written, with the `comment-sicko` agent. Prose: the `unslop` skill. Code: Claude Code's built-in `simplify`, then Claude's own read of the diff for dead code, needless guards and comments that restate code. |
 | `control-ui` (drive a browser or Electron UI) | In T3: `preview_open`, `preview_act`, `preview_snapshot` (screenshot with `save=true` for proof). Outside T3: the `browse` skill. The project's `verify-*` skill first if it has one. |
 | `control-cli` (drive a CLI or TUI) | Run the command directly and keep its output as proof. |
 | `swarm` workers | Parallel `delegate_task` calls on the `swarm workers` role in `models.md`, one per partition, then one merged report. |

@@ -5,6 +5,8 @@
   sid-card.py clear <oe#1>                                       remove the worker tags
   sid-card.py tick                                               refresh the elapsed tag (a timer runs this each minute)
 
+A card more than 2 hours in one column gets a "stale" tag, so stuck work shows without opening it.
+
 The clock is time in the current column: it restarts when a card moves, not when the worker changes.
 Only doing and review cards show tags; moving a card anywhere else clears them.
 """
@@ -14,7 +16,7 @@ from pathlib import Path
 KANZO = os.path.expanduser("~/.local/bin/kanzo")
 URL = "http://127.0.0.1:4242/mcp"
 STATE = Path(os.path.expanduser("~/.local/state/sidstack/cards.json"))
-ELAPSED = re.compile(r"^(<1m|\d+m|\d+h( \d+m)?|\d+d( \d+h)?)$")
+ELAPSED = re.compile(r"^(<1m|\d+m|\d+h( \d+m)?|\d+d( \d+h)?|stale)$")
 ACTIVE = ("doing", "review")
 session, seq = None, 0
 
@@ -96,6 +98,8 @@ def tick(state):
         if record["status"] != task["status"]:
             record.update(status=task["status"], since=now)
         tags = own_tags(task["tags"], record) + [tag.lower() for tag in record["worker"]] + [elapsed(record["since"])]
+        if (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["since"])).total_seconds() > 7200:
+            tags.append("stale")
         if tags != task["tags"]:
             update(task_id, tags=", ".join(tags))
 

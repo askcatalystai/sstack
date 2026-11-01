@@ -6,6 +6,14 @@ Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models 
 - **From tstack** ([t3dotgg/tstack](https://github.com/t3dotgg/tstack), MIT): `full-send`, `full-stop`, `council`, `file-pr`, `babysit-pr`, `takeover`, `modernize`, `leaving-pr-comments`, forked and tailored here. `sol-loop` became `review-loop`.
 - **New**: `sid-mode` (the entry point), `models.md` (one file for every role), `setup-sidstack`, `install.sh`.
 
+## The idea
+
+sstack is three things on T3 Code:
+
+- **pstack is how we write:** code, tests, reviews and bug work follow its playbooks and principles as closely as this setup allows.
+- **Council is how we plan:** several models plan the work once, at the start.
+- **tstack's full send is how we ship:** fast and autonomous, from brief to merged PR.
+
 ## Use
 
 - `sid mode <task>`: matches a playbook, runs it with my roles and gates.

@@ -8,7 +8,8 @@ description: A Composer bug pass (pstack poteto bug-fix playbook) runs first, th
 Make your change more correct before filing a PR. Models come from
 `~/.local/share/sidstack/models.md`. Every model runs as a subagent the orchestrator starts, never as a terminal
 command. Sol changes nothing until the bug pass and Astra are done and Claude has
-triaged.
+triaged. Review follows pstack's skeptical posture: only a bug a user would hit, a failed
+gate or a wrong shipped doc blocks; the rest is a follow-up or gets declined.
 
 ## The sequence
 

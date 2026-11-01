@@ -14,8 +14,8 @@ Bring in delegates to help with the user's request, usually for review or
 feedback. The seats are the `council` line in
 `~/.local/share/sidstack/models.md`, one delegate per seat at the effort it
 names. If the user names other members for a run, use those. Plan PRs use the
-`implementer` and `reviewer` roles from the same file, and wait for the
-`pr bot` before merging.
+`implementer` and `reviewer` roles from the same file. The council plans once, at
+the start. It doesn't review each PR.
 
 Models served through a gateway harness such as OpenCode (for example
 DeepSeek or Muse Spark) count by the company that made the model, not by the
