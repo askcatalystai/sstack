@@ -17,7 +17,9 @@ main=$(git -C "$repo" rev-parse "origin/$base")
 head=$(git -C "$repo" rev-parse "origin/$branch")
 [ -d "$verify" ] || git -C "$repo" worktree add -q --detach "$verify" "$main" || exit 1
 out=$(git -C "$verify" merge-tree --write-tree "$main" "$head") || { echo "conflicts with $base: merge origin/$base into $branch, then gate again"; exit 3; }
+# A gate killed midway leaves files behind, so start clean.
 git -C "$verify" checkout -q --detach -f "$main" || exit 1
+git -C "$verify" clean -qfd
 git -C "$verify" read-tree -u --reset "${out%%$'\n'*}" || exit 1
 [ -f "$verify/.sidstack/gate.sh" ] || { echo "no .sidstack/gate.sh in this repo"; exit 1; }
 log=$common/sid-gate/${branch//\//_}.log

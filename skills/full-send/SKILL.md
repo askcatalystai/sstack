@@ -70,7 +70,8 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    `## Proof` section: commands, pass counts, screenshot paths, and what wasn't
    checked. It can't be a copy of the review notes.
 5. **Ship.** Claude commits in the worktree and pushes with `--force-with-lease`.
-   Run `sid-gate.sh <branch>` as a background command and wait with
+   Run `sid-gate.sh <branch>` under `systemd-run --user` when available, so a T3
+   restart doesn't kill it, and wait with a background check and
    `t3_background_wait`. Open the PR (`file-pr`), `link_pull_request`, then
    `watch_pull_request`, and end the turn.
 6. **On each wake**, check the PR. Bot findings: Claude triages, Sol fixes once,
