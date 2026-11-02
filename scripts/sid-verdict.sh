@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # sid-verdict <pr> <tested-commit> <PASS|PASS+NOTES|FAIL> <verifier> <t3-thread-id> "<what it ran and saw>"
 # The orchestrator records a verifier's verdict from its delegate's result. The verifier must not have written the code.
-# <tested-commit> is the commit the verifier reports it ran, and its patch must be the PR's patch.
+# <tested-commit> is the commit the verifier reports it ran. Its patch or its tree must match the PR's: a stacked PR
+# rebased onto its squashed parent keeps the tree and changes the patch.
 # A verdict covers the patch, so it survives a rebase or merging the default branch, and not a code change.
 set -u
 pr=${1:?usage: sid-verdict <pr> <tested-commit> <PASS|PASS+NOTES|FAIL> <verifier> <t3-thread-id> "<what it ran and saw>"}
@@ -17,7 +18,7 @@ patch_of() { git diff "$(git merge-base "origin/$base" "$1")" "$1" | git patch-i
 git rev-parse -q --verify "$tested^{commit}" >/dev/null || { echo "no commit $tested here"; exit 1; }
 patch=$(patch_of "$head")
 [ -n "$patch" ] || { echo "#$pr has an empty patch"; exit 1; }
-[ "$(patch_of "$tested")" = "$patch" ] || { echo "the verifier tested ${tested:0:8}, which isn't the code in #$pr at ${head:0:8}: verify again"; exit 1; }
+[ "$(patch_of "$tested")" = "$patch" ] || [ "$(git rev-parse "$tested^{tree}")" = "$(git rev-parse "$head^{tree}")" ] || { echo "the verifier tested ${tested:0:8}, which isn't the code in #$pr at ${head:0:8}: verify again"; exit 1; }
 clean() { printf '%s' "$1" | tr '\t\n' '  '; }
 verifier=$(clean "$verifier"); thread=$(clean "$thread"); summary=$(clean "$summary")
 # Record first: the merge reads the record, so a posted comment with no record would be a false trail.
