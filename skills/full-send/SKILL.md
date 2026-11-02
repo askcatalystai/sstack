@@ -67,7 +67,7 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    below. Use `delegate_task` on the implementer role with `isolation: "worktree"`.
    T3 makes the worktree and a `t3/...` branch but doesn't run setup scripts for
    delegates, so the brief starts with the repo's setup command (project
-   instructions name it). Sol reports its `pwd` and branch; it doesn't commit.
+   instructions name it). Sol reports its `pwd` and branch; it doesn't commit. Before replying it runs what the gate will run for its diff (the repo's changed-tests command, eslint, typecheck), because a gate is minutes of everyone's queue. Check the gate's exit status before opening a PR or writing "gate passed" in it.
    For a trivial change Claude may do this in a worktree itself.
    **Read the diff when it returns, before any review.** If it's bigger than the brief,
    touches unrelated files or is the wrong approach, scrap it (see "Scrap") and start a
