@@ -57,4 +57,12 @@ merge; ok "a new PR's UNKNOWN mergeability is waited out, and a clean PR merges"
 grep -q "^Gate-Passed: main .* + work .*, log sha256 " "$t/merge-args"; ok "the squash message carries the gate record" "$?" 0
 grep -q "^Gate-Passed: " "$t/out"; ok "and the merge prints it" "$?" 0
 grep -q "^Verified-By: composer PASS, T3 thread thread-1" "$t/merge-args"; ok "the squash message names the verifier" "$?" 0
+git init -q --bare -b main "$t/hook-origin.git"; git clone -q "$t/hook-origin.git" "$t/hook-repo" 2>/dev/null; cd "$t/hook-repo" || exit 1; git checkout -q -b main; echo a > a; git add -A; git commit -qm a; ln -s "$here/pre-push.sh" .git/hooks/pre-push
+git push -q origin main 2>/dev/null; ok "the hook refuses a direct push to main" "$?" 1; git ls-remote --exit-code origin refs/heads/main >/dev/null; ok "and main doesn't move" "$?" 2
+git push -q origin HEAD:refs/heads/work 2>/dev/null; ok "a branch still pushes" "$?" 0
+git push -q --no-verify origin main 2>/dev/null; ok "--no-verify bypasses it" "$?" 0
+echo m > models.md; git add -A; git commit -qm models; git push -q origin main 2>/dev/null; ok "a models.md change alone can push" "$?" 0
+echo n > models.md; echo b > b; git add -A; git commit -qm both; git push -q origin main 2>/dev/null; ok "models.md with anything else can't" "$?" 1
+git reset -q --hard HEAD~1; git rm -q models.md; git commit -qm gone; git push -q --no-verify origin main; echo code > code; git add -A; git commit -qm code; git push -q --no-verify origin main; git mv code models.md; git commit -qm renamed; git push -q origin main 2>/dev/null; ok "a rename into models.md can't hide a deleted file" "$?" 1
+git reset -q --hard HEAD~1; git push -q origin --delete main 2>/dev/null; ok "deleting main is refused" "$?" 1
 exit $fail
