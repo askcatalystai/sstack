@@ -4,6 +4,7 @@
 # no open PR bot threads; the PR bot finished on the head commit if it's needed: with --bot, a risky path, or a skipped
 # review step (see pr_checks.py; comment '@codex review' to ask it); and the gate passed on this head merged with the latest
 # default branch (it reruns the gate if the default branch moved). --check stops before merging.
+# A stacked PR can pass --check, but it merges only once its base is the default branch.
 # The squash commit carries the gate's Gate-Passed record. Proof lines reporting failures print as "proof-failures:" and don't block.
 # It also needs a PASS or PASS+NOTES on this patch from a verifier who didn't write it, recorded with sid-verdict.sh.
 # Exit: 0 merged or ready, 1 not ready, 6 open bot findings, 7 bot not finished on the head, 8 no passing verdict, 3 conflicts.
@@ -21,6 +22,7 @@ repo=$(git rev-parse --show-toplevel) || exit 1
 common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir); repo=$(dirname "$common")
 cd "$repo" || exit 1
 gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
+default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null); default=${default#origin/}; default=${default:-main}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$tmp/pr.json" "$1"; }
 # Read everything fresh, and stop on any failure: an API error must never look like "nothing wrong".
@@ -47,9 +49,11 @@ ready() {
 # The gate can take minutes, so every merge attempt rereads the PR with no gate in between.
 for attempt in 1 2 3 4; do
   ready
-  git fetch -q origin "$base" "$branch" || exit 1
-  main=$(git rev-parse "origin/$base")
-  patch=$(git diff "$(git merge-base "$main" "$head")" "$head" | git patch-id --verbatim | cut -d' ' -f1)
+  [ "$check" = true ] || [ "$base" = "$default" ] || { echo "#$pr is stacked on $base: land that first, rebase this onto $default, and set its base to $default"; exit 1; }
+  git fetch -q origin "$default" "$base" "$branch" || exit 1
+  # The gate always tests the default branch, even for a stacked PR.
+  main=$(git rev-parse "origin/$default")
+  patch=$(git diff "$(git merge-base "origin/$base" "$head")" "$head" | git patch-id --verbatim | cut -d' ' -f1)
   verdict=$(awk -F'\t' -v p="$patch" '$3==p{v=$0} END{print v}' "$common/sid-gate/verdicts/$pr.tsv" 2>/dev/null)
   result=$(printf '%s' "$verdict" | cut -f2)
   case "$result" in
@@ -63,9 +67,15 @@ for attempt in 1 2 3 4; do
     "$here/sid-gate.sh" "$branch"; rc=$?; [ "$rc" = 0 ] || exit "$rc"
     continue
   fi
-  if [ "$check" = true ]; then echo "ready: #$pr ${head:0:8}"; exit 0; fi
+  if [ "$check" = true ]; then
+    if [ "$base" = "$default" ]; then echo "ready: #$pr ${head:0:8}"; else echo "ready, but stacked on $base: #$pr ${head:0:8}"; fi
+    exit 0
+  fi
   # No branch protection on this plan, so narrow the window: main must still be what the gate tested.
   [ "$(git ls-remote origin "refs/heads/$base" | cut -f1)" = "$main" ] || continue
+  # A retarget since the read above would land this on a base the gate didn't test.
+  gh pr view "$pr" --repo "$gh" --json baseRefName > "$tmp/base.json" || continue
+  [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["baseRefName"])' "$tmp/base.json")" = "$default" ] || { echo "#$pr's base just changed"; continue; }
   # Across the branch, because the head can be a merge commit with no trailers of its own.
   trailers=$(git log "origin/$base..$head" --format='%(trailers:only,unfold)' | sed '/^$/d' | sort -u)
   verified="Verified-By: $(printf '%s' "$verdict" | cut -f5) $result, T3 thread $(printf '%s' "$verdict" | cut -f6)"

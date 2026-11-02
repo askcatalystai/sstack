@@ -22,7 +22,7 @@ case "$1 $2" in
   "pr diff") ;;
   "pr comment") echo "$*" >> "$T/comments";;
   "pr merge") echo merged >> "$T/merge-calls"; printf '%s\n' "$*" >> "$T/merge-args";;
-  "pr view") case "$*" in *mergeCommit*) echo sha;; *) [ -f "$T/api-down" ] && exit 1; cat "$T/pr.json";; esac;;
+  "pr view") case "$*" in *mergeCommit*) echo sha;; *"--json baseRefName") if [ -f "$T/retargeted" ]; then echo '{"baseRefName":"parent"}'; else cat "$T/pr.json"; fi;; *) [ -f "$T/api-down" ] && exit 1; cat "$T/pr.json";; esac;;
   "api graphql") echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}';;
   *) exit 1;;
 esac
@@ -52,6 +52,11 @@ echo 'a b' > w; git add -A; git commit -qm spaced; git push -q origin work; head
 git checkout -q main; printf 'touch "$T/gate-ran"\n' > .sidstack/gate.sh; git add -A; git commit -qm count; git push -q origin main; git checkout -q work; "$here/sid-gate.sh" work >/dev/null; rm -f "$t/gate-ran"; sed -i 2d "$stamp"; pr '[]'; merge --check; ok "a stamp with no record reruns the gate" "$?" 0; [ -f "$t/gate-ran" ]; ok "and the gate ran" "$?" 0
 pr '[]'; sed -i 's/ 3 passed/ 8 failed/' "$t/pr.json"; merge --check; ok "a Proof reporting failures doesn't block" "$?" 0; grep -q "^proof-failures: .*8 failed" "$t/out"; ok "and it is shown" "$?" 0; grep -q "needs-bot\|bot has not" "$t/out"; ok "and doesn't require the bot" "$?" 1
 pr '[]'
+git push -q origin "$head~1:refs/heads/parent"; pr '[]'; sed -i 's/"baseRefName":"main"/"baseRefName":"parent"/' "$t/pr.json"; verdict PASS composer thread-6 "ran the stacked PR"; ok "a stacked PR takes a verdict" "$?" 0
+merge --check; ok "a stacked PR passes --check" "$?" 0; grep -q "ready, but stacked on parent" "$t/out"; ok "and says it is stacked" "$?" 0
+merge; ok "a stacked PR doesn't merge" "$?" 1; grep -q "land that first" "$t/out"; ok "and says what to do" "$?" 0; ok "no merge happened" "$(merges)" 0
+pr '[]'
+touch "$t/retargeted"; merge; ok "a retarget just before merging stops it" "$?" 1; grep -q "base just changed" "$t/out"; ok "for that reason" "$?" 0; ok "no merge happened" "$(merges)" 0; rm "$t/retargeted"
 cp "$t/pr.json" "$t/clean.json"; sed -i 's/"mergeable":"MERGEABLE"/"mergeable":"UNKNOWN"/' "$t/pr.json"; ( sleep 2; cp "$t/clean.json" "$t/pr.json" ) &
 merge; ok "a new PR's UNKNOWN mergeability is waited out, and a clean PR merges" "$?" 0; ok "exactly once" "$(merges)" 1; wait
 grep -q "^Gate-Passed: main .* + work .*, log sha256 " "$t/merge-args"; ok "the squash message carries the gate record" "$?" 0
