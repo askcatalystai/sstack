@@ -18,6 +18,7 @@ SKIPPED = re.compile(r"(?<!no steps )(?<!nothing )(?<!not )\bskipp?ed\b|\bnot ru
 NO_FAILURE = re.compile(r"\b(?:0|no|none|zero|nothing|never|not|didn't|without) (?:(?:tests?|checks?|jobs?|steps?|suites?|specs?|files?) )?fail(?:s|ed|ing|ures?)?\b", re.I)
 FAILURE = re.compile(r"\bfail(?:s|ed|ing|ures?)?\b|\btimed out\b|\bexit(?:ed)?(?: with)?(?: code| status)?:? [1-9]\d*\b", re.I)
 SCREENSHOT = re.compile(r"[^\s`'\"()<>\[\]]+\.png\b", re.I)
+MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
@@ -67,7 +68,7 @@ def problems(pr, files=()):
         found.append("## Proof must show what ran and the result, not just a commit")
     if not OUTCOME.search(review):
         found.append("## Review must say what each reviewer concluded, or what was skipped and why")
-    for path in SCREENSHOT.findall(proof):
+    for path in SCREENSHOT.findall(MARKDOWN_LINK.sub(r"\1", proof)):
         if not re.match(r"https?://", path, re.I) and not is_png(path):
             found.append(f"## Proof names {path}, which is not a PNG file here; use an absolute path")
     ui = [file for file in files if VISIBLE_UI.search(file) and not NOT_UI.search(file)]

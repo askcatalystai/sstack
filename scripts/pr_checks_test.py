@@ -73,9 +73,9 @@ class Ready(unittest.TestCase):
             real, fake = os.path.join(folder, "real.png"), os.path.join(folder, "fake.png")
             write(real, checks.PNG_SIGNATURE + b"data")
             write(fake, b"not an image")
-            for proof in [real, f"{real}, (after)", f"({real})", f"`{real}`", "https://example.com/a.png"]:
+            for proof in [real, f"{real}, (after)", f"({real})", f"`{real}`", "https://example.com/a.png", "[after.png](https://example.com/a.png)", f"![after.png]({real})", f"[{real}]({real} \"after\")"]:
                 self.assertEqual(checks.problems(pr(body=GOOD.replace("10 passed.", f"10 passed. {proof}"))), [], proof)
-            for proof in [fake, "/no/such/image.png"]:
+            for proof in [fake, "/no/such/image.png", "[after.png](/no/such/image.png)"]:
                 self.assertTrue(any("not a PNG" in p for p in checks.problems(pr(body=GOOD.replace("10 passed.", f"10 passed. {proof}")))), proof)
 
     def test_home_relative_screenshots_expand(self):
