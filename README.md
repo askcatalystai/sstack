@@ -50,7 +50,7 @@ and `scripts/upstream-check.sh` for upstream change reports.
 
 ## How sstack itself ships
 
-Like pstack: each change is its own PR from a worktree, never tangled with feature work. `.sidstack/gate.sh` runs `scripts/check.sh`, which validates the skills. Composer and Astra review it, and `sid-merge.sh` merges it. Changes to the merge scripts also need the PR bot. Then run `git -C ~/.local/share/sidstack pull --ff-only`, because the installed scripts run from that checkout. To let T3 make the worktree, start the thread in T3's `sstack` project; delegates can only use their parent thread's project.
+Like pstack: each change is its own PR from a worktree, never tangled with feature work. `install.sh` adds a git hook that refuses a direct push to main, except a change to `models.md` alone, which `/setup-sidstack` makes. `git push --no-verify` bypasses it, so it stops accidents only. `.sidstack/gate.sh` runs `scripts/check.sh`, which validates the skills. Composer and Astra review it, and `sid-merge.sh` merges it. Changes to the merge scripts also need the PR bot. Then run `git -C ~/.local/share/sidstack pull --ff-only`, because the installed scripts run from that checkout. To let T3 make the worktree, start the thread in T3's `sstack` project; delegates can only use their parent thread's project.
 
 The local gate is the only CI. Hosted CI is paused until a provider is chosen.
 

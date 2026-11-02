@@ -31,6 +31,10 @@ done
 for dir in "$HOME/.claude/agents" "$HOME/.claude_2/agents" "$HOME/.config/opencode/agents"; do
   mkdir -p "$dir"; [ -d "$P/agents" ] && for a in "$P"/agents/*.md; do ln -sfn "$a" "$dir/$(basename "$a")"; done
 done
+# Sstack ships by PR; the hook refuses a direct push to main.
+if hooks=$(git -C "$S" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  mkdir -p "$hooks/hooks"; ln -sfn "$S/scripts/pre-push.sh" "$hooks/hooks/pre-push"
+fi
 # Kanzo card tags refresh on a timer.
 if command -v systemctl >/dev/null 2>&1 && command -v kanzo >/dev/null 2>&1; then
   mkdir -p "$HOME/.config/systemd/user"
