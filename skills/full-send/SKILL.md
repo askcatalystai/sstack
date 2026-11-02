@@ -83,6 +83,7 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
    PR's `## Proof` section, naming the commit it covers: commands, pass counts,
    screenshot paths, and what wasn't checked. It can't be a copy of the review notes.
+   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is the bug pass, or Opus when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Once the PR exists, record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
    Run checks so a failure stops you before you commit or push.
 5. **Ship.** Claude commits in the worktree and pushes with `--force-with-lease`.
    Run `sid-gate.sh <branch>` under `systemd-run --user` when available, so a T3

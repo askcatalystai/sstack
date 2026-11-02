@@ -17,6 +17,8 @@ A `delegate_task` worker (Codex, in a T3 worktree) ran `sid-gate.sh` in the fore
 
 ## Not drilled
 
+The user's decision on 2026-11-02: T3 recovery isn't worth testing ahead of time; fix these if they happen.
+
 - A T3 restart with a gate under `systemd-run --user`. `full-send` runs gates that way so they survive one; the survival hasn't been tested.
 - A cancel while a worker is pushing or opening a PR.
 - A machine restart or power loss.

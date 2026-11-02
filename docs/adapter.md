@@ -49,7 +49,7 @@ Verification swarms stay on `swarm workers`. Keep a panel's families distinct, s
 | --- | --- |
 | `architect` running `arena` as a matter of course (Feature step 2) | A single design sketch. Use `arena` only for a contested design or when the user asks; it's too heavy for this machine on small PRs. |
 | Bug fix step 5, committing the failing repro first | Sol doesn't commit. Put the failing-then-passing output in `## Proof`. Claude may commit the test first when it's cheap to split. |
-| Verifier swarm on each PR | The bug pass and Claude, on the real surface. The author never verifies itself. |
+| Verifier swarm on each PR | One verdict per PR from an agent that didn't write it: the bug pass, or the `ui lead` when it tests the local app before merge. `sid-verdict.sh` records it, and `sid-merge.sh` requires it. |
 
 ## Paths
 
