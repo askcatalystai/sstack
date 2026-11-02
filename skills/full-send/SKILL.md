@@ -116,6 +116,8 @@ merge, prod check): what happened, what's next, and anything waiting on the user
 user follows work from the board and may not read the chat. The card is the
 record of what the work asks for; Kanzo is the source of truth, not a plan file.
 
+**Don't wait on Deployment.** Review and local testing are finished by then, so the next card starts as soon as a card reaches Deployment. If it depends on that card's unmerged work, branch from that card's branch; once the parent squash-merges, `git rebase --onto origin/main <parent-head>` before its gate. Its Deployment queue merges in order, and prod checks catch up after each deploy.
+
 Card labels are coloured provider, model and reasoning, plus time in the column, and the
 `#` is the `pr-<n>` tag. Put neither in the title. Each time a worker starts, show it on the card with
 `scripts/sid-card.py work <oe#n> <provider> <model> <effort> [status]`. While the PR
