@@ -5,7 +5,8 @@
 # review step (see pr_checks.py; comment '@codex review' to ask it); and the gate passed on this head merged with the latest
 # default branch (it reruns the gate if the default branch moved). --check stops before merging.
 # The squash commit carries the gate's Gate-Passed record. Proof lines reporting failures print as "proof-failures:" and don't block.
-# Exit: 0 merged or ready, 1 not ready, 6 open bot findings, 7 bot not finished on the head, 3 conflicts.
+# It also needs a PASS or PASS+NOTES on this patch from a verifier who didn't write it, recorded with sid-verdict.sh.
+# Exit: 0 merged or ready, 1 not ready, 6 open bot findings, 7 bot not finished on the head, 8 no passing verdict, 3 conflicts.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 check=false; need_bot=false
@@ -46,8 +47,16 @@ ready() {
 # The gate can take minutes, so every merge attempt rereads the PR with no gate in between.
 for attempt in 1 2 3 4; do
   ready
-  git fetch -q origin "$base" || exit 1
+  git fetch -q origin "$base" "$branch" || exit 1
   main=$(git rev-parse "origin/$base")
+  patch=$(git diff "$(git merge-base "$main" "$head")" "$head" | git patch-id --verbatim | cut -d' ' -f1)
+  verdict=$(awk -F'\t' -v p="$patch" '$3==p{v=$0} END{print v}' "$common/sid-gate/verdicts/$pr.tsv" 2>/dev/null)
+  result=$(printf '%s' "$verdict" | cut -f2)
+  case "$result" in
+    PASS|PASS+NOTES) ;;
+    FAIL) echo "the verifier failed this patch: $(printf '%s' "$verdict" | cut -f7)"; exit 8;;
+    *) echo "no verdict on patch ${patch:0:8}: have a verifier who didn't write it run the change, then sid-verdict.sh $pr <tested-commit> <PASS|PASS+NOTES|FAIL> <verifier> <t3-thread-id> \"<what it ran and saw>\""; exit 8;;
+  esac
   stamp=$common/sid-gate/${branch//\//_}.pass
   gate_record=$(sed -n 2p "$stamp" 2>/dev/null)
   if [ "$(sed -n 1p "$stamp" 2>/dev/null)" != "$head $main" ] || [ -z "$gate_record" ]; then
@@ -59,7 +68,8 @@ for attempt in 1 2 3 4; do
   [ "$(git ls-remote origin "refs/heads/$base" | cut -f1)" = "$main" ] || continue
   # Across the branch, because the head can be a merge commit with no trailers of its own.
   trailers=$(git log "origin/$base..$head" --format='%(trailers:only,unfold)' | sed '/^$/d' | sort -u)
-  trailers=$(printf '%s\n%s' "$trailers" "$gate_record" | sed '/^$/d')
+  verified="Verified-By: $(printf '%s' "$verdict" | cut -f5) $result, T3 thread $(printf '%s' "$verdict" | cut -f6)"
+  trailers=$(printf '%s\n%s\n%s' "$trailers" "$gate_record" "$verified" | sed '/^$/d')
   message=$(printf '%s\n\n%s' "$body" "$trailers")
   gh pr merge "$pr" --repo "$gh" --squash --subject "$title (#$pr)" --body "$message" --match-head-commit "$head" >/dev/null || { echo "merge refused; retrying if $base moved"; sleep 5; continue; }
   echo "merged #$pr: $(gh pr view "$pr" --repo "$gh" --json mergeCommit -q .mergeCommit.oid)"
