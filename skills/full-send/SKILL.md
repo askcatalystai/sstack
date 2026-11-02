@@ -97,10 +97,10 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    dismiss with a reason, or ask); noise doesn't get code. Sol fixes once, Claude verifies,
    push, resolve the threads. On any PR, conflicts: merge the default branch in the
    worktree and gate again.
-7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is really ready (`## Proof` must
+7. **Merge.** Run `sid-merge.sh --check <pr>` first. If it prints `proof-failures:` lines, read them and decide from the plan: back to the bug pass, review or coding, or go ahead and say why on the card. No fixed rule. `sid-merge.sh <pr>` refuses until the PR is really ready (`## Proof` must
    name the head commit, so a later push needs fresh proof), reruns the
    gate if the default branch moved, squash-merges using the PR body as the commit
-   message, and removes the worktree and branch. Then `unwatch_pull_request`.
+   message, and removes the worktree and branch. Post the `Gate-Passed` line it prints on the card. Then `unwatch_pull_request`.
 8. **Check it live** once deployed, then report: the PR link, the merge commit,
    your proof, what was checked on prod and what wasn't, and each decision you
    made for the user.

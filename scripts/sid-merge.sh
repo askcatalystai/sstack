@@ -4,6 +4,7 @@
 # no open PR bot threads; the PR bot finished on the head commit if it's needed: with --bot, a risky path, or a skipped
 # review step (see pr_checks.py; comment '@codex review' to ask it); and the gate passed on this head merged with the latest
 # default branch (it reruns the gate if the default branch moved). --check stops before merging.
+# The squash commit carries the gate's Gate-Passed record. Proof lines reporting failures print as "proof-failures:" and don't block.
 # Exit: 0 merged or ready, 1 not ready, 6 open bot findings, 7 bot not finished on the head, 3 conflicts.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
@@ -48,7 +49,8 @@ for attempt in 1 2 3 4; do
   git fetch -q origin "$base" || exit 1
   main=$(git rev-parse "origin/$base")
   stamp=$common/sid-gate/${branch//\//_}.pass
-  if [ "$(cat "$stamp" 2>/dev/null)" != "$head $main" ]; then
+  gate_record=$(sed -n 2p "$stamp" 2>/dev/null)
+  if [ "$(sed -n 1p "$stamp" 2>/dev/null)" != "$head $main" ] || [ -z "$gate_record" ]; then
     "$here/sid-gate.sh" "$branch"; rc=$?; [ "$rc" = 0 ] || exit "$rc"
     continue
   fi
@@ -57,9 +59,11 @@ for attempt in 1 2 3 4; do
   [ "$(git ls-remote origin "refs/heads/$base" | cut -f1)" = "$main" ] || continue
   # Across the branch, because the head can be a merge commit with no trailers of its own.
   trailers=$(git log "origin/$base..$head" --format='%(trailers:only,unfold)' | sed '/^$/d' | sort -u)
-  message=$body; [ -z "$trailers" ] || message=$(printf '%s\n\n%s' "$body" "$trailers")
+  trailers=$(printf '%s\n%s' "$trailers" "$gate_record" | sed '/^$/d')
+  message=$(printf '%s\n\n%s' "$body" "$trailers")
   gh pr merge "$pr" --repo "$gh" --squash --subject "$title (#$pr)" --body "$message" --match-head-commit "$head" >/dev/null || { echo "merge refused; retrying if $base moved"; sleep 5; continue; }
   echo "merged #$pr: $(gh pr view "$pr" --repo "$gh" --json mergeCommit -q .mergeCommit.oid)"
+  echo "$gate_record"
   rm -f "$stamp"
   wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '/^worktree /{w=$2} $0=="branch "b{print w}')
   if [ -n "$wt" ]; then git worktree remove "$wt" || echo "kept $wt: it has uncommitted or untracked files"; fi

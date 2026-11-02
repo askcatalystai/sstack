@@ -20,7 +20,7 @@ mkdir "$t/bin"; cat > "$t/bin/gh" <<'F'
 case "$1 $2" in
   "repo view") echo o/r;;
   "pr diff") ;;
-  "pr merge") echo merged >> "$T/merge-calls";;
+  "pr merge") echo merged >> "$T/merge-calls"; printf '%s\n' "$*" >> "$T/merge-args";;
   "pr view") case "$*" in *mergeCommit*) echo sha;; *) [ -f "$T/api-down" ] && exit 1; cat "$T/pr.json";; esac;;
   "api graphql") echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}';;
   *) exit 1;;
@@ -34,6 +34,12 @@ pr '[]'; touch "$t/api-down"; merge; ok "an API failure stops the merge" "$?" 1;
 rm -f "$stamp"; pr '[]'; git checkout -q main; printf 'cat "$T/after-gate" > "$T/pr.json"\n' > .sidstack/gate.sh; git add -A; git commit -qm flip; git push -q origin main; git checkout -q work
 pr '[{"name":"ci","conclusion":"FAILURE"}]'; cp "$t/pr.json" "$t/after-gate"; pr '[]'; merge; ok "CI going red during the gate stops the merge" "$?" 1; ok "no merge happened" "$(merges)" 0
 git checkout -q main; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm ok; git push -q origin main; git checkout -q work; rm -f "$stamp"; pr '[]'; merge --check; ok "a clean PR is ready after a fresh gate" "$?" 0; ok "--check never merges" "$(merges)" 0
+hash=$(sed -n 2p "$stamp" | sed 's/.*sha256 //'); [ -n "$hash" ] && [ "$(cut -d' ' -f1 < <(sha256sum ".git/sid-gate/logs/$head.$(git rev-parse origin/main).log"))" = "$hash" ]; ok "the kept log matches the recorded hash" "$?" 0
+git checkout -q main; printf 'touch "$T/gate-ran"\n' > .sidstack/gate.sh; git add -A; git commit -qm count; git push -q origin main; git checkout -q work; "$here/sid-gate.sh" work >/dev/null; rm -f "$t/gate-ran"; sed -i 2d "$stamp"; pr '[]'; merge --check; ok "a stamp with no record reruns the gate" "$?" 0; [ -f "$t/gate-ran" ]; ok "and the gate ran" "$?" 0
+pr '[]'; sed -i 's/ 3 passed/ 8 failed/' "$t/pr.json"; merge --check; ok "a Proof reporting failures doesn't block" "$?" 0; grep -q "^proof-failures: .*8 failed" "$t/out"; ok "and it is shown" "$?" 0; grep -q "needs-bot\|bot has not" "$t/out"; ok "and doesn't require the bot" "$?" 1
+pr '[]'
 cp "$t/pr.json" "$t/clean.json"; sed -i 's/"mergeable":"MERGEABLE"/"mergeable":"UNKNOWN"/' "$t/pr.json"; ( sleep 2; cp "$t/clean.json" "$t/pr.json" ) &
 merge; ok "a new PR's UNKNOWN mergeability is waited out, and a clean PR merges" "$?" 0; ok "exactly once" "$(merges)" 1; wait
+grep -q "^Gate-Passed: main .* + work .*, log sha256 " "$t/merge-args"; ok "the squash message carries the gate record" "$?" 0
+grep -q "^Gate-Passed: " "$t/out"; ok "and the merge prints it" "$?" 0
 exit $fail
