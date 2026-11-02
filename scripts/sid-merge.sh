@@ -24,11 +24,11 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$tmp/pr.json" "$1"; }
 # Read everything fresh, and stop on any failure: an API error must never look like "nothing wrong".
 ready() {
-  # GitHub answers UNKNOWN until it has worked out mergeability, usually for a few seconds on a new PR.
-  for wait in 0 3 5 10 15; do
+  # GitHub answers UNKNOWN until it has worked out mergeability, and a just-pushed head has checks still pending.
+  for wait in 0 3 5 10 15 30 30 30; do
     sleep "$wait"
     gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
-    [ "$(field mergeable)" != UNKNOWN ] && break
+    [ "$(field mergeable)" != UNKNOWN ] && ! python3 -c 'import json,sys;sys.exit(any(not (c.get("conclusion") or c.get("state") not in (None,"PENDING","EXPECTED")) for c in json.load(open(sys.argv[1]))["statusCheckRollup"]) is False)' "$tmp/pr.json" && break
   done
   gh pr diff "$pr" --repo "$gh" --name-only > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
   body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
