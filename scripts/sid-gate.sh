@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # sid-gate <branch>: run the repo's gate on origin/<default> merged with <branch>, then stamp the head as passed.
+# The stamp's second line is the Gate-Passed record for the merge commit; its log stays in sid-gate/logs (newest 50).
 # The commands live in the repo, in .sidstack/gate.sh, and run from the merged tree in <repo>-wt/verify.
 # One gate at a time per repo, because builds run out of memory side by side.
 # Exit: 0 passed, 1 failed, 3 conflicts with the default branch.
@@ -30,5 +31,9 @@ log=$common/sid-gate/${branch//\//_}.log
 git -C "$verify" checkout -q --detach -f "$main"
 git -C "$verify" clean -qfd
 if [ "$rc" != 0 ]; then echo "gate FAILED: $log"; tail -n 25 "$log"; exit 1; fi
-echo "$head $main" > "$stamp"
+digest=$(sha256sum "$log" | cut -d' ' -f1)
+logs=$common/sid-gate/logs
+mkdir -p "$logs"; cp "$log" "$logs/$head.$main.log"
+ls -1t "$logs" | tail -n +51 | while IFS= read -r old; do rm -f "$logs/$old"; done
+printf '%s %s\nGate-Passed: %s %s + %s %s, log sha256 %s\n' "$head" "$main" "$base" "${main:0:8}" "$branch" "${head:0:8}" "$digest" > "$stamp"
 echo "gate passed: $base ${main:0:8} + $branch ${head:0:8}"
