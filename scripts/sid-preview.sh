@@ -10,7 +10,7 @@ if [ "$target" = main ]; then
   ( cd "$preview/app" && pnpm install --frozen-lockfile --prefer-offline >/dev/null && pnpm --config.verify-deps-before-run=false build:packages >/dev/null ) || exit 1
 elif [ "$target" != "$preview" ]; then
   [ -d "$target/app/node_modules" ] || { echo "$target has no dependencies installed"; exit 1; }
-  for file in .env.clerk.local .env.cloud.local .env.mastra.local .env.storage.local; do ln -sfn "$preview/app/$file" "$target/app/$file"; done
+  [ -e "$target/app/.env.local" ] || ln -s "$preview/app/.env.local" "$target/app/.env.local"
 fi
 systemctl --user stop oe-ui 2>/dev/null
 systemd-run --user --unit=oe-ui --working-directory="$target/app" --setenv=PATH="$PATH" --setenv=HOME="$HOME" --setenv=PORT=5173 pnpm --config.verify-deps-before-run=false dev:ui >/dev/null || exit 1
