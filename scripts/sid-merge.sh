@@ -33,7 +33,9 @@ ready() {
     gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
     [ "$(field mergeable)" != UNKNOWN ] && ! python3 -c 'import json,sys;sys.exit(any(not (c.get("conclusion") or c.get("state") not in (None,"PENDING","EXPECTED")) for c in json.load(open(sys.argv[1]))["statusCheckRollup"]) is False)' "$tmp/pr.json" && break
   done
-  gh pr diff "$pr" --repo "$gh" --name-only > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
+  # The files API handles PRs too big for `gh pr diff`, and a rename counts under both its names. It stops at 3000 files.
+  gh api --paginate "repos/$gh/pulls/$pr/files?per_page=100" --jq '.[] | [.filename, .previous_filename // empty] | join(" ")' > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
+  [ "$(wc -l < "$tmp/files")" -lt 3000 ] || { echo "#$pr has too many changed files to check"; exit 1; }
   body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
   required=$(python3 "$here/pr_checks.py" "$tmp/pr.json" "$tmp/files") || exit 1
   bot_needed=$need_bot
