@@ -19,7 +19,7 @@ mkdir "$t/bin"; cat > "$t/bin/gh" <<'F'
 # Fake gh. pr view reads from $T/pr.json until the gate script flips it through $T/after-gate.
 case "$1 $2" in
   "repo view") echo o/r;;
-  "pr diff") ;;
+  "api --paginate") [ -f "$T/files-down" ] && exit 1; [ -f "$T/too-many-files" ] && seq 3000; true;;
   "pr comment") echo "$*" >> "$T/comments";;
   "pr merge") echo merged >> "$T/merge-calls"; printf '%s\n' "$*" >> "$T/merge-args";;
   "pr view") case "$*" in *mergeCommit*) echo sha;; *"--json baseRefName") if [ -f "$T/retargeted" ]; then echo '{"baseRefName":"parent"}'; else cat "$T/pr.json"; fi;; *) [ -f "$T/api-down" ] && exit 1; cat "$T/pr.json";; esac;;
@@ -35,6 +35,8 @@ verdict() { PATH="$t/bin:$PATH" "$here/sid-verdict.sh" 5 "$head" "$@" >"$t/out" 
 pr '[]'; verdict MAYBE composer thread-1 "ran it"; ok "only known results count" "$?" 1
 mkdir -p .git/sid-gate; touch .git/sid-gate/verdicts; verdict PASS composer thread-1 "ran it"; ok "a verdict it can't record fails" "$?" 1; [ ! -f "$t/comments" ]; ok "and posts nothing" "$?" 0; rm .git/sid-gate/verdicts
 verdict PASS composer thread-1 "ran it"; ok "a verdict is recorded" "$?" 0; grep -q "Verdict: PASS by composer" "$t/comments"; ok "and posted on the PR" "$?" 0
+pr '[]'; touch "$t/files-down"; merge; ok "a failed file list stops the merge" "$?" 1; grep -q "could not read #5's files" "$t/out"; ok "and says why" "$?" 0; rm "$t/files-down"
+pr '[]'; touch "$t/too-many-files"; merge; ok "a file list at the API's limit stops the merge" "$?" 1; grep -q "too many changed files" "$t/out"; ok "and says why" "$?" 0; rm "$t/too-many-files"
 pr '[]'; touch "$t/api-down"; merge; ok "an API failure stops the merge" "$?" 1; grep -q "could not read" "$t/out"; ok "and says why" "$?" 0; rm "$t/api-down"
 rm -f "$stamp"; pr '[]'; git checkout -q main; printf 'cat "$T/after-gate" > "$T/pr.json"\n' > .sidstack/gate.sh; git add -A; git commit -qm flip; git push -q origin main; git checkout -q work
 pr '[{"name":"ci","conclusion":"FAILURE"}]'; cp "$t/pr.json" "$t/after-gate"; pr '[]'; merge; ok "CI going red during the gate stops the merge" "$?" 1; ok "no merge happened" "$(merges)" 0
