@@ -16,13 +16,16 @@ if [ -f "$data/kanzo.db" ]; then
   [ "$(sqlite3 -readonly "$backup" 'pragma integrity_check')" = ok ] || { echo "kanzo: backup failed, not installing" >&2; exit 1; }
   echo "kanzo: backed up the board to $backup"
 fi
+version=$("$target/release/kanzo" --version)
 mkdir -p "$(dirname "$bin")"
 # Rename over the old binary, because the running board keeps it busy.
 install -m 755 "$target/release/kanzo" "$bin.new"
 mv -f "$bin.new" "$bin"
-mkdir -p "$(dirname "$stamp")"
-printf '%s\n' "$tree" > "$stamp"
-if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active -q kanzo.service; then
+# Enabled counts too: a restart that failed last time may have left the service stopped.
+if command -v systemctl >/dev/null 2>&1 && { systemctl --user is-active -q kanzo.service || systemctl --user is-enabled -q kanzo.service; }; then
   systemctl --user restart kanzo.service
 fi
-echo "kanzo: installed $("$bin" --version)"
+# Last, so that any failure above is retried on the next run.
+mkdir -p "$(dirname "$stamp")"
+printf '%s\n' "$tree" > "$stamp"
+echo "kanzo: installed $version"
