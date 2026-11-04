@@ -28,18 +28,17 @@ report() {
   done
 }
 kanzo() {
-  local dir=$scratch/kanzo patch=$root/patches/kanzo-sstack.patch latest
+  local dir=$scratch/kanzo patch=$scratch/kanzo.patch latest
   if ! git clone -q https://github.com/emanuele-em/kanzo "$dir"; then echo "kanzo: fetch failed"; return; fi
   latest=$(git -C "$dir" tag --sort=-v:refname | head -n 1)
-  echo "kanzo: recorded v0.2.1, latest ${latest:-no tags}"
+  echo "kanzo: based on v0.2.1, latest ${latest:-no tags}"
+  # Our changes are whatever kanzo/ holds beyond the upstream tag it was copied from.
+  git --git-dir="$dir/.git" --work-tree="$root/kanzo" diff --no-ext-diff --binary --src-prefix=a/ --dst-prefix=b/ v0.2.1 > "$patch"
   if git -C "$dir" checkout -q --detach "$latest" 2>/dev/null && git -C "$dir" apply --check "$patch"; then
-    echo "kanzo: patch applies to $latest"
+    echo "kanzo: our changes apply to $latest"
   else
-    echo "kanzo: patch does not apply to $latest"
+    echo "kanzo: our changes do not apply to $latest"
   fi
-  if ! command -v cargo >/dev/null; then echo "kanzo: skipped cargo test, no cargo"; return; fi
-  git -C "$dir" checkout -q --detach v0.2.1 && git -C "$dir" apply "$patch" || { echo "kanzo: patch does not apply to v0.2.1"; return; }
-  if (cd "$dir" && cargo test -q >"$scratch/kanzo-test.log" 2>&1); then echo "kanzo: cargo test passed on patched v0.2.1"; else echo "kanzo: cargo test FAILED on patched v0.2.1"; tail -n 20 "$scratch/kanzo-test.log"; fi
 }
 report tstack https://github.com/t3dotgg/tstack 1085050
 report pstack https://github.com/cursor/plugins 4dd1d05

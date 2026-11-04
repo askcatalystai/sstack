@@ -35,6 +35,8 @@ done
 if hooks=$(git -C "$S" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   mkdir -p "$hooks/hooks"; ln -sfn "$S/scripts/pre-push.sh" "$hooks/hooks/pre-push"
 fi
+# The board is built from kanzo/ here, only when that source has changed.
+if command -v cargo >/dev/null 2>&1; then "$S/scripts/kanzo-install.sh" || echo "kanzo: install failed; rerun install.sh"; else echo "skipped kanzo build: no cargo"; fi
 # Kanzo card tags refresh on a timer.
 if command -v systemctl >/dev/null 2>&1 && command -v kanzo >/dev/null 2>&1; then
   mkdir -p "$HOME/.config/systemd/user"

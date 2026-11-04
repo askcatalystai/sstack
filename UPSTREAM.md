@@ -19,3 +19,7 @@ place through the adapter, not copied.
 
 Run `scripts/upstream-check.sh` for a report of changes since these commits.
 It fetches temporary clones, prints diff stats, and always exits 0.
+
+## Kanzo
+
+`kanzo/` is a copy of [emanuele-em/kanzo](https://github.com/emanuele-em/kanzo) at tag v0.2.1 plus our changes: the Deployment column, styled agent labels and workspaces. Its git history stays upstream. It's AGPL-3.0, with its licence at `kanzo/LICENSE`. `scripts/upstream-check.sh` works out our changes against that tag and reports whether they still apply to the latest release. To take a release, apply them to it and replace `kanzo/`, then update the tag in the script.
