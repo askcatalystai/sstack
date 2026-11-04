@@ -25,7 +25,7 @@ sstack is three things on T3 Code:
 
 ## The board
 
-Kanzo at http://localhost:4242 is the source of truth, run from a small local patch (`patches/kanzo-sstack.patch`, on tag v0.2.1). Doing is coding, Review is the bug pass and Astra, Deployment is the gate, a manual Codex cloud review and waiting on deploy, and Done means checked on prod. `scripts/sid-card.py` sets labels and elapsed time, posts screenshots, and reads the user's comments.
+Kanzo at http://localhost:4242 is the source of truth, built from `kanzo/` in this repo (upstream v0.2.1 plus our changes, such as workspaces with a dropdown for each product). `install.sh` builds and installs it when `kanzo/` changes. Doing is coding, Review is the bug pass and Astra, Deployment is the gate, a manual Codex cloud review and waiting on deploy, and Done means checked on prod. `scripts/sid-card.py` sets labels and elapsed time, posts screenshots, and reads the user's comments.
 
 ## Roles
 
