@@ -781,6 +781,8 @@ const NEW_TITLE = "New task";
 let fresh = null; // id of the task just added, until something in it is saved
 
 async function newTask() {
+  // Mid-switch the board still lists the previous workspace's projects.
+  if (state.board.workspace?.slug !== state.workspace) return;
   const { projects } = state.board;
   if (!projects.length) { toast("Create a project first"); return; }
   const last = localStorageGet("kanzo.newTaskProject");
