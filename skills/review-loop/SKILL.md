@@ -1,6 +1,6 @@
 ---
 name: review-loop
-description: A Composer bug pass (pstack poteto bug-fix playbook) and an Astra review run together, Claude takes the final call, the builder fixes once, Claude verifies and approves, then the PR bot reviews risky PRs. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
+description: A Composer bug pass (pstack poteto bug-fix playbook) runs first, then Astra reviews, Claude takes the final call, the builder fixes once, Claude verifies and approves, then the PR bot reviews risky PRs. Use for "review loop", "sol loop" (Sol reviews instead), or before filing a PR.
 ---
 
 # review-loop
@@ -13,28 +13,28 @@ gate or a wrong shipped doc blocks; the rest is a follow-up or gets declined.
 
 ## The sequence
 
-The builder builds (Sol for logic, an Opus builder for visible UI) and the orchestrator commits it → **bug pass** (Composer) and **Astra** at the same time (user, 2026-11-13) → the orchestrator merges both lists into one and takes the final call → the builder fixes once → **a fix that changes behaviour goes back to Astra**, for the changed code only (user, 2026-11-01) → the orchestrator verifies → Astra's approval of the head commit is recorded as the merge verdict (`sid-verdict.sh`) → merge train → live check. The PR bot joins on risky PRs unless `sid-mode.sh get bot` says `off`, and `sid-mode.sh get reviewers` can narrow the reviewers to Astra alone or none. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
+The builder builds (Sol for logic, an Opus builder for visible UI) and the orchestrator commits it and opens the PR → **bug pass** (Composer) → the orchestrator commits its fixes → **Astra** reviews that commit with the bug-pass report and returns one list → the orchestrator takes the final call → the builder (the Opus builder for visible UI, Sol for logic) fixes once → **a fix that changes behaviour goes back to Astra**, for the changed code only (user, 2026-11-01) → the orchestrator verifies → Astra's approval of the head commit is recorded as the merge verdict (`sid-verdict.sh`) → merge train → live check. The PR bot joins on risky PRs unless `sid-mode.sh get bot` says `off`, and `sid-mode.sh get reviewers` can narrow the reviewers to Astra alone or none. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
 
-1. **Bug pass** (`bug pass` in models.md, Cursor Composer 2.5, started with `options: { fastMode: "false" }` — Plus rejects Composer without it), alongside Astra. It follows pstack's poteto-mode bug-fix playbook (`~/.local/share/pstack-src/pstack/skills/poteto-mode/playbooks/bug-fix.md`) and the fix-root-causes principle, applied to the change:
+1. **Bug pass** (`bug pass` in models.md, Cursor Composer 2.5, started with `options: { fastMode: "false" }` — Plus rejects Composer without it), before Astra. It follows pstack's poteto-mode bug-fix playbook (`~/.local/share/pstack-src/pstack/skills/poteto-mode/playbooks/bug-fix.md`) and the fix-root-causes principle, applied to the change:
    - **Hunt:** read the diff and the code it touches; list candidate defects (correctness, races, data loss, security/privacy, auth, idempotency, error paths, regressions in callers).
    - **Reproduce each one:** a failing test (or a scripted run) that shows the defect. No repro, no finding: a hypothesis it cannot reproduce is reported as "unconfirmed", never fixed.
    - **Root-cause:** trace each reproduced symptom to the first wrong decision; fix there, not where it surfaced. Guards, retries and swallowed errors are not fixes unless the state is legitimate. Check for the same fault elsewhere in the change.
    - **Fix minimally:** the smallest change the evidence justifies, failing test first, then the fix; revert anything a refuted hypothesis motivated.
    - **Adversarial fixtures:** equal timestamps, ids that sort differently from time, empty and huge inputs, malformed config (could an error print a secret?). A fixture that spaces everything neatly hides ordering bugs (PR 54, 2026-11-01).
    - **Report**: each finding with repro command, failing-then-passing output, root cause, fix; and a list of hypotheses it ruled out. It never commits or pushes.
-   If the bug pass can't run (provider error), retry once, then write it as skipped in the PR's `## Review` section and rely on Astra. `sid-merge.sh` then requires the PR bot.
-2. **Astra reviews** (`reviewer`) the named commit at the same time, not the working tree, so the bug pass's edits don't move under it. It runs the covering tests, says what it ran, and returns its list.
-3. **The orchestrator takes the final call** on both lists, merged into one (ledger: accepted, or declined with a reason), reads the bug pass's fixes as it would any diff, and reads the whole diff for slop.
-4. **Sol fixes once**: every accepted finding in one brief.
+   If the bug pass can't run (provider error), retry once, then write it as skipped in the PR's `## Review` section and go on to Astra. `sid-merge.sh` then requires the PR bot.
+2. **Astra reviews** (`reviewer`) the commit that holds the change and the bug-pass fixes, with the bug-pass report: confirms, rejects with evidence, or adds what was missed. It runs the covering tests, says what it ran, and returns one list. Nobody edits the worktree while it runs.
+3. **The orchestrator takes the final call** on Astra's list (ledger: accepted, or declined with a reason) and reads the diff for slop.
+4. **The builder fixes once** (the Opus builder for visible UI, Sol for logic): every accepted finding in one brief.
 5. **Fixes get reviewed.** A fix that changes behaviour goes back to Astra with the original finding and the changed code only. The orchestrator verifies every fix (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote). Each finding and its outcome goes in the PR's `## Review` section.
-6. File the PR. For a risky PR, ask the **PR bot** (Codex GitHub bot) with `@codex review`; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), Sol fixes the accepted ones, the orchestrator resolves the threads and pushes.
+6. The PR is already open when shipping (`full-send` opens it before review). For a risky PR, ask the **PR bot** (Codex GitHub bot) with `@codex review`; triage its findings per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask), the builder fixes the accepted ones, the orchestrator resolves the threads and pushes.
 
-If Astra approves with no blocker or should and the bug pass changed nothing, steps 4 and 5 don't apply. Astra's APPROVE on the head commit is the merge verdict: record it with `sid-verdict.sh <pr> <commit> PASS astra <its childThreadId> "<what it ran>"` as soon as it returns.
+If Astra approves with no blocker or should, steps 4 and 5 don't apply. Astra's APPROVE on the head commit is the merge verdict: record it with `sid-verdict.sh <pr> <commit> PASS astra <its childThreadId> "<what it ran>"` as soon as it returns.
 
 ## Rules
 
 - **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, Composer and Astra, one subagent per job, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`).
-- Astra and the bug pass get the same brief and the commit to review. Each title names the card key, and each brief starts "Read ~/.local/share/sidstack/rules.md first."
+- Astra gets the brief, the commit to review and the bug-pass report. Each title names the card key, and each brief starts "Read ~/.local/share/sidstack/rules.md first."
   A diff over ~20 files is split by area, one brief per area. Never send secrets or customer data.
 - A reviewer that times out or errors is retried once. If it still fails, write it as skipped in `## Review`, which requires the PR bot.
 - Reviewers must not start subagents or reviewers.
@@ -110,7 +110,7 @@ review grew the diff, cut first. Do not agree just to end the loop.
 
 ## 4. Re-review fixes
 
-After Sol's fix, a behaviour change gets a fresh `delegate_task` to Astra with the round 1 brief, the findings and their outcomes (`fixed:` / `disagree:` / `declined:` + evidence), and the change since the last review. Tell it: open ids and changed code only. A fix with no behaviour change, such as a rename or a deleted comment, skips this. Sol doesn't get a third pass: two failures means the `Scrap` section in `full-send`.
+After Sol's fix, a behaviour change gets a fresh `delegate_task` to Astra with the round 1 brief, the findings and their outcomes (`fixed:` / `disagree:` / `declined:` + evidence), and the change since the last review. Tell it: open ids and changed code only. A fix with no behaviour change, such as a rename or a deleted comment, skips the full re-review, but it changes the patch the verdict covers: ask Astra to confirm the new head from the diff since its approval, and record that. Sol doesn't get a third pass: two failures means the `Scrap` section in `full-send`.
 
 ## 5. Stop
 

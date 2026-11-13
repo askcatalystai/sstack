@@ -2,7 +2,8 @@
 """Print what the operator typed in T3 lately, so the nightly-rules skill can find what they had to repeat.
 
   sid-reflect.py [--hours 24] [--week]
-Prints one line per message the operator typed in a top-level thread: time, thread title, text.
+Prints one line per message the operator typed in a top-level thread: time, project, thread title, thread id, text.
+A message over 1500 characters is cut, with the number of characters left out.
 --week prints the last 7 days instead, which is the window for "said more than once".
 Reads T3's database read-only. Messages agents sent to subagents, and subagent threads, are left out.
 """
@@ -10,9 +11,10 @@ import datetime as dt, os, sqlite3, sys
 
 DB = os.path.expanduser("~/.t3/userdata/statev2.sqlite")
 QUERY = """
-select m.created_at, t.title, json_extract(m.payload_json, '$.text')
+select m.created_at, t.title, json_extract(m.payload_json, '$.text'), t.thread_id, p.title
 from orchestration_v2_projection_messages m
 join orchestration_v2_projection_threads t on t.thread_id = m.thread_id
+left join projection_projects p on p.project_id = t.project_id
 where m.role = 'user' and m.created_at >= ?
   and json_extract(m.payload_json, '$.createdBy') = 'user'
   and json_extract(t.payload_json, '$.lineage.parentThreadId') is null
@@ -25,11 +27,13 @@ def main():
     hours = 168 if "--week" in args else int(args[args.index("--hours") + 1]) if "--hours" in args else 24
     since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=10)
-    for when, title, text in db.execute(QUERY, (since,)):
+    for when, title, text, thread, project in db.execute(QUERY, (since,)):
         text = " ".join((text or "").split())
-        if not text or text.startswith("/"):
+        if not text or (text.startswith("/") and " " not in text):
             continue
-        print(f"{when[:16].replace('T', ' ')} [{(title or '')[:24]}] {text[:600]}")
+        if len(text) > 1500:
+            text = f"{text[:1500]} [+{len(text) - 1500} more]"
+        print(f"{when[:16].replace('T', ' ')} [{project or 'no project'} / {title or 'untitled'} / {thread}] {text}")
 
 
 main()

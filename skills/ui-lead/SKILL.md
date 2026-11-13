@@ -29,7 +29,7 @@ Read `<pstack>/skills/principle-experience-first/SKILL.md` first. Use `<pstack>/
 4. **The Opus builder builds it.** Its brief has the reference file paths, what to remove, the states to handle and this file's Taste rules: tell it to read this file. Our components and design tokens only, with the smallest diff that gets it right.
 5. **After screenshots, local.** Run `sid-preview.sh <worktree>`, then Terra captures the same screens and states, and posts them on the card next to the before set.
 6. **The orchestrator judges it, before Composer and Astra.** Read the screenshots and the diff against the Taste rules. In the app only if a screenshot can't answer it, such as an interaction. Send it back to the builder with exact changes, once. If it's still wrong, scrap it (`full-send`'s Scrap section).
-7. **Composer and Astra together,** for logic. Then `sid-merge.sh`. Run `sid-preview.sh main` before merging, because the dev server blocks removing the worktree.
+7. **Composer, then Astra,** for logic. Then `sid-merge.sh`. Run `sid-preview.sh main` before merging, because the dev server blocks removing the worktree.
 8. **After deploy,** Terra captures prod and posts it, and the orchestrator does the final test in the app. **Run `sid-card.py inbox` at each step:** any comment from the founder comes first. Reply on the card, and if it's outside this PR, make it a new card.
 
 ## Screenshots

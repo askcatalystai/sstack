@@ -80,13 +80,15 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    then `no-comments` (`comment-sicko`), then your own read for dead code and needless guards.
 3. **Review** (see `review-loop`). First Claude commits, pushes and opens the PR
    (`file-pr`, `link_pull_request`, the card key in the body), so the review covers a
-   commit and its result can be recorded. Then Composer's bug pass and Astra run at the
-   same time, each a `delegate_task` whose brief names the worktree path and the commit.
-   Claude takes the final call, the builder fixes once through a new `delegate_task`
-   naming the same path, a fix that changes behaviour goes back to Astra for the changed
-   code, and Claude verifies each fix. Skip the fix pass if Astra approved cleanly. When
-   Astra approves the head commit, record it at once with `sid-verdict.sh` (step 4): that
-   is the merge verdict, with no separate verifier run. If any step is skipped, the PR's
+   commit and its result can be recorded. Then Composer's bug pass, then Astra on the
+   committed result, each a `delegate_task` whose brief names the worktree path and the
+   commit. Claude takes the final call, the builder (the Opus builder for visible UI, Sol
+   for logic) fixes once through a new `delegate_task` naming the same path, a fix that
+   changes behaviour goes back to Astra for the changed code, and Claude verifies each
+   fix. Skip the fix pass if Astra approved cleanly. When Astra approves the head commit,
+   record it at once with `sid-verdict.sh` (step 4): that is the merge verdict, with no
+   separate verifier run. Any later change to the patch, even a rename, needs Astra to
+   confirm the new head (the diff since its approval only) and a new record. If any step is skipped, the PR's
    `## Review` section says "skipped" and why, and `sid-merge.sh` then requires the bot.
 4. **Prove it.** Run the real thing (see "Proof"). The author doesn't verify its own
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
@@ -95,13 +97,14 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review runs the covering tests on the head commit, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
    Run checks so a failure stops you before you commit or push.
 5. **Ship.** Push the last fixes with `--force-with-lease` and renew `## Proof` for
-   the head commit. If the PR needs the PR bot, `watch_pull_request` and end the turn.
+   the head commit. If the PR needs the PR bot (step 6), comment `@codex review`, then
+   `watch_pull_request` and end the turn.
    If not, go straight to step 7: with no CI and no bot, nothing would wake you.
 6. **Risky PRs only: ask the PR bot,** unless `sid-mode.sh get bot` says `off`. For auth, payments, data, migrations, `commerce/`,
    the gate, or a PR that skipped a review step, comment `@codex review`. `sid-merge.sh`
    works out most of these from the paths and forces it; add `--bot` for what it can't see. Findings:
    Claude triages per `<pstack>/skills/poteto-mode/references/bugbot-triage.md` (fix,
-   dismiss with a reason, or ask); noise doesn't get code. Sol fixes once, Claude verifies,
+   dismiss with a reason, or ask); noise doesn't get code. the builder fixes once, Claude verifies,
    push, resolve the threads. On any PR, conflicts: merge the default branch in the
    worktree and run `sid-merge.sh` again.
 7. **Merge.** Run `sid-merge.sh --check <pr>` first. If it prints `proof-failures:` lines, read them and decide from the plan: back to the bug pass, review or coding, or go ahead and say why on the card. No fixed rule. `sid-merge.sh <pr>` refuses until the PR is really ready (`## Proof` must
@@ -117,7 +120,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    your proof, what was checked on prod and what wasn't, and each decision you
    made for the user.
 
-If you stop before the merge, call `unwatch_pull_request` first.
+If you give up before the merge, call `unwatch_pull_request` first. Keep the watch while you're waiting on the bot.
 
 The Kanzo board (http://localhost:4242, MCP `kanzo`) follows the work by itself:
 `scripts/sid-board.py` sets each card from facts every 20 seconds. A running subagent

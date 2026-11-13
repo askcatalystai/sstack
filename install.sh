@@ -32,7 +32,7 @@ done
 # Codex and OpenCode read one global AGENTS.md. Sol, Astra and Terra run there, so the operator's rules go in as that file.
 for file in "$HOME/.codex/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"; do
   mkdir -p "$(dirname "$file")"
-  if [ -e "$file" ] && [ ! -L "$file" ]; then mv "$file" "$file.before-sidstack"; echo "kept your old $file as $file.before-sidstack"; fi
+  if [ -e "$file" ] && [ ! -L "$file" ]; then kept="$file.before-sidstack.$(date +%Y%m%d%H%M%S)"; mv "$file" "$kept"; echo "kept your old $file as $kept"; fi
   ln -sfn "$S/rules.md" "$file"
 done
 for dir in "$HOME/.claude/agents" "$HOME/.claude_2/agents" "$HOME/.config/opencode/agents"; do

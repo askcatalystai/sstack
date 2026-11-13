@@ -9,7 +9,7 @@ The operator shouldn't have to say anything twice. `~/.local/share/sidstack/rule
 
 ## Steps
 
-1. Read `~/.local/share/sidstack/rules.md`.
+1. Read `~/.local/share/sidstack/rules.md`, then the comments on the Kanzo card "Rules changelog" in the `process` project (`kanzo` `get_task`). For each `revert: <reason>` comment from the operator with no reply after it, remove or restore that rule first, and reply on the card saying what you did.
 2. Run `python3 ~/.local/share/sidstack/scripts/sid-reflect.py --week` for the last seven days, and `python3 ~/.local/share/sidstack/scripts/sid-reflect.py` for today.
 3. Find today's messages that are an instruction about how to work, not what to build, and that the operator also gave earlier in the week, or gave today as a correction ("again", "I asked earlier", "we fixed this", "why is it still"). Count the times and note the dates.
 4. For each, decide where it goes:
