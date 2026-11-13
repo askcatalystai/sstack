@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Link sidstack's skills into every harness, put models.md where Claude Code loads rules, and keep pstack linked.
+# Link sidstack's skills into every harness, put models.md and rules.md where each harness loads them, and keep pstack linked.
 # Idempotent: rerun after any change. A sidstack skill replaces a tstack link of the same name.
 set -eu
 S=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
@@ -27,6 +27,13 @@ for dir in "$HOME/.claude/rules" "$HOME/.claude_2/rules"; do
   mkdir -p "$dir"; ln -sfn "$S/models.md" "$dir/sidstack-models.md"
   # pstack reads its per-role models from this rule; generate it so models.md stays the one source.
   python3 "$S/scripts/pstack_models.py" "$S/models.md" "$dir/pstack-models.md"
+  ln -sfn "$S/rules.md" "$dir/sidstack-rules.md"
+done
+# Codex and OpenCode read one global AGENTS.md. Sol, Astra and Terra run there, so the operator's rules go in as that file.
+for file in "$HOME/.codex/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"; do
+  mkdir -p "$(dirname "$file")"
+  if [ -e "$file" ] && [ ! -L "$file" ]; then kept="$file.before-sidstack.$(date +%Y%m%d%H%M%S)"; mv "$file" "$kept"; echo "kept your old $file as $kept"; fi
+  ln -sfn "$S/rules.md" "$file"
 done
 for dir in "$HOME/.claude/agents" "$HOME/.claude_2/agents" "$HOME/.config/opencode/agents"; do
   mkdir -p "$dir"; [ -d "$P/agents" ] && for a in "$P"/agents/*.md; do ln -sfn "$a" "$dir/$(basename "$a")"; done
