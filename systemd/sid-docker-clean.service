@@ -1,7 +1,8 @@
 [Unit]
-Description=Clean disposable Docker resources
+Description=Clean disposable Docker resources and stale Codex MCP servers
 
 [Service]
 Type=oneshot
 EnvironmentFile=-%h/.config/sidstack/env
-ExecStart=%h/.local/share/sidstack/scripts/sid-docker-clean.sh
+ExecStart=-%h/.local/share/sidstack/scripts/sid-docker-clean.sh
+ExecStart=-%h/.local/share/sidstack/scripts/sid-mcp-reap.sh

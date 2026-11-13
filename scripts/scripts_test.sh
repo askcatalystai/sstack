@@ -979,4 +979,243 @@ touch "$DOCKER_TEST_DIR/missing-image"; : > "$DOCKER_TEST_DIR/calls"
 "$here/sid-db.sh" start > "$t/db-missing" 2>&1; ok "missing image fails instead of pulling" "$?" 1
 grep -q 'not pulled' "$t/db-missing"; ok "missing image explains the failure" "$?" 0
 grep -Eq '"(pull|run)"' "$DOCKER_TEST_DIR/calls"; ok "missing image never pulls or runs" "$?" 1
+
+# MCP reaper: synthetic process identities and signals only; never signal host MCPs.
+SID_REAP_MODULE_DIR="$here" python3 - <<'PY'
+from dataclasses import replace
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import signal
+import sqlite3
+import sys
+import tempfile
+import unittest
+sys.path.insert(0, os.environ['SID_REAP_MODULE_DIR'])
+import sid_mcp_reap as reaper
+
+class ReaperTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / 'state.sqlite'
+        with sqlite3.connect(self.db) as db:
+            db.execute('CREATE TABLE orchestration_v2_projection_threads '
+                       '(thread_id TEXT, title TEXT, payload_json TEXT)')
+            db.execute('CREATE TABLE orchestration_v2_projection_runs '
+                       '(thread_id TEXT, requested_at TEXT, status TEXT, provider_instance_id TEXT)')
+        self.now = 1800000000
+        self.rows = {}
+        self.calls, self.waits, self.output = [], [], []
+        self.add(100, 1, ('/opt/codex', 'app-server', '--listen', 'stdio://'))
+        self.add(101, 1, ('codex', 'app-server'))
+
+    def add(self, pid, parent, argv, age=7201, pgid=None):
+        self.rows[pid] = reaper.Process(pid, parent, pid if pgid is None else pgid,
+                                        pid * 10, age, 1024, tuple(argv))
+
+    def thread(self, name, age, running=False, subagent=False, provider='codex'):
+        requested = datetime.fromtimestamp(self.now - age, timezone.utc).isoformat()
+        payload = {'lineage': {'parentThreadId': 'parent'}} if subagent else {}
+        with sqlite3.connect(self.db) as db:
+            db.execute('INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?)',
+                       (name, name, json.dumps(payload)))
+            db.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)',
+                       (name, requested, 'running' if running else 'completed', provider))
+
+    def run_reaper(self, dry=False, table=None, send=None):
+        def fake_kill(target, sig):
+            self.calls.append((target, sig))
+            # TERM-resistant processes force the five-second escalation path.
+            if sig == signal.SIGKILL:
+                self.rows = {pid: p for pid, p in self.rows.items()
+                             if not (p.pgid == -target if target < 0 else pid == target)}
+        return reaper.reap(self.db, dry, table or (lambda: self.rows.copy()),
+                           send or fake_kill, self.waits.append, self.output.append, now=lambda: self.now)
+
+    def test_selection_and_signal_targets(self):
+        commands = [('railway', 'mcp', 'proxy'), ('npm', 'exec', 'rea-agents@1', 'mcp'),
+                    ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), ('/a/cua_repl',),
+                    ('node', '/a/mcp/launch.mjs'), ('/a/launch_codex_app_tools_mcp',)]
+        for i, cmd in enumerate(commands, 200):
+            self.add(i, 100 if i % 2 else 101, cmd, pgid=100 if i == 200 else i)
+        keep = [(300, 100, commands[0], 7200), (301, 100, commands[1], 50),
+                (302, 100, ('node', 'ordinary.js'), 9000), (303, 1, commands[0], 9000),
+                (304, 200, commands[2], 9000),
+                (305, 100, ('codex-code-mode', 'node_repl'), 9000),
+                (306, 100, ('node', '/a/not-mcp/launch.mjs'), 9000),
+                (307, 100, ('codex', 'app-server', '-c', 'rea-agents'), 9000)]
+        for pid, parent, argv, age in keep:
+            self.add(pid, parent, argv, age, pgid=100 if pid == 307 else None)
+        self.assertEqual(self.run_reaper(), 0)
+        targets = {200, -201, -202, -203, -204, -205}
+        self.assertEqual(set(self.calls), {(t, s) for t in targets for s in (signal.SIGTERM, signal.SIGKILL)})
+        self.assertEqual(set(self.rows), {100, 101, *(p[0] for p in keep)})
+        self.assertEqual(self.waits, [5])
+        self.assertIn('stopped 6 server(s); RSS freed 6144 bytes', self.output[-1])
+        self.assertEqual(sum(line.startswith('Stopped pid=') for line in self.output), 6)
+
+    def test_group_children_survive_leader_term(self):
+        self.add(200, 100, ('node_repl',))
+        self.add(201, 200, ('worker',), pgid=200)
+        def send(target, sig):
+            self.calls.append((target, sig))
+            self.rows.pop(200 if sig == signal.SIGTERM else 201, None)
+        self.assertEqual(self.run_reaper(send=send), 0)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (-200, signal.SIGKILL)])
+        self.assertIn('RSS freed 2048 bytes', self.output[-1])
+
+    def test_dry_run_never_signals_or_waits(self):
+        self.add(200, 100, ('node_repl',))
+        self.run_reaper(dry=True)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.waits, [])
+        self.assertIn(200, self.rows)
+        self.assertTrue(any('Would stop pid=200' in s for s in self.output))
+
+    def test_finished_subagent_stops_even_when_young_and_other_thread_running(self):
+        self.add(200, 100, ('node_repl',), age=10)
+        self.thread('finished child', age=20, subagent=True)
+        self.thread('other active thread', age=500, running=True)
+        self.assertEqual(self.run_reaper(), 0)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (-200, signal.SIGKILL)])
+        self.assertTrue(any('reason=subagent finished child finished' in s for s in self.output))
+
+    def test_running_thread_kept(self):
+        self.add(200, 100, ('node_repl',))
+        self.thread('active operator', age=7250, running=True)
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_running_subagent_kept_including_later_run(self):
+        self.add(200, 100, ('node_repl',))
+        self.thread('active child', age=7250, subagent=True)
+        with sqlite3.connect(self.db) as db:
+            requested = datetime.fromtimestamp(self.now - 1, timezone.utc).isoformat()
+            db.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)',
+                       ('active child', requested, 'running', 'codex'))
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_finished_operator_thread_kept(self):
+        self.add(200, 100, ('node_repl',))
+        self.thread('operator', age=7250)
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=operator thread' in s for s in self.output))
+
+    def test_closest_preceding_thread_wins(self):
+        for closer_subagent in (True, False):
+            with self.subTest(closer_subagent=closer_subagent):
+                with sqlite3.connect(self.db) as db:
+                    db.execute('DELETE FROM orchestration_v2_projection_threads')
+                    db.execute('DELETE FROM orchestration_v2_projection_runs')
+                self.thread('earlier', age=130, subagent=not closer_subagent)
+                self.thread('closer', age=30, subagent=closer_subagent)
+                self.add(200, 100, ('node_repl',), age=20)
+                self.calls.clear()
+                self.output.clear()
+                self.run_reaper()
+                self.assertEqual(bool(self.calls), closer_subagent)
+                reason = 'subagent closer finished' if closer_subagent else 'operator thread'
+                self.assertTrue(any('reason=' + reason in s for s in self.output))
+
+    def test_server_before_any_thread_has_no_match(self):
+        self.thread('future operator', age=7200, running=True)
+        self.add(200, 100, ('node_repl',), age=10800)
+        self.run_reaper()
+        self.assertEqual(len(self.calls), 2)
+        self.assertTrue(any('reason=no thread, 3h old' in s for s in self.output))
+
+    def test_no_match_age_threshold_and_window(self):
+        self.thread('too early operator', age=11000)
+        for pid, age in ((200, 10800), (201, 7200), (202, 10)):
+            self.add(pid, 100, ('node_repl',), age=age)
+        self.run_reaper()
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (-200, signal.SIGKILL)])
+        self.assertEqual(sum('reason=no thread, too young' in s for s in self.output), 2)
+
+    def test_match_window_includes_exact_start_and_120_seconds(self):
+        self.thread('child', age=200, subagent=True)
+        self.add(200, 100, ('node_repl',), age=200)
+        self.add(201, 100, ('node_repl',), age=80)
+        self.add(202, 100, ('node_repl',), age=79)
+        self.run_reaper()
+        self.assertEqual({target for target, _ in self.calls}, {-200, -201})
+        self.assertTrue(any('Keep pid=202' in s for s in self.output))
+
+    def test_other_provider_does_not_match(self):
+        self.thread('claude operator', age=7250, running=True, provider='claude')
+        self.add(200, 100, ('node_repl',))
+        self.run_reaper()
+        self.assertEqual(len(self.calls), 2)
+        self.assertTrue(any('reason=no thread,' in s for s in self.output))
+
+    def test_resumed_subagent_is_rechecked_before_signal(self):
+        self.thread('resumed child', age=7250, subagent=True)
+        self.add(200, 100, ('node_repl',))
+        def table():
+            with sqlite3.connect(self.db) as db:
+                db.execute("UPDATE orchestration_v2_projection_runs SET status='running'")
+            return self.rows.copy()
+        self.run_reaper(table=table)
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_unreadable_database_skips_without_creating_it(self):
+        self.add(200, 100, ('node_repl',))
+        self.db.unlink()
+        self.run_reaper()
+        self.assertFalse(self.db.exists())
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('cannot be read' in s for s in self.output))
+        self.db.write_text('not a sqlite database')
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+
+    def test_pid_reuse_and_changed_parent_are_protected(self):
+        for change in ({'started': 999}, {'ppid': 1}, {'pgid': 999},
+                       {'argv': ('codex-code-mode',)}):
+            with self.subTest(change=change):
+                self.add(200, 100, ('node_repl',))
+                initial = self.rows.copy()
+                self.rows[200] = replace(self.rows[200], **change)
+                snapshots = iter([initial, self.rows])
+                self.run_reaper(table=lambda: next(snapshots))
+                self.assertEqual(self.calls, [])
+
+    def test_group_outside_subtree_is_protected(self):
+        self.add(200, 100, ('node_repl',))
+        for parent, argv in [(1, ('unrelated',)), (100, ('sibling',)),
+                             (200, ('codex-code-mode',)), (200, ('codex', 'app-server'))]:
+            with self.subTest(parent=parent, argv=argv):
+                self.add(201, parent, argv, pgid=200)
+                self.run_reaper()
+                self.assertEqual(self.calls, [])
+
+    def test_parent_must_start_with_codex_app_server(self):
+        for argv in [('node', 'codex', 'app-server'), ('codex-code-mode', 'app-server'),
+                     ('codex', 'exec'), ('echo', 'codex app-server')]:
+            with self.subTest(argv=argv):
+                self.add(100, 1, argv)
+                self.add(200, 100, ('node_repl',))
+                self.run_reaper()
+                self.assertEqual(self.calls, [])
+
+    def test_term_success_does_not_escalate(self):
+        self.add(200, 100, ('node_repl',))
+        def send(target, sig):
+            self.calls.append((target, sig))
+            del self.rows[200]
+        self.run_reaper(send=send)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM)])
+
+suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReaperTests)
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+sys.exit(not result.wasSuccessful())
+PY
+ok "MCP reaper fixture cases (no host process signals)" "$?" 0
 exit $fail
