@@ -29,7 +29,7 @@ The builder builds (Sol for logic, an Opus builder for visible UI) and the orche
 5. **Fixes get reviewed.** A fix that changes behaviour goes back to Astra with the original finding and the changed code only. The orchestrator verifies every fix (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote). Each finding and its outcome goes in the PR's `## Review` section.
 6. The PR is already open when shipping (`full-send` opens it before review). **Risky PRs get one more model.** For auth, payments, data, migrations, `commerce/`, the gate or merge scripts, or a PR that skipped a review step, add one review from the `risky review` line in `models.md`, a family that hasn't reviewed the PR yet, on the same commit as Astra (both only read it, so they can run together). A finding blocks the merge only when every model that reviewed the PR calls it risky; otherwise Claude decides and `## Review` says why (user 2026-11-13). There is no Codex bot: never comment `@codex review` or wait on it. Triage per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask); the builder fixes the accepted ones.
 
-If Astra approves with no blocker or should, steps 4 and 5 don't apply. Astra's APPROVE on the head commit is the merge verdict: record it with `sid-verdict.sh <pr> <commit> PASS astra <its childThreadId> "<what it ran>"` as soon as it returns.
+If Astra approves with no blocker or should, steps 4 and 5 don't apply. Astra's APPROVE on the head commit is the merge verdict: write it in the PR's `## Review` section ("Astra approved <commit>") as soon as it returns. There is nothing else to record.
 
 ## Rules
 
@@ -110,7 +110,7 @@ review grew the diff, cut first. Do not agree just to end the loop.
 
 ## 4. Re-review fixes
 
-After Sol's fix, a behaviour change gets a fresh `delegate_task` to Astra with the round 1 brief, the findings and their outcomes (`fixed:` / `disagree:` / `declined:` + evidence), and the change since the last review. Tell it: open ids and changed code only. A fix with no behaviour change, such as a rename or a deleted comment, skips the full re-review, but it changes the patch the verdict covers: ask Astra to confirm the new head from the diff since its approval, and record that. Sol doesn't get a third pass: two failures means the `Scrap` section in `full-send`.
+After Sol's fix, a behaviour change gets a fresh `delegate_task` to Astra with the round 1 brief, the findings and their outcomes (`fixed:` / `disagree:` / `declined:` + evidence), and the change since the last review. Tell it: open ids and changed code only. A fix with no behaviour change, such as a rename or a deleted comment, skips the re-review: renew `## Proof` for the new head and carry on. Sol doesn't get a third pass: two failures means the `Scrap` section in `full-send`.
 
 ## 5. Stop
 

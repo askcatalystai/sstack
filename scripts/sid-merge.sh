@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# sid-merge [--check] [--bot] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
+# sid-merge [--check] [--retry] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
 # --check stops at readiness (including stacked PRs); --cancel withdraws a request not yet gating.
+# --retry sends a commit that already failed the gate through once more; a second failure needs a new commit.
 # Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
-# Exit: 0 merged/ready/queued/cancelled, 1 not ready, 3 conflicts, 4 main red, 5 merged onto an ungated tree, 6 bot findings, 7 bot pending, 8 verdict.
+# Exit: 0 merged/ready/queued/cancelled, 1 not ready or the gate failed, 3 conflicts, 4 main red, 5 merged onto an ungated tree.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
 source "$here/sid-merge-lib.sh"
-check=false; need_bot=false; no_wait=false; cancel=false
+check=false; retry=false; no_wait=false; cancel=false
 while [[ ${1:-} == --* ]]; do
-  case "$1" in --check) check=true;; --bot) need_bot=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
+  case "$1" in --check) check=true;; --retry) retry=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
   shift
 done
-pr=${1:?usage: sid-merge [--check] [--bot] [--no-wait] [--cancel] <pr>}
+pr=${1:?usage: sid-merge [--check] [--retry] [--no-wait] [--cancel] <pr>}
 [[ $pr =~ ^[0-9]+$ ]] || { echo 'PR must be a number'; exit 1; }
 gate_repo || exit 1
 cd "$repo" || exit 1
@@ -28,13 +29,11 @@ if [ "$cancel" = true ]; then
   exit 0
 fi
 gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
-bot=${SID_PR_BOT:-chatgpt-codex-connector}
-bot_mode=$("$here/sid-mode.sh" get bot) || exit 1
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ready
 [ "$check" = true ] || [ "$base" = "$default" ] || { echo "#$pr is stacked on $base: land that first, rebase this onto $default, and set its base to $default"; exit 1; }
-ready_verdict
 if [ "$check" = true ]; then
+  retry_allowed || exit 1
   if [ "$base" = "$default" ]; then echo "ready: #$pr ${head:0:8}"; else echo "ready, but stacked on $base: #$pr ${head:0:8}"; fi
   exit 0
 fi
@@ -44,12 +43,13 @@ if [ -f "$train/queue/$pr.req" ]; then
   queued_head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || exit 1
 fi
 if [ ! -f "$train/queue/$pr.req" ] || { [ ! -f "$train/active/$pr" ] && [ "$queued_head" != "$head" ]; }; then
+  retry_allowed || exit 1
   rm -f "$train/result/$pr" "$train/queue/$pr.merge"
-  python3 - "$train/queue/$pr.req" "$head" "$need_bot" <<'PY'
+  python3 - "$train/queue/$pr.req" "$head" <<'PY'
 import json, os, sys, time
-path, head, bot = sys.argv[1:]
+path, head = sys.argv[1:]
 with open(path+'.tmp', 'w') as f:
-    json.dump(dict(head=head, bot=bot == 'true', queued=time.time_ns()), f)
+    json.dump(dict(head=head, queued=time.time_ns()), f)
 os.replace(path+'.tmp', path)
 PY
   [ "$?" = 0 ] || { echo "could not queue #$pr"; exit 1; }

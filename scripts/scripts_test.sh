@@ -33,19 +33,6 @@ def data(pr):
     return f if f.exists() else p/'pr.json'
 if args[:2] == ['repo', 'view']:
     print('o/r')
-elif args[:2] == ['api', '--paginate']:
-    if (p/'files-down').exists(): sys.exit(1)
-    if (p/'too-many-files').exists(): print('file\n' * 3000, end='')
-    elif (p/'files').exists(): print((p/'files').read_text())
-elif args[:2] == ['api', 'graphql']:
-    (p/'bot-read').touch()
-    if (p/'threads-down').exists(): sys.exit(1)
-    nodes = []
-    if (p/'open-thread').exists():
-        nodes = [dict(id='thread', isResolved=False, comments=dict(nodes=[dict(author=dict(login='chatgpt-codex-connector'), path='x', line=1, originalLine=1, body='P1 fix this')]))]
-    print(json.dumps(dict(data=dict(repository=dict(pullRequest=dict(reviewThreads=dict(pageInfo=dict(hasNextPage=False, endCursor=None), nodes=nodes)))))))
-elif args[:2] == ['pr', 'comment']:
-    with (p/'comments').open('a') as f: f.write(' '.join(args)+'\n')
 elif args[:2] == ['pr', 'view']:
     if (p/'api-down').exists(): sys.exit(1)
     pr = args[2]; d = json.loads(data(pr).read_text()); d.setdefault('autoMergeRequest', None)
@@ -54,12 +41,6 @@ elif args[:2] == ['pr', 'view']:
     if fields == 'mergeCommit':
         print((p/f'merge-oid-{pr}').read_text().strip()); sys.exit()
     if (p/f'post-api-down-{pr}').exists() and d['state'] == 'MERGED': sys.exit(1)
-    if 'comments' in fields:
-        (p/'bot-read').touch()
-        d['comments'] = []
-        if (p/'bot-completed').exists():
-            state = dict(code_review=dict(commit_sha=d['headRefOid'], status='completed'))
-            d['comments'] = [dict(author=dict(login='chatgpt-codex-connector'), body='codex-review-state:v1 '+json.dumps(state)+' -->')]
     if (p/'retargeted').exists() and 'baseRefName' in fields and 'mergeable' not in fields:
         d['baseRefName'] = 'parent'
     print(json.dumps(d))
@@ -126,30 +107,14 @@ merge() {
   return "$rc"
 }
 merges() { [ -f "$t/merge-calls" ] && wc -l < "$t/merge-calls" | tr -d ' ' || echo 0; }
-verdict() { PATH="$t/bin:$PATH" "$here/sid-verdict.sh" 5 "$head" "$@" >"$t/out" 2>&1; }
-pr '[]'; verdict MAYBE composer thread-1 "ran it"; ok "only known results count" "$?" 1
-mkdir -p .git/sid-gate; touch .git/sid-gate/verdicts; verdict PASS composer thread-1 "ran it"; ok "a verdict it can't record fails" "$?" 1; [ ! -f "$t/comments" ]; ok "and posts nothing" "$?" 0; rm .git/sid-gate/verdicts
-verdict PASS composer thread-1 "ran it"; ok "a verdict is recorded" "$?" 0; grep -q "Verdict: PASS by composer" "$t/comments"; ok "and posted on the PR" "$?" 0
-pr '[]'; touch "$t/files-down"; merge; ok "a failed file list stops the merge" "$?" 1; grep -q "could not read #5's files" "$t/out"; ok "and says why" "$?" 0; rm "$t/files-down"
-pr '[]'; touch "$t/too-many-files"; merge; ok "a file list at the API's limit stops the merge" "$?" 1; grep -q "too many changed files" "$t/out"; ok "and says why" "$?" 0; rm "$t/too-many-files"
-pr '[]'; touch "$t/api-down"; merge; ok "an API failure stops the merge" "$?" 1; grep -q "could not read" "$t/out"; ok "and says why" "$?" 0; rm "$t/api-down"
+pr '[]'; pr '[]'; touch "$t/api-down"; merge; ok "an API failure stops the merge" "$?" 1; grep -q "could not read" "$t/out"; ok "and says why" "$?" 0; rm "$t/api-down"
 rm -f "$stamp"; pr '[]'; git checkout -q main; printf 'cat "$T/after-gate" > "$T/pr.json"\n' > .sidstack/gate.sh; git add -A; git commit -qm flip; git push -q origin main; git checkout -q work
 pr '[{"name":"ci","conclusion":"FAILURE"}]'; cp "$t/pr.json" "$t/after-gate"; pr '[]'; merge; ok "CI going red during the gate stops the merge" "$?" 1; ok "no merge happened" "$(merges)" 0
 git checkout -q main; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm ok; git push -q origin main; git checkout -q work; rm -f "$stamp"; pr '[]'; merge --check; ok "a clean PR is ready without a gate" "$?" 0; ok "--check never merges" "$(merges)" 0
-verdicts=.git/sid-gate/verdicts/5.tsv; cp "$verdicts" "$t/good-verdicts"
-rm "$verdicts"; merge --check; ok "no verdict blocks" "$?" 8; grep -q "no verdict on patch" "$t/out"; ok "and says what to do" "$?" 0
-verdict FAIL composer thread-2 "the page is blank"; merge --check; ok "a failing verdict blocks" "$?" 8; grep -q "the page is blank" "$t/out"; ok "and says why" "$?" 0
-verdict PASS+NOTES composer thread-3 "fixed and rerun"; merge --check; ok "a later pass on the patch clears it" "$?" 0
-sed 's/\t[0-9a-f]\{40\}\t/\tOTHERPATCH\t/' "$t/good-verdicts" > "$verdicts"; merge --check; ok "a verdict on another patch doesn't count" "$?" 8
-git checkout -q main; echo z > z; git add -A; git commit -qm z; git push -q origin main; git checkout -q work; cp "$t/good-verdicts" "$verdicts"; git merge -q --no-edit origin/main; git push -q origin work; head=$(git rev-parse HEAD); pr '[]'; merge --check; ok "merging main keeps the verdict" "$?" 0
-git checkout -q -b other; echo q > q; git add -A; git commit -qm other; other=$(git rev-parse HEAD); git checkout -q work; PATH="$t/bin:$PATH" "$here/sid-verdict.sh" 5 "$other" PASS composer thread-4 "tested other code" >"$t/out" 2>&1; ok "a verdict on code that isn't the PR's is refused" "$?" 1; grep -q "verify again" "$t/out"; ok "and says so" "$?" 0
-moved=$(git commit-tree "HEAD^{tree}" -p "$(git rev-parse origin/main~2)" -m moved); PATH="$t/bin:$PATH" "$here/sid-verdict.sh" 5 "$moved" PASS composer thread-5 "same tree, other parent" >"$t/out" 2>&1; ok "a tested commit with the PR's tree is accepted" "$?" 0
-echo 'a b' > w; git add -A; git commit -qm spaced; git push -q origin work; head=$(git rev-parse HEAD); pr '[]'; verdict PASS composer thread-1 "ran it"; echo 'ab' > w; git add -A; git commit -qm unspaced; git push -q origin work; head=$(git rev-parse HEAD); pr '[]'; merge --check; ok "a whitespace change needs a new verdict" "$?" 8; verdict PASS composer thread-1 "ran it"; ok "and can get one" "$?" 0
 "$here/sid-gate.sh" work >/dev/null; hash=$(sed -n 2p "$stamp" | sed 's/.*sha256 //'); [ -n "$hash" ] && [ "$(cut -d' ' -f1 < <(sha256sum ".git/sid-gate/logs/$head.$(git rev-parse origin/main).log"))" = "$hash" ]; ok "the kept log matches the recorded hash" "$?" 0
 git checkout -q main; printf 'touch "$T/gate-ran"\n' > .sidstack/gate.sh; git add -A; git commit -qm count; git push -q origin main; git checkout -q work; "$here/sid-gate.sh" work >/dev/null; rm -f "$t/gate-ran"; sed -i 2d "$stamp"; pr '[]'; merge --check; ok "--check ignores gate stamps" "$?" 0; [ -f "$t/gate-ran" ]; ok "--check did not run the gate" "$?" 1
-pr '[]'; sed -i 's/ 3 passed/ 8 failed/' "$t/pr.json"; merge --check; ok "a Proof reporting failures doesn't block" "$?" 0; grep -q "^proof-failures: .*8 failed" "$t/out"; ok "and it is shown" "$?" 0; grep -q "needs-bot\|bot has not" "$t/out"; ok "and doesn't require the bot" "$?" 1
 pr '[]'
-git push -q origin "$head~1:refs/heads/parent"; pr '[]'; sed -i 's/"baseRefName":"main"/"baseRefName":"parent"/' "$t/pr.json"; verdict PASS composer thread-6 "ran the stacked PR"; ok "a stacked PR takes a verdict" "$?" 0
+git push -q origin "$head~1:refs/heads/parent"; pr '[]'; sed -i 's/"baseRefName":"main"/"baseRefName":"parent"/' "$t/pr.json"
 merge --check; ok "a stacked PR passes --check" "$?" 0; grep -q "ready, but stacked on parent" "$t/out"; ok "and says it is stacked" "$?" 0
 merge; ok "a stacked PR doesn't merge" "$?" 1; grep -q "land that first" "$t/out"; ok "and says what to do" "$?" 0; ok "no merge happened" "$(merges)" 0
 pr '[]'
@@ -158,7 +123,6 @@ cp "$t/pr.json" "$t/clean.json"; sed -i 's/"mergeable":"MERGEABLE"/"mergeable":"
 merge; ok "a new PR's UNKNOWN mergeability is waited out, and a clean PR merges" "$?" 0; ok "exactly once" "$(merges)" 1; wait
 grep -q "^Gate-Passed: train .*, main .* + #5, lane full, log sha256 " "$t/merge-args"; ok "the squash message carries the gate record" "$?" 0
 grep -q "^Gate-Passed: " "$t/out"; ok "and the merge prints it" "$?" 0
-grep -q "^Verified-By: composer PASS, T3 thread thread-1" "$t/merge-args"; ok "the squash message names the verifier" "$?" 0
 # Each train case has its own real origin. Inspect commits and outcomes, not implementation text.
 export PATH="$t/bin:$PATH"
 setup_train() {
@@ -166,6 +130,21 @@ setup_train() {
   git init -q --bare -b main "$T/origin.git"; git clone -q "$T/origin.git" "$T/repo" 2>/dev/null
   cd "$T/repo" || exit 1; mkdir .sidstack
   cat > .sidstack/gate.sh <<'G'
+# Tests are files named test-*: "fail" always fails, "flaky" fails on its first run only.
+run_tests() {
+  local name bad=0
+  for name in "$@"; do
+    [ -f "$name" ] || continue
+    case "$(cat "$name")" in
+      fail) echo "$name" >> "$SID_FAILURES_OUT"; bad=1;;
+      flaky) [ -f "$T/ran-$name" ] || { touch "$T/ran-$name"; echo "$name" >> "$SID_FAILURES_OUT"; bad=1; };;
+    esac
+  done
+  return "$bad"
+}
+if [ -n "${SID_RERUN:-}" ]; then
+  echo rerun >> "$T/reruns"; run_tests $(cat "$SID_RERUN"); exit
+fi
 echo gate >> "$T/gates"
 git write-tree >> "$T/gated-trees"
 echo "${SID_LANE:-unset}" >> "$T/lane-input"
@@ -190,6 +169,7 @@ if [ -f "$T/block-train" ]; then
 fi
 [ ! -f "$T/flip-ci" ] || cp "$T/red.json" "$T/pr-11.json"
 [ ! -f bad ] && [ ! -f "$T/always-fail" ] || { echo failure-sentinel; exit 1; }
+run_tests $(ls | grep '^test-')
 G
   git add -A; git commit -qm initial; git push -q origin main; git remote set-head origin main
   q=.git/sid-gate/train; health=.git/sid-gate/health
@@ -208,43 +188,12 @@ import json, sys
 p, n, h = sys.argv[1:]
 json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], headRefOid=h, headRefName='work'+n, baseRefName='main', title='change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nAstra approved.\n'), open(p, 'w'))
 PY
-  "$here/sid-verdict.sh" "$n" "$h" PASS composer thread-1 'ran tests' >/dev/null
 }
 queue_pr() { "$here/sid-merge.sh" --no-wait "$1" > "$T/out" 2>&1; }
 run_train() { "$here/sid-train.sh" > "$T/runner-out" 2>&1; }
 count_gates() { if [ -f "$T/gates" ]; then wc -l < "$T/gates" | tr -d ' '; else echo 0; fi; }
 code() { head -n 1 "$q/result/$1"; }
 # Rename/edit merges must have server semantics even with operator overrides.
-# Exercise the hook boundary with real local commits, independent of merge timing.
-setup_train hook-boundary
-printf '#!/usr/bin/env bash\necho "$PWD" >> "$T/hook-calls"\nwhile [ ! -f "$T/release-hook" ]; do sleep .05; done\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
-(
-  source "$here/sid-gate-lib.sh"; gate_repo
-  source <(sed -n '/^after_merge() {/,/^run_train() {/p' "$here/sid-train.sh" | sed '$d')
-  exec 7>"$train/runner.lock" 8>"$train/queue.lock" 9>"$gate/lock"
-  id=1; hook_sequence=0; lane=fast; log=$gate/logs/stale.log; echo stale > "$log"
-  tree=$(git rev-parse HEAD^{tree}); sha=$(git rev-parse HEAD)
-  after_merge "$tree"
-  [ ! -f "$gate/health/$sha" ]; ok "recovery never stamps an inherited gate log" "$?" 0
-  for ((j=0; j<100; j++)); do [ -f "$T/hook-calls" ] && break; sleep .05; done
-  after_merge "$tree"
-  for ((j=0; j<100; j++)); do [ "$(wc -l < "$T/hook-calls")" = 2 ] && break; sleep .05; done
-  ok "two hooks in one train get independent snapshots" "$(sort -u "$T/hook-calls" | wc -l)" 2
-  touch "$T/release-hook"
-  echo advance > advance; git add -A; git commit -qm advance; git push -q origin main
-  sha=$(git rev-parse HEAD)
-  before=$(wc -l < "$T/hook-calls")
-  after_merge "$tree"; after_merge health
-  sleep .2
-  ok "normal recovery and post-health paths reject unchecked main" "$(wc -l < "$T/hook-calls")" "$before"
-  printf 'pass full\nhealth-log\n' > "$gate/health/$sha"
-  after_merge "$tree"
-  for ((j=0; j<100; j++)); do [ "$(wc -l < "$T/hook-calls")" = 3 ] && break; sleep .05; done
-  ok "existing health pass permits hook after main advances" "$(wc -l < "$T/hook-calls")" 3
-) > "$T/boundary-out" 2>&1
-cat "$T/boundary-out"
-grep -q '^FAIL' "$T/boundary-out" && fail=1
 setup_train armed-readiness
 add_pr 11 a
 python3 - "$T/pr-11.json" <<'P'
@@ -296,7 +245,6 @@ ok "merges follow queue order" "$(tr '\n' ' ' < "$T/merge-calls")" '11 12 '
 for n in 11 12; do
   grep -Eq '^Gate-Passed: train [0-9]+, main [a-f0-9]{8} \+ #11 #12, lane fast, log sha256 [a-f0-9]{64}$' "$T/message-$n"
   ok "#$n squash carries both members and the reported lane" "$?" 0
-  grep -q '^Verified-By: composer PASS, T3 thread thread-1' "$T/message-$n"; ok "#$n preserves verifier" "$?" 0
   grep -q '^Agent: writer' "$T/message-$n"; ok "#$n preserves branch trailers" "$?" 0
 done
 [ ! -d "$T/worker" ]; ok "merged member worktree is removed" "$?" 0
@@ -369,7 +317,6 @@ p = json.load(open(sys.argv[1])); p['headRefOid'] = sys.argv[2]
 p['body'] = f'## Proof\n{sys.argv[2]} 3 passed\n## Review\nAstra approved.\n'
 json.dump(p, open(sys.argv[1], 'w'))
 PYTHON
-  "$here/sid-verdict.sh" 11 "$h" PASS composer thread-1 'tested fix' >/dev/null
   git checkout -q main
 }
 setup_train requeued-head
@@ -405,12 +352,6 @@ add_pr 11 a
 ok "check never gates" "$(count_gates)" 0; [ ! -f "$q/queue/11.req" ]; ok "check never queues" "$?" 0
 queue_pr 11; "$here/sid-merge.sh" --cancel 11 > "$T/out"; grep -q 'cancelled #11' "$T/out"; ok "cancel withdraws request" "$?" 0
 run_train; ok "cancelled request never gates" "$(count_gates)" 0; [ ! -f "$T/merge-calls" ]; ok "cancelled request never merges" "$?" 0
-setup_train bot-mode
-add_pr 11 a; echo auth/login.ts > "$T/files"
-"$here/sid-mode.sh" set bot auto; queue_pr 11; ok "bot auto still requires risky path review" "$?" 7
-"$here/sid-mode.sh" set bot off --note 'Sid waived for recovery'; touch "$T/open-thread"; queue_pr 11; ok "bot off waives risky paths and open threads" "$?" 0
-run_train; ok "waived PR merges" "$(code 11)" 0
-grep -q '^Bot:' "$T/message-11"; ok "bot off adds no bot trailer" "$?" 1
 setup_train health-red
 "$here/sid-health.sh" > "$T/out"; ok "missing health runs gate" "$(count_gates)" 1
 touch "$T/always-fail"; sha=$(git rev-parse origin/main); rm "$health/$sha"; "$here/sid-health.sh" > "$T/out"
@@ -418,6 +359,7 @@ ok "failing health exits 1" "$?" 1; ok "failing full health recorded" "$(head -n
 before=$(count_gates); "$here/sid-health.sh" > "$T/out"; ok "known full failure skips" "$(count_gates)" "$before"
 add_pr 11 bad; queue_pr 11; run_train; ok "known red main makes single failure exit 4" "$(code 11)" 4
 grep -Fq "main is red at ${sha:0:8}, see $(sed -n 2p "$health/$sha")" "$q/result/11"; ok "red result names health log" "$?" 0
+queue_pr 11; ok "a red main doesn't use up the commit's retry" "$?" 0
 setup_train health-priority
 add_pr 11 a; queue_pr 11; "$here/sid-health.sh" > "$T/out"; ok "health skips queued work" "$(count_gates)" 0
 "$here/sid-merge.sh" --cancel 11 >/dev/null
@@ -453,13 +395,6 @@ add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
 touch "$T/red-on-refuse-12"; run_train
 ok "CI turning red after a refused attempt stops its retry" "$(code 12)" 1
 ok "refused retry never merges the now-red member" "$(cat "$T/merge-calls")" 11
-setup_train bot-rules
-"$here/sid-mode.sh" set bot auto
-add_pr 11 a; touch "$T/open-thread"; queue_pr 11; ok "auto bot mode blocks open findings" "$?" 6
-rm "$T/open-thread"; touch "$T/threads-down"; queue_pr 11; ok "thread API failure stays fail-closed" "$?" 7
-rm "$T/threads-down"; "$here/sid-merge.sh" --bot --no-wait 11 > "$T/out" 2>&1; ok "explicit bot still requires a head review" "$?" 7
-touch "$T/bot-completed"; "$here/sid-merge.sh" --bot --no-wait 11 > "$T/out" 2>&1; ok "completed head bot review permits queueing" "$?" 0
-run_train; ok "explicit bot member merges" "$(code 11)" 0
 # Dependent PRs must have the same squash semantics in the gate and on live main.
 setup_train dependent-squash
 add_pr 11 bad
@@ -534,10 +469,8 @@ for mismatch in parent tree; do
   ok "$mismatch mismatch starts detached full health on real main" "$?" 0
   ok "$mismatch mismatch requires a fresh train and health gate" "$(count_gates)" 3
 done
-# Health-approved unsafe landings must deploy the checked main, preserving its health log.
+# A landing the train can't vouch for is reported, including after a crash.
 setup_train landed-after-prefix
-printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/health-hook-head"\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
 add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12; touch "$T/same-tree-drift-12"
 run_train
 ok "checked prefix still reports success before later drift" "$(code 11)" 0
@@ -545,35 +478,55 @@ ok "second-member parent drift reports exit 5" "$(code 12)" 5
 sha=$(cat "$T/merge-oid-12")
 grep -q "/health-$sha.log$" "$health/$sha"; ok "stopped train preserves actual health evidence" "$?" 0
 ok "second-member drift checks main without another train" "$(count_gates)" 2
-for ((j=0; j<100; j++)); do [ -f "$T/health-hook-head" ] && break; sleep .05; done
-ok "health pass launches hook for actual main" "$(cat "$T/health-hook-head" 2>/dev/null)" "$sha"
 setup_train recovered-unsafe-merge
-printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/health-hook-head"\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
 add_pr 11 a; queue_pr 11; touch "$T/same-tree-drift-11" "$T/crash-after-merge"
 run_train; run_train
 ok "crash recovery checks the original gated base" "$(code 11)" 5
 sha=$(cat "$T/merge-oid-11")
 grep -q "/health-$sha.log$" "$health/$sha"; ok "unsafe recovered merge starts full health" "$?" 0
 ok "unsafe recovery never merges twice" "$(cat "$T/merge-calls")" 11
-for ((j=0; j<100; j++)); do [ -f "$T/health-hook-head" ] && break; sleep .05; done
-ok "recovered unsafe landing launches hook after health" "$(cat "$T/health-hook-head" 2>/dev/null)" "$sha"
-setup_train recovered-hook
-printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/recovered-hook-head"\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
-add_pr 11 a; queue_pr 11; touch "$T/crash-after-merge"; run_train; run_train
-for ((j=0; j<100; j++)); do [ -f "$T/recovered-hook-head" ] && break; sleep .05; done
-ok "recovered verified merge launches hook" "$(cat "$T/recovered-hook-head" 2>/dev/null)" "$(cat "$T/merge-oid-11")"
-setup_train unhealthy-hook
-printf '#!/usr/bin/env bash\necho ran > "$T/unhealthy-hook"\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
-add_pr 11 a; queue_pr 11; touch "$T/same-tree-drift-11"
-# Fail only health, after the train has passed and the server has landed.
-sed -i '/echo gate/a [ "$SID_LANE" != full ] || exit 1' .sidstack/gate.sh
-git add -A; git commit -qm health-only-failure; git push -q origin main
-"$here/sid-mode.sh" set lane fast
-run_train
-[ ! -f "$T/unhealthy-hook" ]; ok "failed post-landing health never launches hook" "$?" 0
+# Only failures the change causes fail it: failed tests run again, then on main alone.
+setup_train flaky
+add_pr 11 test-a flaky; queue_pr 11; run_train
+ok "a test that passes when run again doesn't fail the PR" "$(code 11)" 0
+grep -q 'tests passed over: .*flaky' "$T/message-11"; ok "and the squash says a flaky test was passed over" "$?" 0
+ok "running failed tests again is not another gate" "$(count_gates)" 1
+setup_train known-failure
+echo fail > test-old; git add -A; git commit -qm red; git push -q origin main
+add_pr 11 a; queue_pr 11; run_train
+ok "a test already failing on main doesn't fail the PR" "$(code 11)" 0
+grep -q 'tests passed over: .*already failing' "$T/message-11"; ok "and the squash says so" "$?" 0
+[ ! -f "$health/$(git rev-parse origin/main)" ]; ok "and that main isn't recorded as healthy" "$?" 0
+"$here/sid-health.sh" > "$T/out" 2>&1; ok "main's own failing test still makes health red" "$?" 1
+setup_train new-failure
+echo fail > test-old; git add -A; git commit -qm red; git push -q origin main
+add_pr 11 test-new fail; queue_pr 11; run_train
+ok "a test the PR breaks fails it, even on a red main" "$(code 11)" 1
+grep -q '^test-new$' "$q/result/11"; ok "the result names the test the PR broke" "$?" 0
+grep -q '^test-old$' "$q/result/11"; ok "and leaves out main's own failure" "$?" 1
+setup_train new-test-file
+add_pr 11 test-new fail; queue_pr 11; run_train
+ok "a failing test the PR adds can't pass as missing on main" "$(code 11)" 1
+setup_train unreported
+add_pr 11 test-a fail
+sed -i 's|^run_tests \$(ls.*|run_tests $(ls \| grep "^test-") \|\| { : > "$SID_FAILURES_OUT"; exit 1; }|' .sidstack/gate.sh; git add -A; git commit -qm quiet; git push -q origin main
+git checkout -q work11; git rebase -q main; git push -qf origin work11; record_pr 11; git checkout -q main
+queue_pr 11; run_train
+ok "a failure the gate doesn't itemise fails the PR" "$(code 11)" 1
+[ ! -f "$T/reruns" ]; ok "and nothing is run again" "$?" 0
+# A commit the gate failed goes back once, and only when asked.
+setup_train retry
+add_pr 11 bad; queue_pr 11; run_train; ok "a failing commit fails" "$(code 11)" 1
+queue_pr 11; ok "the same commit isn't queued again by itself" "$?" 1
+grep -q -- "--retry 11" "$T/out" && grep -q "sid-gate/logs/train-" "$T/out"; ok "the refusal names the log and the retry" "$?" 0
+"$here/sid-merge.sh" --check 11 > "$T/out" 2>&1; ok "--check reports it as not ready too" "$?" 1
+"$here/sid-merge.sh" --retry --no-wait 11 > "$T/out" 2>&1; ok "--retry queues it once" "$?" 0
+run_train; ok "the retry gates again" "$(count_gates)" 2
+"$here/sid-merge.sh" --retry --no-wait 11 > "$T/out" 2>&1; ok "a second failure of the commit ends the retries" "$?" 1
+grep -q "failed the gate twice" "$T/out"; ok "and says to fix it" "$?" 0
+git checkout -q work11; git rm -q bad; echo fixed > a; git add -A; git commit -qm fix; git push -q origin work11; record_pr 11; git checkout -q main
+queue_pr 11; ok "a new commit queues without --retry" "$?" 0
+run_train; ok "and merges" "$(code 11)" 0
 setup_train invalid-mode
 add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
 printf 'lane=broken\n' > .git/sid-gate/mode
@@ -586,38 +539,9 @@ for n in 11 12; do
 done
 ok "broken mode runs no gate" "$(count_gates)" 0
 "$here/sid-mode.sh" set lane full > "$T/out" 2>&1; ok "mode set can repair its broken stored value" "$?" 0
-setup_train default-bot-off
-ok "bot defaults to off" "$("$here/sid-mode.sh" get bot)" off
-add_pr 11 a; echo auth/login.ts > "$T/files"; touch "$T/open-thread" "$T/threads-down"
-"$here/sid-merge.sh" --bot --no-wait 11 > "$T/out" 2>&1; ok "default off ignores explicit bot request" "$?" 0
-run_train; ok "default off merges risky member despite bot outage" "$(code 11)" 0
-[ ! -f "$T/bot-read" ]; ok "default off never queries bot state or threads" "$?" 0
-grep -q '^Bot:' "$T/message-11"; ok "default off squash has no bot trailer" "$?" 1
 setup_train cap
 add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
 SID_TRAIN_MAX=1 run_train; ok "train member cap is respected" "$(count_gates)" 2
-setup_train hook
-cat > .sidstack/after-merge.sh <<'G'
-#!/usr/bin/env bash
-pwd > "$T/hook-pwd"
-printf '%s\n' "$PATH" > "$T/hook-path"
-git rev-parse HEAD > "$T/hook-head"
-echo hook-started
-while [ ! -f "$T/release-hook" ]; do sleep .05; done
-echo hook-finished
-exit 1
-G
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
-add_pr 11 a; queue_pr 11; run_train
-for ((j=0; j<100; j++)); do [ -f "$T/hook-head" ] && break; sleep .05; done
-ok "detached hook keeps runner PATH" "$(cat "$T/hook-path")" "$PATH"
-ok "hook uses the new main snapshot" "$(cat "$T/hook-head")" "$(git rev-parse origin/main)"
-[ -d "$(cat "$T/hook-pwd")" ]; ok "hook has an independent worktree" "$?" 0
-[ ! -f "$T/release-hook" ]; ok "train completed while hook was waiting" "$?" 0
-echo release > "$T/release-hook"
-for ((j=0; j<100; j++)); do [ ! -d "$(cat "$T/hook-pwd")" ] && break; sleep .05; done
-grep -q hook-finished "$q/after-merge.log"; ok "hook output is logged" "$?" 0
-ok "failing hook does not fail merged member" "$(code 11)" 0
 setup_train detached
 add_pr 11 a
 SID_TRAIN_INLINE=0 "$here/sid-merge.sh" 11 > "$T/out" 2>&1
@@ -672,47 +596,6 @@ ok "service runner outlives enqueue caller" "$(code 11)" 0
 ok "service receives caller PATH" "$(sed -n 1p "$T/service-env")" "$PATH"
 ok "service receives caller HOME" "$(sed -n 2p "$T/service-env")" "$HOME"
 grep -Eq -- '--user --collect --unit=sid-train-[0-9a-f]+ --working-directory=' "$T/service-args"; ok "transient service is named for repo" "$?" 0
-# A runner in a transient service must launch the hook in another unit even
-# when SID_TRAIN_INLINE is set (as in this suite).
-setup_train service-hook
-printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/service-hook-head"\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
-add_pr 11 a; queue_pr 11; INVOCATION_ID=test run_train
-for ((j=0; j<100; j++)); do [ -f "$T/service-hook-head" ] && break; sleep .05; done
-ok "systemd hook executes on merged snapshot" "$(cat "$T/service-hook-head" 2>/dev/null)" "$(git rev-parse origin/main)"
-grep -Eq -- '--user --collect --unit=sid-after-merge-[0-9a-f]+-1-[0-9]+ --setenv=PATH=.* --setenv=HOME=' "$T/service-args"
-ok "systemd hook gets its own unit and caller environment" "$?" 0
-grep -Fq -- "StandardOutput=append:$(pwd)/$q/after-merge.log" "$T/service-args"
-ok "systemd hook writes persistent train log" "$?" 0
-# The same choice applies outside inline mode even without INVOCATION_ID.
-setup_train service-hook-auto
-printf '#!/usr/bin/env bash\necho done > "$T/service-hook-done"\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
-add_pr 11 a; queue_pr 11
-( unset SID_TRAIN_INLINE INVOCATION_ID; run_train )
-for ((j=0; j<100; j++)); do [ -f "$T/service-args" ] && break; sleep .05; done
-grep -q -- '--unit=sid-after-merge-' "$T/service-args"; ok "available systemd without inline uses a hook unit" "$?" 0
-for ((j=0; j<100; j++)); do [ -f "$T/service-hook-done" ] && break; sleep .05; done
-# A detached train must still run the hook when user systemd is down.
-setup_train hook-fallback-no-systemd
-printf '#!/usr/bin/env bash\necho fallback > "$T/hook-fallback"\n' > .sidstack/after-merge.sh
-chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
-cat > "$t/bin/systemctl" <<'S'
-#!/usr/bin/env bash
-exit 1
-S
-chmod +x "$t/bin/systemctl"
-cat > "$t/bin/systemd-run" <<'S'
-#!/usr/bin/env bash
-echo hook >> "$T/hook-systemd-attempts"
-exit 1
-S
-chmod +x "$t/bin/systemd-run"
-add_pr 11 a; queue_pr 11
-( unset SID_TRAIN_INLINE; INVOCATION_ID=test run_train )
-for ((j=0; j<100; j++)); do [ -f "$T/hook-fallback" ] && break; sleep .05; done
-[ -f "$T/hook-fallback" ]; ok "unit train runs hook without user systemd" "$?" 0
-[ ! -f "$T/hook-systemd-attempts" ]; ok "hook never depends on a failing systemd-run" "$?" 0
 # An active runner, and a usable manager rejecting a unit, must not spawn fallback runners.
 cat > "$t/bin/systemctl" <<'S'
 #!/usr/bin/env bash
@@ -781,7 +664,7 @@ for ((j=0; j<100; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
 grep -q 'has started gating; cannot cancel' "$T/out"; ok "cancel cannot withdraw active member" "$?" 0
 touch "$T/release-train"; wait "$rp"; ok "uncancelled active member merges" "$(code 11)" 0
 setup_train mode
-for pair in 'lane fast' 'bot off' 'coder claude' 'ui sol' 'reviewers none'; do
+for pair in 'lane fast' 'coder claude' 'ui sol' 'reviewers none'; do
   read -r key value <<< "$pair"; "$here/sid-mode.sh" set "$key" "$value" --note 'operator test'
   ok "mode $key round-trips" "$("$here/sid-mode.sh" get "$key")" "$value"
 done

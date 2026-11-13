@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Shared readiness and verdict checks. Call ready, then ready_verdict with a private tmp directory.
-# Refusals retain sid-merge's exit codes: 1 readiness/API, 6 findings, 7 bot, 8 verdict.
+# Shared readiness checks. Call ready with a private tmp directory; it exits 1 when the PR isn't ready or can't be read.
 set -u
 field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$tmp/pr.json" "$1"; }
 # Read everything fresh, and stop on any failure: an API error must never look like "nothing wrong".
@@ -15,33 +14,21 @@ ready() {
     fi
     [ "$(field mergeable)" != UNKNOWN ] && ! python3 -c 'import json,sys;sys.exit(any(not (c.get("conclusion") or c.get("state") not in (None,"PENDING","EXPECTED")) for c in json.load(open(sys.argv[1]))["statusCheckRollup"]) is False)' "$tmp/pr.json" && break
   done
-  # The files API handles PRs too big for `gh pr diff`, and a rename counts under both its names. It stops at 3000 files.
-  gh api --paginate "repos/$gh/pulls/$pr/files?per_page=100" --jq '.[] | [.filename, .previous_filename // empty] | join(" ")' > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
-  [ "$(wc -l < "$tmp/files")" -lt 3000 ] || { echo "#$pr has too many changed files to check"; exit 1; }
   body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
-  required=$(python3 "$here/pr_checks.py" "$tmp/pr.json" "$tmp/files") || exit 1
-  bot_needed=$need_bot
-  if [ -n "$required" ]; then echo "$required"; bot_needed=true; fi
-  if [ "$bot_mode" = off ]; then return; fi
-  if [ "$bot_needed" = true ]; then
-    read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
-    [ "$sha" = "$head" ] || { echo "bot has not reviewed ${head:0:8} yet (last: ${sha:0:8} $status); comment '@codex review' if it stays quiet"; exit 7; }
-    [ "$status" = completed ] || { echo "bot status on ${head:0:8}: $status"; exit 7; }
-  fi
-  open=$(python3 "$here/bot_review.py" open "$gh" "$pr" "$bot") || { echo "could not read review threads"; exit 7; }
-  [ -z "$open" ] || { echo "open bot findings:"; echo "$open"; exit 6; }
+  python3 "$here/pr_checks.py" "$tmp/pr.json" || exit 1
 }
-ready_verdict() {
-  git fetch -q origin "$default" "$base" "$branch" || exit 1
-  patch=$(git diff "$(git merge-base "origin/$base" "$head")" "$head" | git patch-id --verbatim | cut -d' ' -f1)
-  verdict=$(awk -F'\t' -v p="$patch" '$3==p{v=$0} END{print v}' "$common/sid-gate/verdicts/$pr.tsv" 2>/dev/null)
-  result=$(printf '%s' "$verdict" | cut -f2)
-  case "$result" in
-    PASS|PASS+NOTES) ;;
-    FAIL) echo "the verifier failed this patch: $(printf '%s' "$verdict" | cut -f7)"; exit 8;;
-    *) echo "no verdict on patch ${patch:0:8}: have a verifier who didn't write it run the change, then sid-verdict.sh $pr <tested-commit> <PASS|PASS+NOTES|FAIL> <verifier> <t3-thread-id> \"<what it ran and saw>\""; exit 8;;
-  esac
-  verified="Verified-By: $(printf '%s' "$verdict" | cut -f5) $result, T3 thread $(printf '%s' "$verdict" | cut -f6)"
+# A commit that failed the gate goes back once, with --retry; after a second failure only a new commit does.
+retry_allowed() {
+  local failed_head failures log
+  [ -f "$train/failed/$pr" ] && read -r failed_head failures log < "$train/failed/$pr" || return 0
+  [ "$failed_head" = "$head" ] || return 0
+  if [ "$failures" -ge 2 ]; then
+    echo "${head:0:8} has failed the gate twice, so it was never a flake: read $log, fix it and push a new commit"
+    return 1
+  fi
+  [ "$retry" = true ] && return 0
+  echo "${head:0:8} already failed the gate: read $log. Fix it and push; only for a flake or an infrastructure failure, run sid-merge --retry $pr (once)"
+  return 1
 }
 
 # Refused/unconfirmed CLI calls can arm auto-merge. Re-read after disarming,

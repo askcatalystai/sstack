@@ -9,11 +9,13 @@ python3 - "$dir" "$@" <<'PY'
 import datetime, os, sys
 from pathlib import Path
 p = Path(sys.argv[1]); args = sys.argv[2:]
-choices = dict(lane=['auto', 'fast', 'full'], bot=['off', 'auto'], coder=['sol', 'claude'], ui=['opus', 'sol'], reviewers=['composer+astra', 'astra', 'none'])
+choices = dict(lane=['auto', 'fast', 'full'], coder=['sol', 'claude'], ui=['opus', 'sol'], reviewers=['composer+astra', 'astra', 'none'])
 values = {k: v[0] for k, v in choices.items()}
 if (p/'mode').exists():
     for line in (p/'mode').read_text().splitlines():
         k, sep, v = line.partition('=')
+        if k == 'bot':  # retired; the next set drops the line
+            continue
         repairing = len(args) in (3, 5) and args[0] == 'set' and k == args[1] and args[2] in choices.get(k, [])
         if not sep or k not in choices or (v not in choices[k] and not repairing):
             sys.exit('invalid stored mode: ' + line)
