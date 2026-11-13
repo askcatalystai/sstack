@@ -2,7 +2,7 @@
 # Protect Compose and named volumes; expire disposable Docker resources.
 set -eu
 exec python3 - "$@" <<'PY'
-import datetime, json, os, re, subprocess, sys, time
+import datetime, json, re, subprocess, sys, time
 
 def docker(*args):
     return subprocess.check_output(['docker', *args], text=True).strip()
@@ -24,8 +24,12 @@ def candidate(c):
     if labels.get('sidstack.throwaway') == '1':
         if state['Status'] == 'exited':
             return '-fv'
-        started = stamp(state['StartedAt'])
-        if started is not None and time.time() - started > 7200:
+        status = state['Status']
+        if status in ('created', 'dead'):
+            age_from, limit = stamp(c.get('Created')), 7200
+        else:
+            age_from, limit = stamp(state.get('StartedAt')), 28800
+        if age_from is not None and time.time() - age_from > limit:
             return '-fv'
     elif state['Status'] == 'exited':
         finished = stamp(state['FinishedAt'])
@@ -43,6 +47,25 @@ def total(rows):
             raise ValueError('unrecognized Docker size: ' + size)
         result += float(m[1]) * units[m[2]]
     return result
+failed = False
+def report(error):
+    global failed
+    failed = True
+    print('sid-docker-clean: ' + str(error), file=sys.stderr)
+def attempt(*args):
+    try:
+        return docker(*args)
+    except (OSError, subprocess.CalledProcessError) as e:
+        report(e)
+        return None
+def usage_total():
+    rows = attempt('system', 'df', '--format', '{{json .}}')
+    if rows is not None:
+        try:
+            return total(rows)
+        except (ValueError, KeyError, TypeError) as e:
+            report(e)
+    return None
 try:
     if sys.argv[1:] not in ([], ['--dry-run']):
         sys.exit('usage: sid-docker-clean.sh [--dry-run]')
@@ -52,18 +75,7 @@ try:
     except (OSError, subprocess.CalledProcessError):
         print('Docker is not running; nothing to clean.')
         sys.exit(0)
-    versions = json.loads(docker('version', '--format', '{{json .}}'))
-    version = versions['Server']
-    api = min((version['ApiVersion'], versions['Client']['ApiVersion'],
-               os.environ.get('DOCKER_API_VERSION', version['ApiVersion'])),
-              key=lambda v: tuple(map(int, v.split('.'))))
-    modern = tuple(map(int, api.split('.'))) >= (1, 42)
-    volume_prune = ('volume', 'prune', '-f')
-    if not modern:
-        volume_prune += ('--filter', 'label=com.docker.volume.anonymous')
-    policy = 'volume prune without --all removes anonymous volumes only' if modern else 'volume prune restricted to the anonymous-volume engine label'
-    print(f"Docker {version['Version']} API {api}: {policy}.")
-    before = total(docker('system', 'df', '--format', '{{json .}}'))
+    before = usage_total()
     ids = docker('ps', '-aq').split()
     for cid in ids:
         try:
@@ -77,22 +89,45 @@ try:
             else:
                 # rm without force also protects a formerly-exited unlabelled container
                 # which another process starts between inspect and rm.
-                docker('rm', flags, cid)
-                print(f"Removed container {c['Name'].lstrip('/')} ({cid})")
-    if dry:
-        # Anonymous volumes have this engine label; never infer anonymity from names.
-        for volume in docker('volume', 'ls', '-q', '--filter', 'dangling=true', '--filter', 'label=com.docker.volume.anonymous').splitlines():
+                if attempt('rm', flags, cid) is not None:
+                    print(f"Removed container {c['Name'].lstrip('/')} ({cid})")
+    # Only engine-labelled anonymous volumes outside Compose are disposable.
+    volumes = attempt('volume', 'ls', '-q', '--filter', 'dangling=true',
+                     '--filter', 'label=com.docker.volume.anonymous')
+    for volume in (volumes or '').splitlines():
+        inspected = attempt('volume', 'inspect', volume)
+        if inspected is None:
+            continue
+        try:
+            labels = json.loads(inspected)[0].get('Labels') or {}
+        except (ValueError, KeyError, TypeError, IndexError) as e:
+            report(e)
+            continue
+        if any(key in labels for key in ('com.docker.compose.project', 'com.docker.compose.volume')):
+            continue
+        if dry:
             print('Would remove anonymous volume ' + volume)
-        for image in docker('image', 'ls', '-q', '--filter', 'dangling=true').splitlines():
+        else:
+            result = attempt('volume', 'rm', volume)
+            if result is not None:
+                print(result)
+    if dry:
+        for image in (attempt('image', 'ls', '-q', '--filter', 'dangling=true') or '').splitlines():
             print('Would remove dangling image ' + image)
         print('Would prune unused build cache older than 72h')
     else:
-        # These commands report each deleted object and their reclaimed totals.
-        for args in [volume_prune, ('image', 'prune', '-f'),
+        for args in [('image', 'prune', '-f'),
                      ('builder', 'prune', '-f', '--filter', 'until=72h')]:
-            print(docker(*args))
-    after = total(docker('system', 'df', '--format', '{{json .}}'))
-    print(f"Summary: {'dry-run; ' if dry else ''}space reclaimed approximately {before - after:,.0f} bytes (docker system df before={before:,.0f}, after={after:,.0f})")
+            result = attempt(*args)
+            if result is not None:
+                print(result)
+    after = usage_total()
+    prefix = 'dry-run; ' if dry else ''
+    if before is None or after is None:
+        print(f'Summary: {prefix}space reclaimed unavailable (docker system df failed)')
+    else:
+        print(f"Summary: {prefix}space reclaimed approximately {before - after:,.0f} bytes (docker system df before={before:,.0f}, after={after:,.0f})")
+    sys.exit(1 if failed else 0)
 except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as e:
     sys.exit('sid-docker-clean: ' + str(e))
 PY

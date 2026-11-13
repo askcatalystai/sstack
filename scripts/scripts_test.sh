@@ -589,19 +589,34 @@ def container(name, hours, status='exited', labels=None, started_at=None, finish
     at = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
     started_at = started_at if started_at is not None else at
     finished_at = finished_at if finished_at is not None else at
-    return dict(Id=name, Name='/'+name, Config=dict(Labels=labels or {}), State=dict(Status=status, Running=status=='running', StartedAt=started_at, FinishedAt=finished_at), NetworkSettings=dict(Ports={'5432/tcp':[dict(HostIp='127.0.0.1' if name in ('throw-old', 'new-db') else '0.0.0.0', HostPort='54321')]}), Mounts=[dict(Type='volume', Name='precious_named_volume')])
+    return dict(Created=at, Id=name, Name='/'+name, Config=dict(Labels=labels or {}), State=dict(Status=status, Running=status=='running', StartedAt=started_at, FinishedAt=finished_at), NetworkSettings=dict(Ports={'5432/tcp':[dict(HostIp='127.0.0.1' if name in ('throw-old', 'new-db') else '0.0.0.0', HostPort='54321')]}), Mounts=[dict(Type='volume', Name='precious_named_volume')])
 throw = {'sidstack.throwaway':'1'}; compose = {'com.docker.compose.project':'keep'}
 unset = '0001-01-01T00:00:00Z'
-cs = [container('throw-exited', .1, labels=throw), container('throw-old', 3, 'running', throw),
-      container('plain-old', 25), container('compose-running', 50, 'running', {**throw, **compose}),
+cs = [container('plain-old', 25), container('throw-exited', .1, labels=throw),
+      container('throw-old', 9, 'running', throw), container('compose-running', 50, 'running', {**throw, **compose}),
       container('compose-exited', 50, labels=compose), container('plain-running', 50, 'running'),
       container('plain-young', 23), container('throw-young', 1, 'running', throw),
       container('plain-unset-finished', 50, finished_at=unset),
       container('throw-unset-started', 3, 'running', throw, started_at=unset)]
+if (p/'lifecycle').exists():
+    cs += [container('throw-session', 3, 'running', throw)]
+    for status in ('created', 'dead'):
+        for age in (1, 3):
+            cs.append(container(f'{status}-{age}', age, status, throw, started_at=unset))
+        for value in (unset, 'unreadable', ''):
+            c = container(f'{status}-unknown-{len(cs)}', 50, status, throw)
+            c['Created'] = value
+            cs.append(c)
+        c = container(f'{status}-missing', 50, status, throw)
+        del c['Created']
+        cs.append(c)
+    cs.append(container('compose-created', 50, 'created', {**throw, **compose}))
 if a == ['info']:
     sys.exit(1 if (p/'down').exists() else 0)
 elif a[0] == 'version': emit(dict(Server=dict(Version='29.9.2', ApiVersion='1.56'), Client=dict(ApiVersion='1.56')))
-elif a[:2] == ['system','df']: emit(dict(Size='1GB'))
+elif a[:2] == ['system','df']:
+    if (p/'df-fail').exists(): sys.exit('cannot read system df')
+    emit(dict(Size='bad' if (p/'df-invalid').exists() else '1GB'))
 elif a[0] == 'ps': print('\n'.join(c['Id'] for c in cs if '--filter' not in a or c['Config']['Labels'].get('sidstack.throwaway') == '1'))
 elif a[0] == 'inspect':
     emit([next((c for c in cs if c['Id']==a[1]), container('new-db', 0, 'running', throw))])
@@ -609,11 +624,19 @@ elif a[:2] == ['image','inspect']:
     sys.exit(1 if (p/'missing-image').exists() else 0)
 elif a[0] == 'run': print('new-db')
 elif a[0] == 'exec': pass
-elif a[0] == 'rm': pass
+elif a[0] == 'rm':
+    if (p/'restart-race').exists() and a[-1] == 'plain-old': sys.exit('container is running')
+    if (p/'concurrent-removal').exists() and a[-1] == 'throw-exited': sys.exit('No such container')
 elif a[:2] == ['volume','ls']:
-    print('anonymous-volume' if 'label=com.docker.volume.anonymous' in a else 'anonymous-volume\nprecious_named_volume')
+    print('anonymous-volume\nanonymous-later\ncompose-project-volume\ncompose-volume' if 'label=com.docker.volume.anonymous' in a else 'anonymous-volume\nprecious_named_volume')
+elif a[:2] == ['volume','inspect']:
+    labels = {'com.docker.compose.project':'keep'} if a[-1]=='compose-project-volume' else {'com.docker.compose.volume':'keep'} if a[-1]=='compose-volume' else {'com.docker.volume.anonymous':''}
+    emit([dict(Name=a[-1], Labels=labels)])
+elif a[:2] == ['volume','rm']:
+    if (p/'volume-fail').exists() and a[-1]=='anonymous-volume': sys.exit('volume is in use')
 elif a[:2] == ['image','ls']: print('dangling-image')
-elif a[1:2] == ['prune']: pass
+elif a[1:2] == ['prune']:
+    if (p/'image-fail').exists() and a[0]=='image': sys.exit('image prune failed')
 else: sys.exit('unexpected docker command: '+repr(a))
 PY
 chmod +x "$t/docker-bin/docker"
@@ -627,7 +650,9 @@ calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').re
 removed = {a[-1]:a[1] for a in calls if a[0]=='rm'}
 assert removed == {'throw-exited':'-fv', 'throw-old':'-fv', 'plain-old':'-v'}, removed
 assert 'plain-unset-finished' not in removed and 'throw-unset-started' not in removed
-assert ['volume','prune','-f'] in calls
+assert ['volume','ls','-q','--filter','dangling=true','--filter','label=com.docker.volume.anonymous'] in calls
+assert [a[-1] for a in calls if a[:2]==['volume','rm']] == ['anonymous-volume', 'anonymous-later']
+assert not any(a[:2]==['volume','prune'] for a in calls)
 assert ['image','prune','-f'] in calls
 assert ['builder','prune','-f','--filter','until=72h'] in calls
 assert not any('precious_named_volume' in a or '--all' in a or '-a' in a for a in calls)
@@ -641,10 +666,43 @@ from pathlib import Path
 calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
 assert not any('rm' in a or 'prune' in a for a in calls)
 out=Path(sys.argv[1]).read_text()
-for name in ['throw-exited','throw-old','plain-old','anonymous-volume','dangling-image']: assert name in out, name
-for name in ['compose-running','compose-exited','plain-running','plain-young','throw-young','plain-unset-finished','throw-unset-started','precious_named_volume']: assert name not in out, name
+for name in ['throw-exited','throw-old','plain-old','anonymous-volume','anonymous-later','dangling-image']: assert name in out, name
+for name in ['compose-running','compose-exited','plain-running','plain-young','throw-young','plain-unset-finished','throw-unset-started','precious_named_volume','compose-project-volume','compose-volume']: assert name not in out, name
 PY
 ok "dry-run lists eligible resources without any removal" "$?" 0
+touch "$DOCKER_TEST_DIR/lifecycle"; : > "$DOCKER_TEST_DIR/calls"
+"$here/sid-docker-clean.sh" > "$t/lifecycle" 2>&1
+ok "created/dead and session cleanup succeeds" "$?" 0
+python3 - <<'PYTEST'
+import json, os
+from pathlib import Path
+calls=[json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+removed={a[-1] for a in calls if a[0]=='rm'}
+assert removed == {'throw-exited', 'throw-old', 'plain-old', 'created-3', 'dead-3'}, removed
+PYTEST
+ok "created/dead expire after 2h using known creation time; running sessions survive 3h and expire at 9h" "$?" 0
+rm "$DOCKER_TEST_DIR/lifecycle"
+for scenario in restart-race concurrent-removal volume-fail df-fail df-invalid image-fail; do
+  touch "$DOCKER_TEST_DIR/$scenario"; : > "$DOCKER_TEST_DIR/calls"
+  "$here/sid-docker-clean.sh" > "$t/failure-out" 2>&1
+  ok "$scenario returns failure after cleanup" "$?" 1
+  python3 - "$t/failure-out" "$scenario" <<'PYTEST'
+import json, os, sys
+from pathlib import Path
+calls=[json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+assert [a[-1] for a in calls if a[0]=='rm'] == ['plain-old','throw-exited','throw-old']
+assert ['volume','rm','anonymous-volume'] in calls
+assert ['volume','rm','anonymous-later'] in calls
+assert ['image','prune','-f'] in calls
+assert ['builder','prune','-f','--filter','until=72h'] in calls
+assert sum(a[:2]==['system','df'] for a in calls)==2
+out=Path(sys.argv[1]).read_text()
+assert 'sid-docker-clean:' in out, out
+if sys.argv[2].startswith('df-'): assert 'space reclaimed unavailable' in out, out
+PYTEST
+  ok "$scenario reports failure and still attempts later containers, volumes, image/cache cleanup and totals" "$?" 0
+  rm "$DOCKER_TEST_DIR/$scenario"
+done
 touch "$DOCKER_TEST_DIR/down"; : > "$DOCKER_TEST_DIR/calls"
 "$here/sid-docker-clean.sh" > "$t/clean-down" 2>&1; ok "Docker down is a successful janitor no-op" "$?" 0
 ok "Docker down makes no further calls" "$(wc -l < "$DOCKER_TEST_DIR/calls")" 1
@@ -695,15 +753,4 @@ touch "$DOCKER_TEST_DIR/missing-image"; : > "$DOCKER_TEST_DIR/calls"
 "$here/sid-db.sh" start > "$t/db-missing" 2>&1; ok "missing image fails instead of pulling" "$?" 1
 grep -q 'not pulled' "$t/db-missing"; ok "missing image explains the failure" "$?" 0
 grep -Eq '"(pull|run)"' "$DOCKER_TEST_DIR/calls"; ok "missing image never pulls or runs" "$?" 1
-# Legacy APIs used to prune named volumes by default: require the anonymous engine label.
-: > "$DOCKER_TEST_DIR/calls"
-DOCKER_API_VERSION=1.41 "$here/sid-docker-clean.sh" > "$t/old-api" 2>&1; ok "old Docker API cleanup succeeds" "$?" 0
-python3 - <<'PYTEST'
-import json, os
-from pathlib import Path
-calls=[json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
-assert ['volume','prune','-f','--filter','label=com.docker.volume.anonymous'] in calls
-assert not any('precious_named_volume' in a or '--all' in a for a in calls)
-PYTEST
-ok "old Docker API restricts volume cleanup to anonymous engine labels" "$?" 0
 exit $fail
