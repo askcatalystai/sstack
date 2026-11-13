@@ -84,14 +84,24 @@ class BoardTests(unittest.TestCase):
     def test_body_ownership_requires_kanzo_declaration(self):
         for body, owns in [('bell parity split to chat#29', False),
                            ('(chat#29 adds one)', False), ('Kanzo chat#299', False),
-                           ('NotKanzo chat#29', False), ('Kanzo: chat#29', False),
+                           ('NotKanzo chat#29', False), ('Kanzo: chat#29', True),
                            ('Kanzo chat#29.', True), ('(Kanzo chat#29)', True),
                            ('Kanzo chat#27, chat#28 and chat#29.', True),
+                           ('Kanzo: chat#27, chat#28 and chat#29', True),
+                           ('Kanzo: chat#27 (also chat#29)', True),
                            ('Kanzo chat#27 and chat#28; follow-up chat#29', False)]:
             with self.subTest(body=body):
                 f = facts(p=pr(title='Other', body=body), ts=[])
                 self.assertEqual(result(f)[2][0]['pr'], 8 if owns else '-')
         self.assertEqual(result(facts(p=pr(title='Other', headRefName='fix/chat#29')))[2][0]['pr'], 8)
+
+    def test_stored_pr_across_repos_overrides_text_and_tags(self):
+        f = facts(card(tags=['pr-8'], prs=[dict(repo='owner/other', number=99)]), ts=[])
+        f['repos']['/other'] = dict(name='owner/other', prs=[pr(number=99, title='unrelated', phase='gating')], train_ok=True)
+        row = result(f)[2][0]
+        self.assertEqual((row['pr'], row['column']), (99, 'deployment'))
+        f['repos']['/other']['prs'] = []
+        self.assertEqual(result(f)[2][0]['pr'], '-')
 
     def test_idle_without_pr_and_closed_pr(self):
         for status in ('doing', 'review', 'deployment', 'todo'):
@@ -150,6 +160,8 @@ class BoardTests(unittest.TestCase):
                 info = dict(nameWithOwner='owner/repo', defaultBranchRef={'name': 'main'})
                 cards = [card(status='review', tags=[f'pr-{n}']) for n in range(1, 26)]
                 cards += [card(status='done', tags=['pr-99']), card(tags=['pr-98'])]
+                cards[0] = card(status='review', repo='/other', prs=[dict(repo='owner/repo', number=1)])
+                cards += [card(status='review', tags=['pr-0'], prs=[dict(repo='owner/other', number=0)])]
                 repo = board.gather_github('/repo', info, cards)
             lookups = [c for c in calls if c[:3] == ('gh', 'pr', 'view')]
             self.assertEqual([int(c[3]) for c in lookups], list(range(1, 21)))

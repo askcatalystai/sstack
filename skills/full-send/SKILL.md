@@ -80,7 +80,10 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    then `no-comments` (`comment-sicko`), then your own read for dead code and needless guards.
 3. **Review** (see `review-loop`). First Claude commits, pushes and opens the PR
    (`file-pr`, `link_pull_request`, the card key in the body), so the review covers a
-   commit and its result can be recorded. Then Composer's bug pass, then Astra on the
+   commit and its result can be recorded. After `link_pull_request`, run
+   `~/.local/share/sidstack/scripts/sid-card.py link <card> <owner/repo> <pr>`.
+   `sid-merge.sh` links the card too and refuses a PR with no card; pass repeatable
+   `--card <key>` to override text resolution. Then Composer's bug pass, then Astra on the
    committed result, each a `delegate_task` whose brief names the worktree path and the
    commit. Claude takes the final call, the builder (the Opus builder for visible UI, Sol
    for logic) fixes once through a new `delegate_task` naming the same path, a fix that

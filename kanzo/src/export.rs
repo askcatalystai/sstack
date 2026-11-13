@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::home::Home;
 use crate::store::short_time;
-use crate::store::{Comment, Project, Store, Task};
+use crate::store::{Comment, Project, Store, Task, TaskPr};
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub enum Format {
@@ -45,10 +45,11 @@ struct TaskOut {
     created_at: String,
     updated_at: String,
     comments: Vec<Comment>,
+    prs: Vec<TaskPr>,
 }
 
 impl TaskOut {
-    fn new(task: Task, comments: Vec<Comment>, images: Vec<String>) -> Self {
+    fn new(task: Task, comments: Vec<Comment>, images: Vec<String>, prs: Vec<TaskPr>) -> Self {
         Self {
             key: task.key(),
             id: task.id,
@@ -61,6 +62,7 @@ impl TaskOut {
             created_at: task.created_at,
             updated_at: task.updated_at,
             comments,
+            prs,
         }
     }
 }
@@ -94,7 +96,8 @@ fn collect(store: &Store, only: Option<&str>, images: &Path) -> Result<Board> {
         for task in store.list_tasks(Some(project.id), None)? {
             let comments = store.list_comments(task.id)?;
             let paths = store.list_images(task.id)?.into_iter().map(|i| images.join(i.file).display().to_string());
-            tasks.push(TaskOut::new(task, comments, paths.collect()));
+            let prs = store.task_prs(task.id)?;
+            tasks.push(TaskOut::new(task, comments, paths.collect(), prs));
         }
         out.push(ProjectOut { project, tasks });
     }
@@ -179,6 +182,7 @@ mod tests {
         let done = store.create_task(api.id, "Old work", "").unwrap();
         store.move_task(done.id, "done", None).unwrap();
 
+        store.link_pr(t.id, "me/other", 834).unwrap();
         let board = collect(&store, None, Path::new("/k/images")).unwrap();
         let md = markdown(&board);
         assert!(md.contains("## API `api` ([me/api](https://github.com/me/api))"), "{md}");
@@ -189,6 +193,7 @@ mod tests {
         assert!(md.contains("## Web `web`"), "{md}");
 
         let json: serde_json::Value = serde_json::to_value(&board).unwrap();
+        assert_eq!(json["projects"][0]["tasks"][0]["prs"], serde_json::json!([{"repo": "me/other", "number": 834}]));
         assert_eq!(json["statuses"][0], "todo");
         assert_eq!(json["projects"][0]["slug"], "api");
         assert_eq!(json["projects"][0]["tasks"][0]["key"], "api#1");

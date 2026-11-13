@@ -4,6 +4,7 @@
   sid-card.py work <oe#1> <provider> <model> <effort> [status]   set the worker, and optionally the column
   sid-card.py clear <oe#1>                                       remove the worker tags
   sid-card.py shots <oe#1> "<caption>" <image.png> ...           post screenshots as a comment the user can see and flag
+  sid-card.py link <card> <owner/repo> <pr>                      persist a PR link
   sid-card.py tick                                               refresh the elapsed tag (a timer runs this each minute)
 
   sid-card.py inbox                                              print the user's new comments on any card, once each
@@ -18,7 +19,7 @@ import datetime as dt, json, os, re, subprocess, sys, urllib.request
 from pathlib import Path
 
 from kanzo_client import (KANZO, URL, STATE, ELAPSED, ACTIVE, connect, update, tasks,
-                          user_comments, load, save, lock)
+                          user_comments, load, save, lock, link_pr)
 
 def elapsed(start):
     minutes = int((dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(start)).total_seconds() // 60)
@@ -81,6 +82,11 @@ def tick(state):
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
+    if command == "link":
+        if len(sys.argv) != 5:
+            sys.exit("usage: sid-card.py link <card> <owner/repo> <pr>")
+        link_pr(sys.argv[2], sys.argv[3], int(sys.argv[4]))
+        return
     explicit = command in ("work", "clear", "shots", "inbox")
     guard = lock(timeout=60 if explicit else 0)
     if guard is None:

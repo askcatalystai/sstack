@@ -1,8 +1,8 @@
 """Shared local Kanzo transport and card state."""
 import json, os, re, subprocess, sys, urllib.request
 from pathlib import Path
-KANZO = os.path.expanduser("~/.local/bin/kanzo")
-URL = "http://127.0.0.1:4242/mcp"
+KANZO = os.environ.get("KANZO_BIN", os.path.expanduser("~/.local/bin/kanzo"))
+URL = os.environ.get("KANZO_URL", "http://127.0.0.1:4242/mcp")
 STATE = Path(os.path.expanduser("~/.local/state/sidstack/cards.json"))
 ELAPSED = re.compile(r"^(<1m|\d+m|\d+h( \d+m)?|\d+d( \d+h)?|stale)$")
 ACTIVE = ("doing", "review", "deployment")
@@ -108,3 +108,41 @@ def lock(timeout=0):
                 handle.close()
                 return None
             time.sleep(min(0.1, remaining))
+
+
+KEY = r'[\w-]+#\d+(?![\w#])'
+
+
+def body_keys(body):
+    declaration = (r'\bKanzo\s*:?\s+' + KEY +
+                   r'(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*\(also\s+)' + KEY + r'\)?)*')
+    return {key.lower() for match in re.finditer(declaration, body, re.I)
+            for key in re.findall(KEY, match.group(), re.I)}
+
+
+def pr_keys(pr):
+    return sorted(body_keys(pr.get('body') or '') | {
+        key.lower() for field in ('title', 'headRefName')
+        for key in re.findall(r'(?<![\w#-])' + KEY, pr.get(field) or '', re.I)})
+
+
+def link_pr(key, repo, number):
+    connect()
+    return call("link_pr", id=key, repo=repo, number=int(number))
+
+
+def resolve_pr(path, explicit):
+    candidates = list(dict.fromkeys(explicit)) if explicit else pr_keys(json.loads(Path(path).read_text()))
+    try:
+        known = tasks()
+    except Exception as error:
+        print(f"warning: Kanzo unreachable; cannot validate cards: {error}", file=sys.stderr)
+        return candidates
+    return [key for key in candidates if key in known]
+
+
+if __name__ == '__main__':
+    keys = resolve_pr(sys.argv[1], sys.argv[2:])
+    if not keys:
+        sys.exit("No Kanzo card resolved; supply --card <key>.")
+    print('\n'.join(keys))

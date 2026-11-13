@@ -76,7 +76,17 @@ const MIGRATIONS: &[&str] = &[
      CREATE TRIGGER workspaces_insert AFTER INSERT ON workspaces BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;
      CREATE TRIGGER workspaces_update AFTER UPDATE ON workspaces BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;
      CREATE TRIGGER workspaces_delete AFTER DELETE ON workspaces BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;",
-
+    // 8: durable, repo-qualified PR links independent of agent-authored text.
+    "CREATE TABLE task_prs (
+         task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+         repo TEXT NOT NULL,
+         number INTEGER NOT NULL,
+         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+         PRIMARY KEY (task_id, repo, number)
+     );
+     CREATE TRIGGER task_prs_insert AFTER INSERT ON task_prs BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;
+     CREATE TRIGGER task_prs_update AFTER UPDATE ON task_prs BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;
+     CREATE TRIGGER task_prs_delete AFTER DELETE ON task_prs BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;",
 ];
 
 /// The colours a project can be given; the board maps each name to a shade.
@@ -118,6 +128,12 @@ impl From<rusqlite::Error> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct TaskPr {
+    pub repo: String,
+    pub number: i64,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Workspace {
@@ -887,6 +903,26 @@ impl Store {
         Ok(task)
     }
 
+    pub fn link_pr(&self, task_id: i64, repo: &str, number: i64) -> Result<()> {
+        self.get_task(task_id)?;
+        let repo = clean_repo(repo)?;
+        if number <= 0 {
+            return Err(Error::Invalid("PR number must be positive".into()));
+        }
+        self.conn.execute(
+            "INSERT INTO task_prs (task_id, repo, number) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
+            params![task_id, repo, number],
+        )?;
+        Ok(())
+    }
+
+    pub fn task_prs(&self, task_id: i64) -> Result<Vec<TaskPr>> {
+        let mut stmt =
+            self.conn.prepare_cached("SELECT repo, number FROM task_prs WHERE task_id = ?1 ORDER BY repo, number")?;
+        let rows = stmt.query_map([task_id], |r| Ok(TaskPr { repo: r.get(0)?, number: r.get(1)? }))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     // Comments
 
     pub fn list_comments(&self, task_id: i64) -> Result<Vec<Comment>> {
@@ -1165,6 +1201,17 @@ mod tests {
         assert_eq!(s.find_project("legacy").unwrap().workspace, "openecommerce");
         assert!(s.conn.execute("UPDATE projects SET workspace_id = 999", []).is_err());
         assert!(s.conn.execute("DELETE FROM workspaces WHERE id = 1", []).is_err());
+        let before = s.changes().unwrap();
+        s.link_pr(1, "Owner/Other", 834).unwrap();
+        assert!(s.changes().unwrap() > before);
+        let linked = s.changes().unwrap();
+        s.link_pr(1, "owner/other", 834).unwrap();
+        assert_eq!(s.changes().unwrap(), linked);
+        s.migrate().unwrap();
+        assert_eq!(s.task_prs(1).unwrap(), vec![TaskPr { repo: "owner/other".into(), number: 834 }]);
+        assert!(matches!(s.link_pr(999, "owner/other", 1), Err(Error::NotFound(_))));
+        s.delete_task(1).unwrap();
+        assert!(s.task_prs(1).unwrap().is_empty());
         assert_eq!(COMPATIBLE_FROM, 4);
     }
 
