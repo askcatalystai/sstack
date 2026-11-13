@@ -72,7 +72,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    the board finds it. Every brief starts "Read ~/.local/share/sidstack/rules.md first.".
    T3 makes the worktree and a `t3/...` branch but doesn't run setup scripts for
    delegates, so the brief starts with the repo's setup command (project
-   instructions name it). The builder reports its `pwd` and branch; it doesn't commit. Before replying it runs what the gate will run for its diff (the repo's changed-tests command, eslint, typecheck), because a PR that fails in the train costs every PR in it a second gate.
+   instructions name it). The builder reports its `pwd` and branch; it doesn't commit. Before replying it runs what the gate will run for its diff (the repo's changed-tests command, eslint, typecheck), once, and pastes the output with pass counts in `## Proof`: reviewers read it instead of rerunning it, and a PR that fails in the train costs every PR in it a second gate.
    For a trivial change Claude may do this in a worktree itself.
    **Read the diff when it returns, before any review.** If it's bigger than the brief,
    touches unrelated files or is the wrong approach, scrap it (see "Scrap") and start a
@@ -94,7 +94,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
    PR's `## Proof` section, naming the commit it covers: commands, pass counts,
    screenshot paths, and what wasn't checked. It can't be a copy of the review notes.
-   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review runs the covering tests on the head commit, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
+   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review checks the builder's test output against the head commit and reruns only what a finding needs, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
    Run checks so a failure stops you before you commit or push.
 5. **Ship.** Push the last fixes with `--force-with-lease` and renew `## Proof` for
    the head commit. A risky PR goes to step 6; any other goes straight to step 7: with no CI,

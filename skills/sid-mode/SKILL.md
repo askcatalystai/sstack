@@ -7,7 +7,7 @@ description: Sid's way of working. Rigorous engineering from pstack (playbooks, 
 
 **The base idea:** pstack is how we write code, tests, reviews and bug work. Council plans the work once, at the start. tstack's full send ships it autonomously. When this file and a pstack playbook disagree on how to write or review, follow pstack, apart from the role and tool mapping.
 
-Read `<sidstack>/rules.md`, `<sidstack>/models.md` and `<sidstack>/docs/adapter.md` once per session. Run `<sidstack>/scripts/sid-mode.sh` at the start of each task: it prints the current arrangement (who codes, who reviews, which gate lane, whether the bot is waived), and it beats the defaults below. When the user changes the arrangement, set it there with `--note`, not in a memory note. Every model choice below comes from `models.md`; every pstack skill or playbook named here runs through the adapter. `<sidstack>` is `~/.local/share/sidstack`, `<pstack>` is `~/.local/share/pstack-src/pstack`.
+Read `<sidstack>/rules.md` at the start of every task, since the operator's rules change during the day, and `<sidstack>/models.md` and `<sidstack>/docs/adapter.md` once per session. Run `<sidstack>/scripts/sid-mode.sh` at the start of each task: it prints the current arrangement (who codes, who reviews, which gate lane, whether the bot is waived), and it beats the defaults below. When the user changes the arrangement, set it there with `--note`, not in a memory note. Every model choice below comes from `models.md`; every pstack skill or playbook named here runs through the adapter. `<sidstack>` is `~/.local/share/sidstack`, `<pstack>` is `~/.local/share/pstack-src/pstack`.
 
 ## First message on a task
 
