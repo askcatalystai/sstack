@@ -15,7 +15,7 @@ The operator shouldn't have to say anything twice. `~/.local/share/sidstack/rule
 4. For each, decide where it goes:
    - **Already a rule.** If the rule exists and the operator still had to say it, the rule isn't working. Make it sharper or more concrete, update its date and quote, and say in the digest which thread ignored it.
    - **A new rule for every project.** Add it under the fitting heading in `rules.md`: one bold sentence saying what to do, one saying why or how, then the date and a short quote in the operator's words.
-   - **The current arrangement** (who codes, who reviews, skip a gate or the bot). Not a rule. Check `scripts/sid-mode.sh` shows it for that repo, and set it there with `--note` if it doesn't.
+   - **The current arrangement** (who codes, who reviews, which gate lane). Not a rule. Check `scripts/sid-mode.sh` shows it for that repo, and set it there with `--note` if it doesn't.
    - **A product decision for one repo.** Not a rule here. It goes in that repo's instructions or memory. List it in the digest for the thread that owns the repo.
    - **A one-off.** Skip it.
 5. Add at most three rules a night, and keep the file short enough to read in two minutes. If it has grown past that, merge rules that say the same thing. Never remove a rule the operator hasn't withdrawn.

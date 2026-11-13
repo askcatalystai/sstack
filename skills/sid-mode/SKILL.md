@@ -1,6 +1,6 @@
 ---
 name: sid-mode
-description: Sid's way of working. Rigorous engineering from pstack (playbooks, principles, verified work) with tstack's ship loop (Sol codes, Astra and the Codex bot review, Claude orchestrates and merges). Use for "sid mode", /sid-mode, or any task that needs rigor end to end.
+description: Sid's way of working. Rigorous engineering from pstack (playbooks, principles, verified work) with tstack's ship loop (Sol and an Opus builder code, Composer and Astra review, Claude orchestrates and merges). Use for "sid mode", /sid-mode, or any task that needs rigor end to end.
 ---
 
 # Sid mode
@@ -21,7 +21,7 @@ Say in your own words what the user wants, the problem behind it, and the smalle
 - **Claude may edit directly** only for small fixes: review findings of a few lines, test updates, config, typos, or a fix that would cost more to brief than to make. Anything larger goes back to the implementer.
 - **Reviews** run through `review-loop`: the Composer bug pass first, then Astra reviews the committed result with its report and returns one list. Claude takes the final call on it and on slop, the builder fixes once, a behaviour change goes back to Astra, and Claude verifies each fix. Astra's approval of the head commit is the merge verdict.
 - **Every model runs as a subagent** the orchestrator starts (`delegate_task` in T3), never as a terminal command. Its title names the Kanzo card key, which is how the board follows it, and its brief starts with "Read `~/.local/share/sidstack/rules.md` first."
-- **PR bot** (Codex GitHub bot) reviews risky PRs on request. Open bot threads block a merge.
+- **Risky review**: one more model from another family on risky PRs (`risky review` in `models.md`). A finding blocks only when every reviewer calls it risky. No Codex bot.
 - **Council** for initial planning through `council`: seven seats for big plans, three for smaller ones (`models.md`).
 - The user can change any role for a session ("Claude codes this", "no Sol until I say"). A session instruction beats this file; record it with `sid-mode.sh set`, and a lasting rule in `rules.md`.
 
@@ -58,8 +58,8 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 2. Open the PR early (`file-pr`), naming the card key in its body, and link it in T3, so reviews cover a commit and their results can be recorded.
 3. `no-comments` and a slop pass, then `review-loop`: bug pass, then Astra; Claude takes the final call, the builder fixes once, behaviour changes go back to Astra, Claude verifies each fix. Decline nits with a reason. Work that doesn't earn its place gets scrapped, not patched.
 4. Behavioural verification before merge: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. The author doesn't verify its own work. It goes in the PR's `## Proof` section, naming the commit it covers.
-5. Risky PRs ask the bot, unless `sid-mode.sh get bot` says `off`; fix real P0/P1 and real P2 bug findings, resolve the rest with a reason.
-6. `sid-merge.sh <pr>`: checks the PR body, the verdict and the bot, then queues the PR for the merge train. The train gates every queued PR together on the latest main, once, with the repo's `.sidstack/gate.sh` (which picks the fast or full lane and must include tests), squash-merges them in order, and removes the worktree and branch. Never merge any other way: "skip gates" means `sid-mode.sh set lane fast`.
+5. Risky PRs get one more model (see `full-send` step 6); fix real P0/P1 and real P2 bug findings, resolve the rest with a reason.
+6. `sid-merge.sh <pr>`: checks the PR body and the verdict, then queues the PR for the merge train. The train gates every queued PR together on the latest main, once, with the repo's `.sidstack/gate.sh` (which picks the fast or full lane and must include tests), squash-merges them in order, and removes the worktree and branch. Never merge any other way: "skip gates" means `sid-mode.sh set lane fast`.
 7. Check the change on prod once deployed, in the browser, signed in. Say what was not checked live.
 
 ## Principles
