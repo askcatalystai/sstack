@@ -39,7 +39,7 @@ class Ready(unittest.TestCase):
             self.assertTrue(checks.problems(pr(body=body)), body)
 
     def test_review_must_say_who_approved(self):
-        for review in ["", "Astra", "Astra found two bugs."]:
+        for review in ["", "Astra", "Astra found two bugs.", "Composer: not approved; changes requested.", "No approval yet.", "Astra's approval is pending.", "Merged without formal approval."]:
             self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\n{review}\n")), review)
         for review in ["Sol approved (sol loop).", "Approval from Astra on abcdef12.", "Bug pass skipped; Astra approves."]:
             self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef12 8 failed, not run\n## Review\n{review}\n")), [], review)

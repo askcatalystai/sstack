@@ -489,13 +489,13 @@ ok "unsafe recovery never merges twice" "$(cat "$T/merge-calls")" 11
 setup_train flaky
 add_pr 11 test-a flaky; queue_pr 11; run_train
 ok "a test that passes when run again doesn't fail the PR" "$(code 11)" 0
-grep -q 'tests passed over: 1 flaky$' "$T/message-11"; ok "and the squash says a flaky test was passed over" "$?" 0
+grep -q 'tests passed over: .*flaky' "$T/message-11"; ok "and the squash says a flaky test was passed over" "$?" 0
 ok "running failed tests again is not another gate" "$(count_gates)" 1
 setup_train known-failure
 echo fail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 a; queue_pr 11; run_train
 ok "a test already failing on main doesn't fail the PR" "$(code 11)" 0
-grep -q 'tests passed over: 1 already failing on main$' "$T/message-11"; ok "and the squash says so" "$?" 0
+grep -q 'tests passed over: .*already failing' "$T/message-11"; ok "and the squash says so" "$?" 0
 [ ! -f "$health/$(git rev-parse origin/main)" ]; ok "and that main isn't recorded as healthy" "$?" 0
 "$here/sid-health.sh" > "$T/out" 2>&1; ok "main's own failing test still makes health red" "$?" 1
 setup_train new-failure

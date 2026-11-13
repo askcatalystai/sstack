@@ -9,6 +9,7 @@ Whether the words are true is the reviewer's call, not this script's.
 import json, re, sys
 
 APPROVED = re.compile(r"\bapprov(e|ed|es|al)\b", re.I)
+NOT_APPROVED = re.compile(r"\b(not|no|never|without|pending|awaiting)\s+(\w+\s+){0,2}approv\w*|\bapproval\s+(is\s+)?(pending|needed|required)\b", re.I)
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
@@ -40,7 +41,7 @@ def problems(pr):
     head = pr["headRefOid"]
     if head[:7] not in section(pr["body"], "Proof"):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
-    if not APPROVED.search(section(pr["body"], "Review")):
+    if not APPROVED.search(NOT_APPROVED.sub("", section(pr["body"], "Review"))):
         found.append("## Review must say who approved this change")
     return found
 
