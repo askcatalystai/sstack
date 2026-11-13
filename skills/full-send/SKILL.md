@@ -85,16 +85,17 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    commit. Claude takes the final call, the builder (the Opus builder for visible UI, Sol
    for logic) fixes once through a new `delegate_task` naming the same path, a fix that
    changes behaviour goes back to Astra for the changed code, and Claude verifies each
-   fix. Skip the fix pass if Astra approved cleanly. When Astra approves the head commit,
-   record it at once with `sid-verdict.sh` (step 4): that is the merge verdict, with no
-   separate verifier run. Any later change to the patch, even a rename, needs Astra to
-   confirm the new head (the diff since its approval only) and a new record. If any step is skipped, the PR's
-   `## Review` section says "skipped" and why, and the PR counts as risky (step 6).
+   fix. Skip the fix pass if Astra approved cleanly. Astra's approval is the merge
+   verdict, with no separate verifier run and nothing to record: write it in the PR's
+   `## Review` section ("Astra approved <commit>"), which `sid-merge.sh` reads. A later
+   fix that changes behaviour goes back to Astra; one that doesn't (a rename, a deleted
+   comment) needs only fresh `## Proof`. If any step is skipped, `## Review` says so
+   and why, and the PR counts as risky (step 6).
 4. **Prove it.** Run the real thing (see "Proof"). The author doesn't verify its own
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
    PR's `## Proof` section, naming the commit it covers: commands, pass counts,
    screenshot paths, and what wasn't checked. It can't be a copy of the review notes.
-   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change the way a user would (the app, the command, the reproduction; not the test suite again), and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review checks the builder's test output against the head commit and reruns only what a finding needs, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
+   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change the way a user would (the app, the command, the reproduction; not the test suite again), and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review checks the builder's test output against the head commit and reruns only what a finding needs, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Its result goes in `## Review`.
    Run checks so a failure stops you before you commit or push.
 5. **Ship.** Push the last fixes with `--force-with-lease` and renew `## Proof` for
    the head commit. A risky PR goes to step 6; any other goes straight to step 7: with no CI,
@@ -103,15 +104,21 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    `<pstack>/skills/poteto-mode/references/bugbot-triage.md` (fix, dismiss with a reason,
    or ask); noise doesn't get code. On any PR, conflicts: merge the default branch in the
    worktree and run `sid-merge.sh` again.
-7. **Merge.** Run `sid-merge.sh --check <pr>` first. If it prints `proof-failures:` lines, read them and decide from the plan: back to the bug pass, review or coding, or go ahead and say why on the card. No fixed rule. `sid-merge.sh <pr>` refuses until the PR is really ready (`## Proof` must
-   name the head commit, so a later push needs fresh proof), then queues it for the
+7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is ready (`## Proof` must
+   name the head commit, so a later push needs fresh proof, and `## Review` must say
+   who approved), then queues it for the
    merge train and waits for the result. The train gates every queued PR together,
    once, on the latest main, squash-merges them in order using each PR body as the
    commit message, and removes the worktree and branch. Run it in the background and
    wait with `t3_background_wait`; the train runs under systemd, so it finishes even if
-   this thread doesn't. Exit 1 means this PR failed the gate (it prints the log tail),
-   3 a conflict with main, and 4 that main itself is red: fix main first, don't compare
-   failures by hand. Then `unwatch_pull_request`.
+   this thread doesn't. The gate runs failed tests a second time and then on main alone,
+   so a flaky test or one already failing on main doesn't fail your PR; what it reports
+   is what your change broke. Exit 1 means this PR failed the gate: it names the tests
+   your change broke, or prints the log tail. Read the log and fix it. The same commit
+   goes back only once, with `sid-merge.sh --retry <pr>`, and only for a flake or an
+   infrastructure failure; after a second failure it takes a new commit. Exit 3 is a
+   conflict with main, and 4 means main itself fails lint, types or the build: fix main
+   first. Then `unwatch_pull_request`.
 8. **Check it live** once deployed, then report: the PR link, the merge commit,
    your proof, what was checked on prod and what wasn't, and each decision you
    made for the user.

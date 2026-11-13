@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Shared gate mechanics; source this, then gate_repo and gate_tree <main> <tree> <log> <description>.
-# gate_tree returns 0 passed or 1 failed, leaving lane and digest for its caller.
+# gate_tree returns 0 passed or 1 failed, leaving lane, digest, flaky, known and new_failures for its caller.
+#
+# What a repo's .sidstack/gate.sh may do so only new test failures fail a PR (optional; without it any failure fails):
+#   SID_FAILURES_OUT=<file>  write the tests that failed, one per line. Leave it non-empty only when every other check passed.
+#   SID_RERUN=<file>         run only the tests listed, on the tree checked out, and report the same way.
+#                            A listed test that doesn't exist on this tree counts as passing.
 set -u
 # merge_tree <args>: git merge-tree with the same settings GitHub uses, whatever the operator's config says.
 # The pinned rename settings are assumed to match GitHub squash merges; a mismatch yields exit 3 or 5, never an ungated landing.
@@ -16,25 +21,49 @@ gate_repo() {
   default=$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
   default=${default#origin/}; default=${default:-main}
   verify=$repo-wt/verify; gate=$common/sid-gate; train=$gate/train
-  mkdir -p "$gate/logs" "$gate/health" "$train/queue" "$train/result" "$train/active"
+  mkdir -p "$gate/logs" "$gate/health" "$train/queue" "$train/result" "$train/active" "$train/failed"
+}
+# run_gate <log> [VAR=value ...]: one run of the repo's gate in the verify worktree, appended to the log.
+run_gate() {
+  local log=$1; shift
+  ( cd "$verify" && { [ -f .sidstack/gate.sh ] || { echo 'no .sidstack/gate.sh in this repo'; exit 1; }; } &&
+    env "$@" bash .sidstack/gate.sh ) >> "$log" 2>&1
 }
 gate_tree() {
-  local main=$1 tree=$2 log=$3 description=$4 rc
-  lane=full; digest=
-  : > "$log" || return 1
+  local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main
+  lane=full; digest=; flaky=0; known=0; new_failures=
+  echo "== gate: $description" > "$log" || return 1
+  rm -f "$failed" "$again" "$base"
   [ -d "$verify" ] || git -C "$repo" worktree add -q --detach "$verify" "$main" || return 1
   # HEAD stays at main so the repo gate sees every member in its diff.
   git -C "$verify" checkout -q --detach -f "$main" && git -C "$verify" clean -qfd &&
     git -C "$verify" read-tree -u --reset "$tree" || return 1
-  ( cd "$verify" && echo "== gate: $description" &&
-    { [ -f .sidstack/gate.sh ] || { echo 'no .sidstack/gate.sh in this repo'; exit 1; }; } &&
-    bash .sidstack/gate.sh ) > "$log" 2>&1; rc=$?
+  run_gate "$log" SID_FAILURES_OUT="$failed"; rc=$?
+  if [ "$rc" != 0 ] && [ -s "$failed" ]; then
+    # Only tests failed. Run just those again: what passes now was flaky, and what also fails on main isn't this tree's fault.
+    echo "== gate: running the $(wc -l < "$failed") failed tests again" >> "$log"
+    run_gate "$log" SID_RERUN="$failed" SID_FAILURES_OUT="$again"; rc=$?
+    if [ "$rc" != 0 ] && [ -s "$again" ]; then
+      new_failures=$(sort -u "$again")
+      if [ "$(git -C "$repo" rev-parse "$tree^{tree}")" != "$(git -C "$repo" rev-parse "$main^{tree}")" ]; then
+        echo "== gate: running them on ${main:0:8} alone" >> "$log"
+        git -C "$verify" checkout -q --detach -f "$main" && git -C "$verify" clean -qfd &&
+          run_gate "$log" SID_RERUN="$again" SID_FAILURES_OUT="$base"
+        new_failures=$(comm -23 <(sort -u "$again") <(sort -u "$base" 2>/dev/null))
+      fi
+      if [ -z "$new_failures" ]; then rc=0; known=$(sort -u "$again" | wc -l); fi
+    fi
+    if [ "$rc" = 0 ]; then
+      flaky=$(( $(sort -u "$failed" | wc -l) - known ))
+      echo "== gate: passed; $flaky flaky, $known already failing on ${main:0:8}" >> "$log"
+    fi
+  fi
   git -C "$verify" checkout -q --detach -f "$main"
   git -C "$verify" clean -qfd
   lane=$(sed -n 's/^gate: lane \([^[:space:]]*\)[[:space:]]*$/\1/p' "$log" | tail -n 1); lane=${lane:-full}
   digest=$(sha256sum "$log" | cut -d' ' -f1)
   # Keep failed logs too: split trains and health results refer to them.
-  ls -1t "$gate/logs" | tail -n +51 | while IFS= read -r old; do rm -f "$gate/logs/$old"; done
+  ls -1t "$gate/logs" | tail -n +101 | while IFS= read -r old; do rm -f "$gate/logs/$old"; done
   [ "$rc" = 0 ]
 }
 

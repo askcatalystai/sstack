@@ -21,7 +21,6 @@ exec 9>"$gate/lock"; flock 9
 # Claims only protect cancellation; a dead runner's queue is safe to rebuild from scratch.
 rm -f "$train/active/"*
 gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
-bot=${SID_PR_BOT:-chatgpt-codex-connector}
 state() {
   local phase=$1; shift
   python3 - "$train/state.json" "$id" "$phase" "$lane" "$started" "$main" "$@" <<'PY'
@@ -33,7 +32,6 @@ with open(p+'.tmp', 'w') as f:
 os.replace(p+'.tmp', p)
 PY
 }
-hook_sequence=0
 id=0; lane=; main=; started=$(date -u +%FT%TZ)
 finish() {
   id=$(cat "$train/sequence" 2>/dev/null || echo 0)
@@ -48,6 +46,7 @@ result_for() {
   printf '%s\n' "$rc" "$@" > "$train/result/$pr.tmp"
   mv "$train/result/$pr.tmp" "$train/result/$pr"
   rm -f "$train/queue/$pr.req" "$train/queue/$pr.merge" "$train/active/$pr"
+  [ "$rc" != 0 ] || rm -f "$train/failed/$pr"
   flock -u 8
 }
 cleanup_branch() {
@@ -64,18 +63,14 @@ new_id() {
   started=$(date -u +%FT%TZ); lane=
 }
 history() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$started" "$(date -u +%FT%TZ)" "$members" "$lane" "$1" >> "$train/history.tsv"; }
-# Save a fresh readiness snapshot and verifier together; any failed check stays fail-closed.
+# Save a fresh readiness snapshot; any failed check stays fail-closed.
 validate() (
   local pr=$1 queued_head=$2
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-  bot_mode=$("$here/sid-mode.sh" get bot) || exit 1
-  need_bot=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["bot"]).lower())' "$train/queue/$pr.req") || exit 1
   ready
   [ "$head" = "$queued_head" ] || { echo "#$pr head changed since queueing; run sid-merge again"; exit 1; }
   [ "$base" = "$default" ] || { echo "#$pr's base just changed to $base; run sid-merge again"; exit 1; }
-  ready_verdict
   cp "$tmp/pr.json" "$train/active/$pr.json"
-  printf '%s\n' "$verified" > "$train/active/$pr.trailers"
 )
 # A zero CLI exit can mean queued. Only GitHub's completed, matching head counts.
 merged_oid() {
@@ -105,45 +100,32 @@ start_health() {
   flock -u 9
   wait "$health_pid"
   flock 9
-  after_merge health
 }
-after_merge() {
-  local gated_tree=$1 stamp_log=${2:-} newmain hookwt unit newtree
-  local -a launch
+# The train's gate covers main when the landed tree is the gated one; record that so health doesn't run it again.
+stamp_main() {
+  local gated_tree=$1 newmain
   git fetch -q origin "$default" || return
   newmain=$(git rev-parse "origin/$default")
-  newtree=$(git rev-parse "$newmain^{tree}") || return 1
-  if [ "$newtree" != "$gated_tree" ]; then
-    grep -q '^pass ' "$gate/health/$newmain" 2>/dev/null || return 0
-  elif [ -n "$stamp_log" ]; then
-    printf 'pass %s\n%s\n' "$lane" "$stamp_log" > "$gate/health/$newmain.tmp"
-    mv "$gate/health/$newmain.tmp" "$gate/health/$newmain"
+  [ "$(git rev-parse "$newmain^{tree}")" = "$gated_tree" ] || return 0
+  printf 'pass %s\n%s\n' "$lane" "$log" > "$gate/health/$newmain.tmp"
+  mv "$gate/health/$newmain.tmp" "$gate/health/$newmain"
+}
+# One more failure of this commit on the record; sid-merge reads it before queueing the commit again.
+note_failure() {
+  local pr=$1 head failed_head failures=0
+  head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || return
+  if [ -f "$train/failed/$pr" ]; then
+    read -r failed_head failures _ < "$train/failed/$pr"
+    [ "$failed_head" = "$head" ] || failures=0
   fi
-  [ "$(git ls-tree "$newmain" .sidstack/after-merge.sh | cut -d' ' -f1)" = 100755 ] || return 0
-  # A private snapshot lets the next train reuse verify while deployment keeps running.
-  hook_sequence=$((hook_sequence+1))
-  hookwt=$repo-wt/after-merge-$id-$hook_sequence
-  launch=(setsid -f env PATH="$PATH")
-  if { [ -n "${INVOCATION_ID:-}" ] || [ -z "${SID_TRAIN_INLINE+x}" ]; } && command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-    unit=sid-after-merge-$(printf '%s' "$common" | sha256sum | cut -c1-16)-$id-$hook_sequence
-    launch=(systemd-run --user --collect --unit="$unit" --setenv=PATH="$PATH" --setenv=HOME="$HOME"
-      --property="StandardOutput=append:$train/after-merge.log" --property="StandardError=append:$train/after-merge.log")
-  fi
-  ( exec 7>&- 8>&- 9>&-
-    exec "${launch[@]}" bash -c '
-      repo=$1; wt=$2; sha=$3
-      git -C "$repo" worktree add -q --detach "$wt" "$sha" || exit 1
-      trap '\''git -C "$repo" worktree remove --force "$wt"'\'' EXIT
-      cd "$wt" && .sidstack/after-merge.sh
-    ' bash "$repo" "$hookwt" "$newmain" </dev/null >>"$train/after-merge.log" 2>&1
-  ) &
+  printf '%s %s %s\n' "$head" "$((failures+1))" "$log" > "$train/failed/$pr"
 }
 run_train() {
   # Recursive halves get their own ids, logs, and main snapshots.
   local -a candidates=("$@") accepted=() remaining=()
   local -A trees=()
-  local pr head branch out tree combined synthetic rc record oid expected parent member_tree trailers message title body mode_error
-  local id started lane main log members digest attempt merged retry needs_rebuild unsafe
+  local pr head branch out tree combined synthetic rc record oid expected parent member_tree trailers message title body mode_error noted
+  local id started lane main log members digest flaky known new_failures attempt merged retry needs_rebuild unsafe
   for attempt in 1 2 3; do
     [ "${#candidates[@]}" -gt 0 ] || return 0
     if ! mode_error=$("$here/sid-mode.sh" get lane 2>&1); then
@@ -171,7 +153,6 @@ run_train() {
         if [ "$rc" = 0 ]; then
           result_for "$pr" 0 "merged #$pr: $oid (found already merged)"
           cleanup_branch "$branch"
-          after_merge "$member_tree"
         elif [ "$rc" = 5 ]; then
           result_for "$pr" 5 "merged #$pr as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})"
           start_health
@@ -217,10 +198,15 @@ PY
         run_train "${candidates[@]:$((${#candidates[@]}/2))}"
       else
         pr=${candidates[0]}; rc=1
-        message=$(printf 'gate FAILED: %s\n' "$log"; tail -n 25 "$log")
-        if grep -q '^fail ' "$gate/health/$main" 2>/dev/null; then
-          rc=4; message="main is red at ${main:0:8}, see $(sed -n 2p "$gate/health/$main")"
+        if [ -n "$new_failures" ]; then
+          message=$(printf 'gate FAILED: %s\nthese tests fail with #%s and pass on %s (run twice here, once on %s):\n%s\n' "$log" "$pr" "$default" "$default" "$new_failures")
+        else
+          message=$(printf 'gate FAILED: %s\n' "$log"; tail -n 25 "$log")
+          if grep -q '^fail ' "$gate/health/$main" 2>/dev/null; then
+            rc=4; message="main is red at ${main:0:8}, see $(sed -n 2p "$gate/health/$main")"
+          fi
         fi
+        [ "$rc" = 4 ] || note_failure "$pr"
         result_for "$pr" "$rc" "$message"; history failed
       fi
       return
@@ -228,6 +214,10 @@ PY
     state merging "${candidates[@]}"
     expected=$main; merged=0; remaining=(); needs_rebuild=false; unsafe=false
     record="Gate-Passed: train $id, $default ${main:0:8} + $(printf '#%s ' "${candidates[@]}" | sed 's/ $//'), lane $lane, log sha256 $digest"
+    noted=
+    [ "$flaky" = 0 ] || noted="$flaky flaky"
+    [ "$known" = 0 ] || noted="${noted:+$noted, }$known already failing on $default"
+    [ -z "$noted" ] || record="$record, tests passed over: $noted"
     for pr in "${candidates[@]}"; do
       if [ "$needs_rebuild" = true ]; then remaining+=("$pr"); continue; fi
       head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req")
@@ -251,7 +241,7 @@ PY
         title=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["title"])' "$train/active/$pr.json")
         body=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["body"])' "$train/active/$pr.json")
         trailers=$(git log "$main..$head" --format='%(trailers:only,unfold)' | sed '/^$/d' | sort -u)
-        message=$(printf '%s\n\n%s\n%s\n%s\n' "$body" "$trailers" "$(cat "$train/active/$pr.trailers")" "$record")
+        message=$(printf '%s\n\n%s\n%s\n' "$body" "$trailers" "$record")
         # Persist the exact gated prefix before merging, including for crash recovery.
         printf '%s\n%s\n' "$expected" "$member_tree" > "$train/queue/$pr.merge"
         rc=1
@@ -295,7 +285,8 @@ PY
       merged=$((merged+1)); expected=$oid
       cleanup_branch "$branch"
     done
-    if [ "$merged" != 0 ] && [ "$unsafe" = false ]; then after_merge "$tree" "$log"; fi
+    # A main with failing tests of its own isn't healthy, so leave that one for the health check.
+    if [ "$merged" != 0 ] && [ "$unsafe" = false ] && [ "$known" = 0 ]; then stamp_main "$tree"; fi
     if [ "$needs_rebuild" = false ]; then history merged; return; fi
     history failed
     candidates=("${remaining[@]}")
