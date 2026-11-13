@@ -24,14 +24,14 @@ use crate::store::{self, Error, Project, Store, Task, TaskPatch, short_time};
 const DONE_LISTED: usize = 20;
 
 const INSTRUCTIONS: &str = "The user's kanban board, on this machine, for all their projects. Tasks look like \
-api#12. Without `project`, Kanzo uses the project linked to this folder's GitHub repo. Keep it current unasked: \
-doing when you start a task, comments on what you did, review when you finish or get stuck. Leave done and \
-human tasks to the user. Projects belong to workspaces; use list_workspaces to discover them. Listing without workspace spans all workspaces; create_project defaults to openecommerce.";
+api#12. Without `project`, Kanzo uses the project linked to this folder's GitHub repo. Columns follow the work by \
+themselves when a subagent's title or a PR's body names the task key, so name it there and don't move cards by hand. \
+Comment unasked on what you did, what you decided and what you're waiting on. Leave human tasks to the user. Projects belong to workspaces; use list_workspaces to discover them. Listing without workspace spans all workspaces; create_project defaults to openecommerce.";
 
 const HTTP_INSTRUCTIONS: &str = "The user's kanban board, on their machine, for all their projects. Tasks look \
-like api#12. Over HTTP Kanzo can't see your folder, so pass `project` (see list_projects). Keep it current \
-unasked: doing when you start a task, comments on what you did, review when you finish or get stuck. Leave \
-done and human tasks to the user. Projects belong to workspaces; use list_workspaces to discover them. Listing without workspace spans all workspaces; create_project defaults to openecommerce.";
+like api#12. Over HTTP Kanzo can't see your folder, so pass `project` (see list_projects). Columns follow \
+the work by themselves when a subagent's title or a PR's body names the task key, so name it there and don't move \
+cards by hand. Comment unasked on what you did, what you decided and what you're waiting on. Leave human tasks to the user. Projects belong to workspaces; use list_workspaces to discover them. Listing without workspace spans all workspaces; create_project defaults to openecommerce.";
 
 /// `kanzo mcp`: one agent on stdin and stdout, in the folder it started us in.
 pub async fn serve(home: Home) -> Result<()> {
