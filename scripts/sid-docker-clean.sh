@@ -8,19 +8,29 @@ def docker(*args):
     return subprocess.check_output(['docker', *args], text=True).strip()
 def stamp(value):
     try:
-        return datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+        if not value:
+            return None
+        dt = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if dt.year <= 1:  # Docker unset StartedAt/FinishedAt is 0001-01-01T00:00:00Z.
+            return None
+        return dt.timestamp()
     except (ValueError, TypeError):
-        return time.time()  # Missing timestamps never authorize removal.
+        return None
 def candidate(c):
     labels = c['Config'].get('Labels') or {}
     if 'com.docker.compose.project' in labels:
         return None
     state = c['State']
     if labels.get('sidstack.throwaway') == '1':
-        if state['Status'] == 'exited' or time.time() - stamp(state['StartedAt']) > 7200:
+        if state['Status'] == 'exited':
             return '-fv'
-    elif state['Status'] == 'exited' and time.time() - stamp(state['FinishedAt']) > 86400:
-        return '-v'
+        started = stamp(state['StartedAt'])
+        if started is not None and time.time() - started > 7200:
+            return '-fv'
+    elif state['Status'] == 'exited':
+        finished = stamp(state['FinishedAt'])
+        if finished is not None and time.time() - finished > 86400:
+            return '-v'
     return None
 def total(rows):
     # Docker reports rounded human-readable sizes, so the difference is approximate.

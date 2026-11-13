@@ -585,14 +585,19 @@ from pathlib import Path
 p = Path(os.environ['DOCKER_TEST_DIR']); a = sys.argv[1:]
 with (p/'calls').open('a') as f: f.write(json.dumps(a)+'\n')
 def emit(data): print(json.dumps(data))
-def container(name, hours, status='exited', labels=None):
+def container(name, hours, status='exited', labels=None, started_at=None, finished_at=None):
     at = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
-    return dict(Id=name, Name='/'+name, Config=dict(Labels=labels or {}), State=dict(Status=status, Running=status=='running', StartedAt=at, FinishedAt=at), NetworkSettings=dict(Ports={'5432/tcp':[dict(HostIp='127.0.0.1' if name in ('throw-old', 'new-db') else '0.0.0.0', HostPort='54321')]}), Mounts=[dict(Type='volume', Name='precious_named_volume')])
+    started_at = started_at if started_at is not None else at
+    finished_at = finished_at if finished_at is not None else at
+    return dict(Id=name, Name='/'+name, Config=dict(Labels=labels or {}), State=dict(Status=status, Running=status=='running', StartedAt=started_at, FinishedAt=finished_at), NetworkSettings=dict(Ports={'5432/tcp':[dict(HostIp='127.0.0.1' if name in ('throw-old', 'new-db') else '0.0.0.0', HostPort='54321')]}), Mounts=[dict(Type='volume', Name='precious_named_volume')])
 throw = {'sidstack.throwaway':'1'}; compose = {'com.docker.compose.project':'keep'}
+unset = '0001-01-01T00:00:00Z'
 cs = [container('throw-exited', .1, labels=throw), container('throw-old', 3, 'running', throw),
       container('plain-old', 25), container('compose-running', 50, 'running', {**throw, **compose}),
       container('compose-exited', 50, labels=compose), container('plain-running', 50, 'running'),
-      container('plain-young', 23), container('throw-young', 1, 'running', throw)]
+      container('plain-young', 23), container('throw-young', 1, 'running', throw),
+      container('plain-unset-finished', 50, finished_at=unset),
+      container('throw-unset-started', 3, 'running', throw, started_at=unset)]
 if a == ['info']:
     sys.exit(1 if (p/'down').exists() else 0)
 elif a[0] == 'version': emit(dict(Server=dict(Version='29.9.2', ApiVersion='1.56'), Client=dict(ApiVersion='1.56')))
@@ -621,6 +626,7 @@ from pathlib import Path
 calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
 removed = {a[-1]:a[1] for a in calls if a[0]=='rm'}
 assert removed == {'throw-exited':'-fv', 'throw-old':'-fv', 'plain-old':'-v'}, removed
+assert 'plain-unset-finished' not in removed and 'throw-unset-started' not in removed
 assert ['volume','prune','-f'] in calls
 assert ['image','prune','-f'] in calls
 assert ['builder','prune','-f','--filter','until=72h'] in calls
@@ -636,7 +642,7 @@ calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').re
 assert not any('rm' in a or 'prune' in a for a in calls)
 out=Path(sys.argv[1]).read_text()
 for name in ['throw-exited','throw-old','plain-old','anonymous-volume','dangling-image']: assert name in out, name
-for name in ['compose-running','compose-exited','plain-running','plain-young','throw-young','precious_named_volume']: assert name not in out, name
+for name in ['compose-running','compose-exited','plain-running','plain-young','throw-young','plain-unset-finished','throw-unset-started','precious_named_volume']: assert name not in out, name
 PY
 ok "dry-run lists eligible resources without any removal" "$?" 0
 touch "$DOCKER_TEST_DIR/down"; : > "$DOCKER_TEST_DIR/calls"
@@ -668,7 +674,7 @@ python3 - "$t/db-list" <<'PYTEST'
 import sys
 from pathlib import Path
 rows=Path(sys.argv[1]).read_text().splitlines()
-assert {r.split()[0] for r in rows} == {'throw-old', 'throw-young'}
+assert {r.split()[0] for r in rows} == {'throw-old', 'throw-young', 'throw-unset-started'}
 assert all('age=' in r for r in rows)
 PYTEST
 ok "database list includes only running owned databases with age" "$?" 0
