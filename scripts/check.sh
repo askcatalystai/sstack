@@ -12,4 +12,5 @@ else
   echo "skipped: no cargo for kanzo tests"
 fi
 python3 -I scripts/pr_checks_test.py
+python3 -I scripts/board_test.py
 bash scripts/scripts_test.sh

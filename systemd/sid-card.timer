@@ -1,10 +1,10 @@
 [Unit]
-Description=Refresh elapsed time on Kanzo cards each minute
+Description=Reconcile Kanzo every 20 seconds (watchdog every five minutes)
 
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
-AccuracySec=5s
+OnBootSec=20s
+OnCalendar=*-*-* *:*:00/20
+AccuracySec=1s
 
 [Install]
 WantedBy=timers.target

@@ -1,6 +1,7 @@
 [Unit]
-Description=Refresh elapsed time on Kanzo cards
+Description=Reconcile Kanzo progress and restart stalled work
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 %h/.local/share/sidstack/scripts/sid-card.py tick
+ExecStart=/usr/bin/python3 %h/.local/share/sidstack/scripts/sid-board.py cycle
+TimeoutStartSec=4min
