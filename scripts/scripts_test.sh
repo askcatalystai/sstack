@@ -3,7 +3,7 @@
 set -u
 # Do not inherit the harness service identity; systemd cases opt in with fakes.
 unset INVOCATION_ID
-here=$(cd "$(dirname "$0")" && pwd); t=$(mktemp -d); trap 'rm -rf "$t"' EXIT; fail=0
+here=$(cd "$(dirname "$0")" && pwd); t=$(mktemp -d); trap '[ -z "${kanzo_pid:-}" ] || kill "$kanzo_pid"; rm -rf "$t"' EXIT; fail=0
 ok() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (want $3, got $2)"; fail=1; fi; }
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 git init -q --bare -b main "$t/origin.git"; git clone -q "$t/origin.git" "$t/repo" 2>/dev/null; cd "$t/repo" || exit 1
@@ -21,6 +21,44 @@ mkdir "$t/bin"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$t/bin/systemctl"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$t/bin/systemd-run"
 chmod +x "$t/bin/systemctl" "$t/bin/systemd-run"
+# Isolated Kanzo export and MCP boundary: never contact the operator's board.
+export KANZO_FIXTURE=$t
+cat > "$t/bin/kanzo" <<'F'
+#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+p = Path(os.environ['KANZO_FIXTURE'])
+if (p/'kanzo-down').exists(): sys.exit(1)
+print(json.dumps(dict(projects=[dict(tasks=[dict(key=k) for k in ('process#329', 'a#1', 'b#2', 'c#3')])])))
+F
+chmod +x "$t/bin/kanzo"
+export KANZO_BIN=$t/bin/kanzo
+cat > "$t/kanzo-server.py" <<'F'
+import http.server, json, os
+from pathlib import Path
+p = Path(os.environ['KANZO_FIXTURE'])
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args): pass
+    def do_POST(self):
+        data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if (p/'kanzo-down').exists():
+            self.send_error(503); return
+        if data['method'] == 'tools/call':
+            assert data['params']['name'] == 'link_pr'
+            with (p/'links').open('a') as f: f.write(json.dumps(data['params']['arguments'])+'\n')
+            if (p/'queue-path').exists():
+                if Path((p/'queue-path').read_text()).exists(): (p/'link-after-queue').touch()
+        self.send_response(200); self.end_headers()
+        self.wfile.write(json.dumps(dict(jsonrpc='2.0', id=data.get('id'), result={})).encode())
+server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+(p/'port').write_text(str(server.server_port))
+server.serve_forever()
+F
+python3 "$t/kanzo-server.py" & kanzo_pid=$!
+# Existing bare waits must only wait for the test jobs, not the fake service.
+disown "$kanzo_pid"
+while [ ! -f "$t/port" ]; do sleep .01; done
+export KANZO_URL="http://127.0.0.1:$(cat "$t/port")/mcp"
 cat > "$t/bin/gh" <<'F'
 #!/usr/bin/env python3
 import json, os, signal, subprocess, sys
@@ -114,7 +152,7 @@ else:
     sys.exit(1)
 F
 chmod +x "$t/bin/gh"; export T=$t SID_TRAIN_INLINE=1
-pr() { printf '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"","statusCheckRollup":%s,"headRefOid":"%s","headRefName":"work","baseRefName":"main","title":"t","body":"## Proof\\n%s 3 passed\\n## Review\\nAstra approved.\\n"}' "$1" "$head" "$head" > "$t/pr.json"; }
+pr() { printf '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"","statusCheckRollup":%s,"headRefOid":"%s","headRefName":"work","baseRefName":"main","title":"process#329","body":"## Proof\\n%s 3 passed\\n## Review\\nAstra approved.\\n"}' "$1" "$head" "$head" > "$t/pr.json"; }
 merge() {
   PATH="$t/bin:$PATH" "$here/sid-merge.sh" --no-wait "$@" 5 >"$t/out" 2>&1; local rc=$?
   if [ "$rc" = 0 ] && [ -f .git/sid-gate/train/queue/5.req ]; then
@@ -206,7 +244,7 @@ record_pr() {
   python3 - "$T/pr-$n.json" "$n" "$h" <<'PY'
 import json, sys
 p, n, h = sys.argv[1:]
-json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], headRefOid=h, headRefName='work'+n, baseRefName='main', title='change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nAstra approved.\n'), open(p, 'w'))
+json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], headRefOid=h, headRefName='work'+n, baseRefName='main', title='process#329 change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nAstra approved.\n'), open(p, 'w'))
 PY
   "$here/sid-verdict.sh" "$n" "$h" PASS composer thread-1 'ran tests' >/dev/null
 }
@@ -216,6 +254,61 @@ count_gates() { if [ -f "$T/gates" ]; then wc -l < "$T/gates" | tr -d ' '; else 
 code() { head -n 1 "$q/result/$1"; }
 # Rename/edit merges must have server semantics even with operator overrides.
 # Exercise the hook boundary with real local commits, independent of merge timing.
+setup_train card-links
+rm -f "$t/links"
+add_pr 11 a
+cp "$T/pr-11.json" "$T/card-original"
+set_card_text() {
+  python3 - "$T/pr-11.json" "$T/card-original" "$1" "$2" "$3" <<'PY'
+import json, sys
+out, original, title, branch, body = sys.argv[1:]
+p = json.load(open(original)); p.update(title=title, headRefName=branch, body=p['body']+'\n'+body)
+json.dump(p, open(out, 'w'))
+PY
+}
+for form in 'Kanzo a#1' 'Kanzo: a#1' 'Kanzo: a#1, b#2 and c#3' 'Kanzo: a#1 (also c#3)'; do
+  set_card_text unrelated work11 "$form"
+  "$here/sid-merge.sh" --check 11 > "$T/out" 2>&1; ok "resolves $form" "$?" 0
+  expected='cards: a#1'
+  case "$form" in *b#2*) expected='cards: a#1,b#2,c#3';; *also*) expected='cards: a#1,c#3';; esac
+  grep -Fxq "$expected" "$T/out"; ok "reports keys for $form" "$?" 0
+ done
+set_card_text a#1 work11 ''
+"$here/sid-merge.sh" --check 11 > "$T/out" 2>&1; grep -Fxq 'cards: a#1' "$T/out"; ok "resolves title key" "$?" 0
+# Use the existing real branch for readiness; a key-bearing branch must exist too.
+git branch a#1 origin/work11; git push -q origin a#1
+set_card_text unrelated a#1 ''
+"$here/sid-merge.sh" --check 11 > "$T/out" 2>&1; grep -Fxq 'cards: a#1' "$T/out"; ok "resolves branch key" "$?" 0
+set_card_text unrelated work11 ''
+queue_pr 11; ok "no card refuses queue" "$?" 1
+grep -q -- '--card' "$T/out"; ok "refusal names --card" "$?" 0
+[ ! -f "$q/queue/11.req" ]; ok "refusal leaves no queue request" "$?" 0
+set_card_text unknown#999 work11 ''
+queue_pr 11; ok "unknown card refuses queue" "$?" 1
+"$here/sid-merge.sh" --check --card b#2 --card c#3 11 > "$T/out" 2>&1
+ok "explicit cards override text" "$?" 0
+grep -Fxq 'cards: b#2,c#3' "$T/out"; ok "reports repeated explicit keys" "$?" 0
+"$here/sid-merge.sh" --check --card A#1 11 > "$T/out" 2>&1
+grep -Fxq 'cards: a#1' "$T/out"; ok "explicit card keys match case-insensitively" "$?" 0
+[ ! -f "$q/queue/11.req" ]; ok "check does not queue" "$?" 0
+[ ! -f "$t/links" ]; ok "check never links" "$?" 0
+printf '%s' "$PWD/$q/queue/11.req" > "$t/queue-path"
+"$here/sid-merge.sh" --no-wait --card b#2 --card c#3 11 > "$T/out" 2>&1
+ok "links before queueing" "$?" 0
+python3 - "$t/links" <<'PY'
+import json, sys
+assert [json.loads(l) for l in open(sys.argv[1])] == [dict(id=k, repo='o/r', number=11) for k in ('b#2','c#3')]
+PY
+ok "persists every repo-qualified link" "$?" 0
+[ ! -f "$t/link-after-queue" ]; ok "Kanzo observes links before queue request" "$?" 0
+[ -f "$q/queue/11.req" ]; ok "linked request is queued" "$?" 0
+rm "$t/queue-path"
+"$here/sid-merge.sh" --cancel 11 >/dev/null
+touch "$t/kanzo-down"
+"$here/sid-merge.sh" --no-wait --card b#2 11 > "$T/out" 2>&1
+ok "Kanzo outage still queues" "$?" 0
+grep -q 'warning: Kanzo' "$T/out"; ok "outage is never silent" "$?" 0
+rm "$t/kanzo-down"
 setup_train hook-boundary
 printf '#!/usr/bin/env bash\necho "$PWD" >> "$T/hook-calls"\nwhile [ ! -f "$T/release-hook" ]; do sleep .05; done\n' > .sidstack/after-merge.sh
 chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main

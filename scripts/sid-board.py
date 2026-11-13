@@ -57,15 +57,15 @@ def root(thread):
 
 
 def body_declares(key, body):
-    item = r'[\w-]+#\d+(?![\w#])'
-    for declaration in re.finditer(r'\bKanzo\s+' + item + r'(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)' + item + r')*', body, re.I):
-        if token(key, declaration.group()):
-            return True
-    return False
+    return key.lower() in kanzo.body_keys(body)
 
 
 def choose_pr(card, prs):
-    matches = [p for p in prs if f"pr-{p['number']}" in card.get('tags', []) or
+    if card.get('prs'):
+        matches = [p for p in prs if any(link['repo'].lower() == p.get('_repo', '').lower() and
+                   link['number'] == p['number'] for link in card['prs'])]
+    else:
+        matches = [p for p in prs if f"pr-{p['number']}" in card.get('tags', []) or
                token(card['key'], ' '.join(p.get(k, '') or '' for k in ('title', 'headRefName'))) or
                body_declares(card['key'], p.get('body') or '')]
     opens = [p for p in matches if p['state'] == 'OPEN']
@@ -96,7 +96,14 @@ def reconcile(facts, previous, now):
         status = card['status']
         repo = facts.get('repos', {}).get(card.get('repo'), {})
         prs = repo.get('prs')
+        if card.get('prs'):
+            sources = [r for r in facts.get('repos', {}).values()
+                       if any(link['repo'].lower() == r.get('name', '').lower() for link in card['prs'])]
+            prs = ([dict(p, _repo=r['name']) for r in sources for p in r.get('prs') or []]
+                   if sources and all(r.get('prs') is not None for r in sources) else None)
         pr = choose_pr(card, prs) if prs is not None else None
+        if pr and card.get('prs'):
+            repo = next(r for r in sources if r['name'] == pr['_repo'])
         workers = sorted([t for t in threads or [] if t.get('parent') and token(key, t['title'])],
                          key=lambda t: t.get('activity', 0))
         if workers:
@@ -309,8 +316,12 @@ def gather_github(path, info, cards):
                              '--json', PR_FIELDS, cwd=path))
     repo['prs'] = prs
     known = {p['number'] for p in prs}
-    missing = sorted({int(tag[3:]) for card in cards if card['status'] in ACTIVE and not card.get('human')
-                      for tag in card.get('tags', []) if re.fullmatch(r'pr-\d+', tag)} - known)
+    active = [card for card in cards if card['status'] in ACTIVE and not card.get('human')]
+    linked = {link['number'] for card in active for link in card.get('prs', [])
+              if link['repo'].lower() == name.lower()}
+    tagged = {int(tag[3:]) for card in active if not card.get('prs') and card.get('repo') == path
+              for tag in card.get('tags', []) if re.fullmatch(r'pr-\d+', tag)}
+    missing = sorted((linked | tagged) - known)
     # Bound historical tagged-PR lookups to 20 per repository per refresh.
     for number in missing[:20]:
         prs.append(json.loads(command('gh', 'pr', 'view', str(number), '--repo', name,
@@ -419,7 +430,7 @@ def gather(config):
             paths.add(path)
         facts['cards'] += [dict(c, repo=path) for c in project['tasks']]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        for path, repo in zip(sorted(paths), pool.map(lambda p: attempt(p, lambda: gather_repo(p, [c for c in facts['cards'] if c.get('repo') == p])), sorted(paths))):
+        for path, repo in zip(sorted(paths), pool.map(lambda p: attempt(p, lambda: gather_repo(p, facts['cards'])), sorted(paths))):
             facts['repos'][path] = repo or {}
     return facts
 

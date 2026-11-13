@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sid-merge [--check] [--bot] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
+# sid-merge [--card <key>] [--check] [--bot] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
 # --check stops at readiness (including stacked PRs); --cancel withdraws a request not yet gating.
 # Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
 # Exit: 0 merged/ready/queued/cancelled, 1 not ready, 3 conflicts, 4 main red, 5 merged onto an ungated tree, 6 bot findings, 7 bot pending, 8 verdict.
@@ -7,12 +7,13 @@ set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
 source "$here/sid-merge-lib.sh"
+cards=()
 check=false; need_bot=false; no_wait=false; cancel=false
 while [[ ${1:-} == --* ]]; do
-  case "$1" in --check) check=true;; --bot) need_bot=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
+  case "$1" in --card) cards+=("${2:?--card needs a key}"); shift;; --check) check=true;; --bot) need_bot=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
   shift
 done
-pr=${1:?usage: sid-merge [--check] [--bot] [--no-wait] [--cancel] <pr>}
+pr=${1:?usage: sid-merge [--card <key>] [--check] [--bot] [--no-wait] [--cancel] <pr>}
 [[ $pr =~ ^[0-9]+$ ]] || { echo 'PR must be a number'; exit 1; }
 gate_repo || exit 1
 cd "$repo" || exit 1
@@ -34,10 +35,15 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ready
 [ "$check" = true ] || [ "$base" = "$default" ] || { echo "#$pr is stacked on $base: land that first, rebase this onto $default, and set its base to $default"; exit 1; }
 ready_verdict
+resolved=$(python3 "$here/kanzo_client.py" "$tmp/pr.json" "${cards[@]}") || exit 1
+echo "cards: $(echo "$resolved" | paste -sd ',')"
 if [ "$check" = true ]; then
   if [ "$base" = "$default" ]; then echo "ready: #$pr ${head:0:8}"; else echo "ready, but stacked on $base: #$pr ${head:0:8}"; fi
   exit 0
 fi
+while IFS= read -r card; do
+  python3 "$here/sid-card.py" link "$card" "$gh" "$pr" || echo "warning: Kanzo link failed for $card; queueing with text fallback" >&2
+done <<< "$resolved"
 flock 8
 queued_head=
 if [ -f "$train/queue/$pr.req" ]; then

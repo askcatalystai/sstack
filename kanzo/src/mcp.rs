@@ -190,6 +190,15 @@ struct TaskArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct LinkPrArgs {
+    #[schemars(with = "String")]
+    id: TaskKey,
+    /// GitHub owner/repo.
+    repo: String,
+    number: i64,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct CreateTaskArgs {
     title: String,
     /// Markdown.
@@ -435,6 +444,17 @@ impl Kanzo {
             .run(move |ctx, store| {
                 let task = args.id.find(store)?;
                 task_detail(ctx, store, &task)
+            })
+            .await)
+    }
+
+    #[tool(description = "Link a PR to a task. Linking the same repo and number again changes nothing.")]
+    async fn link_pr(&self, Parameters(args): Parameters<LinkPrArgs>) -> Result<CallToolResult, ErrorData> {
+        Ok(self
+            .run(move |_, store| {
+                let task = args.id.find(store)?;
+                store.link_pr(task.id, &args.repo, args.number)?;
+                Ok(format!("Linked {} to {}#{}.", task.key(), args.repo, args.number))
             })
             .await)
     }
