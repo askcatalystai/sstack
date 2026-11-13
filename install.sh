@@ -44,6 +44,16 @@ if hooks=$(git -C "$S" rev-parse --path-format=absolute --git-common-dir 2>/dev/
 fi
 # The board is built from kanzo/ here, only when that source has changed.
 if command -v cargo >/dev/null 2>&1; then "$S/scripts/kanzo-install.sh" || echo "kanzo: install failed; rerun install.sh"; else echo "skipped kanzo build: no cargo"; fi
+# The merge train and health runs start as systemd units, which don't inherit this shell's PATH (pnpm, node, bun, gh).
+mkdir -p "$HOME/.config/sidstack"
+printf 'PATH="%s"\n' "$PATH" > "$HOME/.config/sidstack/env"
+# sid-health checks main in each repo listed here; add a repo's path to include it.
+[ -f "$HOME/.config/sidstack/repos" ] || printf '%s\n' "$S" > "$HOME/.config/sidstack/repos"
+if command -v systemctl >/dev/null 2>&1; then
+  mkdir -p "$HOME/.config/systemd/user"
+  cp "$S"/systemd/sid-health.service "$S"/systemd/sid-health.timer "$HOME/.config/systemd/user/"
+  systemctl --user daemon-reload && systemctl --user enable --now sid-health.timer >/dev/null 2>&1
+fi
 # Kanzo card tags refresh on a timer.
 if command -v systemctl >/dev/null 2>&1 && command -v kanzo >/dev/null 2>&1; then
   mkdir -p "$HOME/.config/systemd/user"

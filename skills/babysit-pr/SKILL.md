@@ -83,11 +83,8 @@ with a written reason when dismissing false positives.
 If the repo has `.macroscope/check-run-agents/*.md`, read those rules before you
 reply to a Macroscope finding. Its findings cite them.
 
-The Codex GitHub bot (`chatgpt-codex-connector`, the `pr bot` in
-`~/.local/share/sidstack/models.md`) reviews on request (`@codex review`), and only risky PRs need it. Its summary comment carries a `codex-review-state` line with the
-reviewed commit and status; wait for it on the head before calling the PR
-ready (`sid-merge.sh --check <pr>` does this). Its security review needs Codex
-credit on the paying account; a failed security review is not a code finding.
+Don't request or wait for the Codex GitHub bot (`@codex review`); the operator
+dropped it on 2026-11-13. Risky PRs get one more model instead (`full-send` step 6).
 
 CodeRabbit is advisory. Treat its findings like any other finding, but never
 wait for it and never hold a merge for it.

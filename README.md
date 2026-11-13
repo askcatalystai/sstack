@@ -30,7 +30,7 @@ Kanzo at http://localhost:4242 is the source of truth, built from `kanzo/` in th
 
 ## Roles
 
-See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the logic and an Opus builder writes visible UI; Composer runs a bug pass, then Astra reviews, and Astra's approval is the merge verdict; every model runs as a subagent; the Codex GitHub bot reviews risky PRs; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.
+See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the logic and an Opus builder writes visible UI; Composer runs a bug pass, then Astra reviews, and Astra's approval is the merge verdict; every model runs as a subagent; risky PRs get one more model from another family; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.
 
 ## Install
 
@@ -51,7 +51,7 @@ and `scripts/upstream-check.sh` for upstream change reports.
 
 ## How sstack itself ships
 
-Like pstack: each change is its own PR from a worktree, never tangled with feature work. `install.sh` adds a git hook that refuses a direct push to main, except a change to `models.md`, `rules.md` or both and nothing else, which `/setup-sidstack` and the `nightly-rules` skill make. `git push --no-verify` bypasses it, so it stops accidents only. `.sidstack/gate.sh` runs `scripts/check.sh`, which validates the skills. Composer and Astra review it, and `sid-merge.sh` merges it. Changes to the merge scripts also need the PR bot. Then run `git -C ~/.local/share/sidstack pull --ff-only`, because the installed scripts run from that checkout. To let T3 make the worktree, start the thread in T3's `sstack` project; delegates can only use their parent thread's project.
+Like pstack: each change is its own PR from a worktree, never tangled with feature work. `install.sh` adds a git hook that refuses a direct push to main, except a change to `models.md`, `rules.md` or both and nothing else, which `/setup-sidstack` and the `nightly-rules` skill make. `git push --no-verify` bypasses it, so it stops accidents only. `.sidstack/gate.sh` runs `scripts/check.sh`, which validates the skills. Composer and Astra review it, `sid-merge.sh` queues it for the merge train, and changes to the merge scripts get one more model's review. Then run `git -C ~/.local/share/sidstack pull --ff-only`, because the installed scripts run from that checkout. To let T3 make the worktree, start the thread in T3's `sstack` project; delegates can only use their parent thread's project.
 
 The local gate is the only CI. Hosted CI is paused until a provider is chosen.
 

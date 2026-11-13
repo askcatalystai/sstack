@@ -89,7 +89,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    record it at once with `sid-verdict.sh` (step 4): that is the merge verdict, with no
    separate verifier run. Any later change to the patch, even a rename, needs Astra to
    confirm the new head (the diff since its approval only) and a new record. If any step is skipped, the PR's
-   `## Review` section says "skipped" and why, and `sid-merge.sh` then requires the bot.
+   `## Review` section says "skipped" and why, and the PR counts as risky (step 6).
 4. **Prove it.** Run the real thing (see "Proof"). The author doesn't verify its own
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
    PR's `## Proof` section, naming the commit it covers: commands, pass counts,
@@ -97,15 +97,10 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review runs the covering tests on the head commit, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
    Run checks so a failure stops you before you commit or push.
 5. **Ship.** Push the last fixes with `--force-with-lease` and renew `## Proof` for
-   the head commit. If the PR needs the PR bot (step 6), comment `@codex review`, then
-   `watch_pull_request` and end the turn.
-   If not, go straight to step 7: with no CI and no bot, nothing would wake you.
-6. **Risky PRs only: ask the PR bot,** unless `sid-mode.sh get bot` says `off`. For auth, payments, data, migrations, `commerce/`,
-   the gate, or a PR that skipped a review step, comment `@codex review`. `sid-merge.sh`
-   works out most of these from the paths and forces it; add `--bot` for what it can't see. Findings:
-   Claude triages per `<pstack>/skills/poteto-mode/references/bugbot-triage.md` (fix,
-   dismiss with a reason, or ask); noise doesn't get code. the builder fixes once, Claude verifies,
-   push, resolve the threads. On any PR, conflicts: merge the default branch in the
+   the head commit, then go straight to step 7: with no CI, nothing would wake you.
+6. **Risky PRs get one more model.** For auth, payments, data, migrations, `commerce/`, the gate or merge scripts, or a PR that skipped a review step, add one review from the `risky review` line in `models.md`, a family that hasn't reviewed the PR yet, on the same commit as Astra (both only read it, so they can run together). A finding blocks the merge only when every model that reviewed the PR calls it risky; otherwise Claude decides and `## Review` says why (user 2026-11-13). There is no Codex bot: never comment `@codex review` or wait on it. Claude triages its findings per
+   `<pstack>/skills/poteto-mode/references/bugbot-triage.md` (fix, dismiss with a reason,
+   or ask); noise doesn't get code. On any PR, conflicts: merge the default branch in the
    worktree and run `sid-merge.sh` again.
 7. **Merge.** Run `sid-merge.sh --check <pr>` first. If it prints `proof-failures:` lines, read them and decide from the plan: back to the bug pass, review or coding, or go ahead and say why on the card. No fixed rule. `sid-merge.sh <pr>` refuses until the PR is really ready (`## Proof` must
    name the head commit, so a later push needs fresh proof), then queues it for the
@@ -120,7 +115,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    your proof, what was checked on prod and what wasn't, and each decision you
    made for the user.
 
-If you give up before the merge, call `unwatch_pull_request` first. Keep the watch while you're waiting on the bot.
+If you give up before the merge, call `unwatch_pull_request` first.
 
 The Kanzo board (http://localhost:4242, MCP `kanzo`) follows the work by itself:
 `scripts/sid-board.py` sets each card from facts every 20 seconds. A running subagent
@@ -205,9 +200,8 @@ Full confidence means all of these are true on the latest commit:
 
 - Your proof covers every change in the diff.
 - Required checks are green, if the repo has any.
-- Each review finding is fixed or dismissed with a written reason. The `pr bot` in
-  `models.md` reviews risky PRs, and `sid-merge.sh` requires its review of the head
-  commit for those. Open bot threads block any merge.
+- Each review finding is fixed or dismissed with a written reason. Risky PRs had one
+  more model's review, and no finding every reviewer called risky is still open.
 - The train's gate passed on the head merged with the latest default branch and the
   other queued PRs.
 - No human review still requests changes.
