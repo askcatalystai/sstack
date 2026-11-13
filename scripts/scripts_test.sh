@@ -1221,14 +1221,6 @@ class ReaperTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertTrue(any('reason=running thread' in s for s in self.output))
 
-    def test_operator_match_blocks_stop_even_if_later_finished_subagent_is_closer(self):
-        self.thread('operator', age=30, subagent=False)
-        self.thread('finished-sub', age=25, subagent=True)
-        self.add(201, 100, ('node_repl',), age=15)
-        self.run_reaper()
-        self.assertEqual(self.calls, [])
-        self.assertTrue(any('reason=operator thread' in s for s in self.output))
-
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReaperTests)
 result = unittest.TextTestRunner(verbosity=2).run(suite)
 sys.exit(not result.wasSuccessful())

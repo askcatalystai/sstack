@@ -90,14 +90,14 @@ def codex_threads(database, emit):
 def decision(p, threads, now):
     started = now - p.age
     matches = [t for t in threads if 0 <= started - t.first_run <= 120]
-    # Threads started within seconds of each other (parallel reviewers) make the match ambiguous:
-    # stop only when every thread that could own the server is a finished subagent.
+    # Threads started within seconds of each other (parallel reviewers) make the match ambiguous,
+    # so a running thread that could own the server keeps it until that thread finishes.
     if any(t.running for t in matches):
         return False, 'running thread'
-    if any(not t.subagent for t in matches):
-        return False, 'operator thread'
-    if matches:
-        thread = max(matches, key=lambda t: t.first_run)
+    thread = max(matches, key=lambda t: t.first_run) if matches else None
+    if thread is not None:
+        if not thread.subagent:
+            return False, 'operator thread'
         return True, f'subagent {thread.title} finished'
     if p.age > 7200:
         return True, f'no thread, {int(p.age // 3600)}h old'
