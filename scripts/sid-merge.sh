@@ -60,7 +60,10 @@ start_runner() {
   local unit
   unit=sid-train-$(printf '%s' "$common" | sha256sum | cut -c1-16)
   if [ -z "${SID_TRAIN_INLINE+x}" ] && command -v systemd-run >/dev/null; then
+    systemctl --user is-active --quiet "$unit" 2>/dev/null && return 0
     systemd-run --user --collect --unit="$unit" --working-directory="$repo" --setenv=PATH="$PATH" --setenv=HOME="$HOME" "$here/sid-train.sh" >/dev/null 2>&1 && return
+    # A working manager may be collecting/restarting this unit; never queue a duplicate.
+    systemctl --user show-environment >/dev/null 2>&1 && return 0
   fi
   # A second runner waits on runner.lock, covering service shutdown/enqueue races too.
   ( exec 8>&-; exec setsid -f "$here/sid-train.sh" </dev/null >>"$train/runner.log" 2>&1 ) &

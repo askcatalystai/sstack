@@ -12,7 +12,7 @@ exec 9>"$gate/lock"; flock 9
 stamp=$gate/${branch//\//_}.pass; rm -f "$stamp"
 git -C "$repo" fetch -q origin "$default" "$branch" || { echo "cannot fetch $branch; push it first"; exit 1; }
 main=$(git -C "$repo" rev-parse "origin/$default"); head=$(git -C "$repo" rev-parse "origin/$branch")
-out=$(git -C "$repo" merge-tree --write-tree "$main" "$head") || { echo "conflicts with $default: merge origin/$default into $branch, then gate again"; exit 3; }
+out=$(cd "$repo" && merge_tree --write-tree "$main" "$head") || { echo "conflicts with $default: merge origin/$default into $branch, then gate again"; exit 3; }
 log=$gate/logs/$head.$main.log
 ln -sfn "logs/$head.$main.log" "$gate/${branch//\//_}.log"
 export SID_LANE=${SID_LANE:-$("$here/sid-mode.sh" get lane)}

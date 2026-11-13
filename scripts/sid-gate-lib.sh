@@ -2,6 +2,12 @@
 # Shared gate mechanics; source this, then gate_repo and gate_tree <main> <tree> <log> <description>.
 # gate_tree returns 0 passed or 1 failed, leaving lane and digest for its caller.
 set -u
+# merge_tree <args>: git merge-tree with the same settings GitHub uses, whatever the operator's config says.
+# Only here: fetch and push still need the global config, which holds the credential helper for private repos.
+merge_tree() {
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -c merge.renames=true -c merge.directoryRenames=conflict \
+    -c merge.renameLimit=0 -c diff.renameLimit=0 merge-tree "$@"
+}
 gate_repo() {
   repo=$(git rev-parse --show-toplevel) || return 1
   common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir) || return 1
