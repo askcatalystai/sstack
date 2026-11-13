@@ -54,7 +54,7 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 
 ## Gates (every PR)
 
-1. The builder's own checks, then Claude reruns them: affected tests, typecheck, lint, with no new failures against main.
+1. The builder's own checks, run once: affected tests through the repo's runner, typecheck, lint, with no new failures against main, pasted in `## Proof` with the commit. Claude reads that output and reruns a check only when a finding or a later change needs it.
 2. Open the PR early (`file-pr`), naming the card key in its body, and link it in T3, so reviews cover a commit and their results can be recorded.
 3. `no-comments` and a slop pass, then `review-loop`: bug pass, then Astra; Claude takes the final call, the builder fixes once, behaviour changes go back to Astra, Claude verifies each fix. Decline nits with a reason. Work that doesn't earn its place gets scrapped, not patched.
 4. Behavioural verification before merge: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. The author doesn't verify its own work. It goes in the PR's `## Proof` section, naming the commit it covers.

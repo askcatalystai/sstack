@@ -55,7 +55,7 @@ T3 Code is the orchestrator: every worker is a `delegate_task` thread, the PR is
 linked to this thread, and `watch_pull_request` wakes you. In
 `~/.local/share/sidstack/scripts/`, `sid-merge.sh [--check] <pr>` holds the
 checks that shouldn't depend on judgment and queues the PR for the merge train.
-`sid-gate.sh <branch>` runs the same gate on one branch, as an optional early check.
+`sid-gate.sh <branch>` runs the same gate on one branch; don't run it as well as the train, which already runs it, except when the PR's own purpose is the gate or the full suite.
 
 1. **Define done and pick the playbook.** State the exit condition as something you
    can check. Match the task to a pstack playbook (`<pstack>/skills/poteto-mode/playbooks/`:
@@ -94,7 +94,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
    PR's `## Proof` section, naming the commit it covers: commands, pass counts,
    screenshot paths, and what wasn't checked. It can't be a copy of the review notes.
-   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review checks the builder's test output against the head commit and reruns only what a finding needs, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
+   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change the way a user would (the app, the command, the reproduction; not the test suite again), and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review checks the builder's test output against the head commit and reruns only what a finding needs, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
    Run checks so a failure stops you before you commit or push.
 5. **Ship.** Push the last fixes with `--force-with-lease` and renew `## Proof` for
    the head commit. A risky PR goes to step 6; any other goes straight to step 7: with no CI,
@@ -144,7 +144,7 @@ reproduction, a screenshot. Use the most direct proof the change allows:
 
 - Reproduce the original failure, apply the fix, then watch the same
   reproduction pass.
-- Run the checks that the repo's CI runs (typecheck, lint, tests).
+- The builder's run of the repo's checks (typecheck, lint, the changed tests through its runner), once, with the output pasted. Nobody reruns them unless a finding needs it; the train's gate runs them again on the merged tree.
 - For a bug with a cheap, obvious test target, write the test first and watch it
   fail for the right reason. See "Tests".
 - For UI and runtime behavior, run the app and look at the change. Green mocked
