@@ -16,7 +16,7 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; its approval of the head commit is the merge verdict since 2026-11-13; Claude takes the final call, the builder fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
 - ui lead: claudeAgent / claude-opus-5-5 / medium (the orchestrator: judges all visible UI before other review and does the final test; the ui builder writes it; user 2026-11-01; see the `ui-lead` skill)
 - screenshots: codex / gpt-6.1-terra / medium (low stopped after two shots and posted nothing, 2026-11-01; before and after shots in T3's in-app browser, posted on the Kanzo card; user 2026-11-01)
-- pr bot: chatgpt-codex-connector (GitHub app; on request only since user 2026-11-01: comment `@codex review` on risky PRs, such as auth, payments, data, migrations or a PR that skipped review, then merge with `sid-merge.sh --bot`; open bot threads always block)
+- risky review: opencode / opencode-go/deepseek-v4.1-flash / low; cursor / composer-2.5 / fastMode=false (one extra review on risky PRs: auth, payments, data, migrations, `commerce/`, the merge scripts, or a PR that skipped a review step. Pick a family that hasn't reviewed the PR yet. A finding blocks the merge only when every model that reviewed the PR calls it risky; otherwise the orchestrator decides and writes why in `## Review`. Replaces the Codex GitHub bot: no `@codex review`; user 2026-11-13)
 - judgment and prose: claudeAgent / claude-opus-5-5 / medium
 
 ## Panels (one subagent per entry)

@@ -19,7 +19,7 @@ Where things are: models for every role in `~/.local/share/sidstack/models.md`; 
 
 - **Opus builds visible UI. Sol builds logic.** Anything a user can see is written by a Claude Opus builder; Sol writes server, runtime, data and tests. (2026-11-13: "yes opus for ui"; 2026-11-07: "sol is very bad at ui")
 - **Terra takes screenshots and makes concept images,** in T3's in-app browser, posted on the card. (2026-11-12: "use terra")
-- **The current arrangement is in `sid-mode.sh`,** not in memory notes: who codes, who reviews, which lane, whether the bot is waived. When the operator changes it ("do it yourself", "skip Composer"), set it there with a note, and read it at the start of each task.
+- **The current arrangement is in `sid-mode.sh`,** not in memory notes: who codes, who reviews, which lane. When the operator changes it ("do it yourself", "skip Composer"), set it there with a note, and read it at the start of each task.
 - **"Do it yourself" means the orchestrator writes it,** logic and UI, with no builder subagent, until the operator says otherwise: `sid-mode.sh set coder claude`. If they said no subagents at all, also `set reviewers none` and take screenshots yourself.
 
 ## Building
@@ -34,6 +34,7 @@ Where things are: models for every role in `~/.local/share/sidstack/models.md`; 
 ## Shipping
 
 - **Nothing lands unchecked, and nothing waits in line.** Every PR goes through `sid-merge.sh`, which queues it for the merge train. "Skip gates" means the fast lane (`sid-mode.sh set lane fast`), never a plain `gh pr merge` or a push to main. The one exception is sstack's own `rules.md` and `models.md`, which may be pushed to its main alone. (2026-11-13: "fast lane yes")
+- **No Codex bot. Risky PRs get one more model, and only a unanimous "risky" blocks.** Don't comment `@codex review` or wait on the bot. For auth, payments, data, migrations, `commerce/`, merge scripts, or a PR that skipped a review step, add one review from a family that hasn't reviewed it (OpenCode DeepSeek or Muse, or Cursor Composer or Grok). A finding blocks the merge only when every model that reviewed the PR says it's risky; otherwise the orchestrator decides, and `## Review` says why. (2026-11-13: "skip the bot review we are reviewing locally anyways ... it can be a hard blocker only if all two or three models say its risky")
 - **The app must run.** A change isn't done until the app builds and starts locally with it. (2026-11-13: "we can run the app in local without fail to see if everything is built")
 - **Check prod yourself** after the deploy, signed in, in T3's browser. Don't ask the operator to test what you can test.
 
