@@ -378,6 +378,28 @@ class BoardTests(unittest.TestCase):
         self.assertIn('1m', apply(f, a)['cards'][0]['tags'])
         self.assertNotIn('stale', apply(f, a)['cards'][0]['tags'])
 
+    def test_legacy_state_missing_changed(self):
+        f, state = self.idle()
+        state['chat#29'] = {'fingerprint': state['chat#29']['fingerprint']}
+        _, state, _, _ = result(f, state, NOW + 5000)
+        _, _, rows, _ = result(f, state, NOW + 8000)
+        self.assertTrue(rows[0]['now'].startswith('idle '))
+
+    def test_stuck_keeps_tags_from_earlier_update(self):
+        captured = []
+        working = copy.deepcopy(facts(card(tags=['before']), ts=[]))
+        planned = [
+            {'kind': 'update', 'key': 'chat#29', 'fields': {'tags': 'before, pr-8, deploying'}},
+            {'kind': 'stuck', 'key': 'chat#29', 'thread': 'root'},
+        ]
+        with patch.object(board.kanzo, 'connect'), patch.object(board.kanzo, 'human'), \
+                patch.object(board.kanzo, 'update', side_effect=lambda _k, **kw: captured.append(kw.get('tags', ''))):
+            for action in planned:
+                board.apply([action], working)
+                board.mirror_update(working, action)
+        self.assertIn('pr-8', captured[-1])
+        self.assertIn('stuck', captured[-1])
+
 
 if __name__ == '__main__':
     unittest.main()

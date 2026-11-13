@@ -162,6 +162,7 @@ def reconcile(facts, previous, now):
         if complete:
             if rec.get('fingerprint') != fingerprint:
                 rec.update(fingerprint=fingerprint, changed=now)
+            rec.setdefault('changed', now)
             tags = [x for x in tags if not x.startswith('idle ')]
             if ((status in ('doing', 'review') or
                     status == 'deployment' and pr and pr['state'] != 'MERGED') and not running and
@@ -416,6 +417,16 @@ def gather(config):
     return facts
 
 
+def mirror_update(facts, action):
+    if action.get('kind') != 'update':
+        return
+    card = next((c for c in facts.get('cards', []) if c['key'] == action['key']), None)
+    if card is None:
+        return
+    for field, value in action['fields'].items():
+        card[field] = value.split(', ') if field == 'tags' and value else ([] if field == 'tags' else value)
+
+
 def apply(actions, facts):
     if any(a['kind'] != 'nudge' for a in actions):
         kanzo.connect()
@@ -501,6 +512,7 @@ def main():
             continue
         try:
             apply([action], facts)
+            mirror_update(facts, action)
         except Exception as error:
             print(f"{action['kind']} {action.get('key', action.get('thread', ''))}: skipped ({str(error)[:180]})", file=sys.stderr)
             failures = True
