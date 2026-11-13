@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# sid-health [--all]: full gate on the fetched default branch, or on each ~/.config/sidstack/repos entry.
+# sid-health [--all | --wait]: full gate on the fetched default branch, or on each ~/.config/sidstack/repos entry.
 # PRs take priority: skip queued/busy repos, and let a train terminate a running health gate.
+# --wait is an explicit post-landing check: wait for the shared gate, then check fresh main in full.
 # Exit: 0 passed/skipped, 1 failed. Results and logs stay under sid-gate/health and sid-gate/logs.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
@@ -14,16 +15,27 @@ if [ "${1:-}" = --all ]; then
   fi
   exit "$rc"
 fi
-[ "$#" = 0 ] || { echo 'usage: sid-health [--all]'; exit 1; }
+wait_gate=false
+if [ "${1:-}" = --wait ]; then wait_gate=true; shift; fi
+[ "$#" = 0 ] || { echo 'usage: sid-health [--all | --wait]'; exit 1; }
 source "$here/sid-gate-lib.sh"
 gate_repo || exit 1
 cd "$repo" || exit 1
 git fetch -q origin "$default" || exit 1
 main=$(git rev-parse "origin/$default")
-if grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
+if [ "$wait_gate" = false ] && grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
 exec 8>"$train/queue.lock"; flock 8
-compgen -G "$train/queue/*.req" >/dev/null && exit 0
-exec 9>"$gate/lock"; flock -n 9 || exit 0
+exec 9>"$gate/lock"
+if [ "$wait_gate" = true ]; then
+  # Do not hold queue.lock while waiting: the train needs it to finish its batch.
+  flock -u 8
+  flock 9
+  git fetch -q origin "$default" || exit 1
+  main=$(git rev-parse "origin/$default")
+else
+  compgen -G "$train/queue/*.req" >/dev/null && exit 0
+  flock -n 9 || exit 0
+fi
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$gate/health.pid"
 child=
 cleanup() {

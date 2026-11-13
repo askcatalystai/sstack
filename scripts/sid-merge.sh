@@ -2,7 +2,7 @@
 # sid-merge [--check] [--bot] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
 # --check stops at readiness (including stacked PRs); --cancel withdraws a request not yet gating.
 # Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
-# Exit: 0 merged/ready/queued/cancelled, 1 not ready, 3 conflicts, 4 main red, 6 bot findings, 7 bot pending, 8 verdict.
+# Exit: 0 merged/ready/queued/cancelled, 1 not ready, 3 conflicts, 4 main red, 5 merged onto an ungated tree, 6 bot findings, 7 bot pending, 8 verdict.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
@@ -20,7 +20,10 @@ exec 8>"$train/queue.lock"
 if [ "$cancel" = true ]; then
   flock 8
   if [ -f "$train/active/$pr" ]; then echo "#$pr has started gating; cannot cancel"
-  elif [ -f "$train/queue/$pr.req" ]; then rm -f "$train/queue/$pr.req"; echo "cancelled #$pr"
+  elif [ -f "$train/queue/$pr.req" ]; then
+    printf '1\ncancelled\n' > "$train/result/$pr.tmp"
+    mv "$train/result/$pr.tmp" "$train/result/$pr"
+    rm -f "$train/queue/$pr.req"; echo "cancelled #$pr"
   else echo "#$pr is not queued"; fi
   exit 0
 fi
@@ -41,7 +44,7 @@ if [ -f "$train/queue/$pr.req" ]; then
   queued_head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || exit 1
 fi
 if [ ! -f "$train/queue/$pr.req" ] || { [ ! -f "$train/active/$pr" ] && [ "$queued_head" != "$head" ]; }; then
-  rm -f "$train/result/$pr"
+  rm -f "$train/result/$pr" "$train/queue/$pr.merge"
   python3 - "$train/queue/$pr.req" "$head" "$need_bot" <<'PY'
 import json, os, sys, time
 path, head, bot = sys.argv[1:]
@@ -64,7 +67,20 @@ start_runner() {
 }
 start_runner
 if [ "$no_wait" = true ]; then echo "queued #$pr"; exit 0; fi
-while [ ! -f "$train/result/$pr" ]; do
+request_pending() {
+  local pending
+  flock 8
+  if [ -f "$train/result/$pr" ]; then pending=false
+  elif [ -f "$train/queue/$pr.req" ]; then pending=true
+  else
+    flock -u 8
+    echo "#$pr has neither a request nor a result; run sid-merge again"
+    exit 1
+  fi
+  flock -u 8
+  [ "$pending" = true ]
+}
+while request_pending; do
   python3 - "$train/state.json" <<'PY'
 import datetime, json, sys
 try:
@@ -75,8 +91,8 @@ except (OSError, ValueError, KeyError):
     print('train: waiting for runner')
 PY
   # Poll results promptly, with one progress line per minute.
-  for ((i=0; i<60; i++)); do [ -f "$train/result/$pr" ] && break; sleep 1; done
+  for ((i=0; i<60; i++)); do request_pending || break; sleep 1; done
   [ -f "$train/result/$pr" ] || start_runner
 done
-rc=$(head -n 1 "$train/result/$pr"); tail -n +2 "$train/result/$pr"; rm -f "$train/result/$pr"
+rc=$(head -n 1 "$train/result/$pr"); tail -n +2 "$train/result/$pr"
 exit "$rc"

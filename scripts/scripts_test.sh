@@ -31,6 +31,7 @@ elif args[:2] == ['api', '--paginate']:
     if (p/'too-many-files').exists(): print('file\n' * 3000, end='')
     elif (p/'files').exists(): print((p/'files').read_text())
 elif args[:2] == ['api', 'graphql']:
+    (p/'bot-read').touch()
     if (p/'threads-down').exists(): sys.exit(1)
     nodes = []
     if (p/'open-thread').exists():
@@ -44,7 +45,9 @@ elif args[:2] == ['pr', 'view']:
     fields = args[args.index('--json')+1]
     if fields == 'mergeCommit':
         print((p/f'merge-oid-{pr}').read_text().strip()); sys.exit()
+    if (p/f'post-api-down-{pr}').exists() and d['state'] == 'MERGED': sys.exit(1)
     if 'comments' in fields:
+        (p/'bot-read').touch()
         d['comments'] = []
         if (p/'bot-completed').exists():
             state = dict(code_review=dict(commit_sha=d['headRefOid'], status='completed'))
@@ -56,6 +59,11 @@ elif args[:2] == ['pr', 'merge']:
     pr = args[2]; d = json.loads(data(pr).read_text())
     if d['headRefOid'] != args[args.index('--match-head-commit')+1]: sys.exit(1)
     if (p/'refuse-merge').exists(): sys.exit(1)
+    if (p/f'queue-only-{pr}').exists(): sys.exit(0)
+    drift = p/f'drift-on-merge-{pr}'
+    if drift.exists():
+        subprocess.run(['git', '--git-dir='+str(p/'origin.git'), 'update-ref', 'refs/heads/main', drift.read_text().strip()], check=True)
+        drift.unlink()
     flip = p/f'red-on-refuse-{pr}'
     if flip.exists():
         flip.unlink(); d['statusCheckRollup'] = [dict(name='ci', conclusion='FAILURE')]
@@ -66,7 +74,11 @@ elif args[:2] == ['pr', 'merge']:
     main = git('rev-parse', 'refs/remotes/origin/main')
     # The server uses its live base, not a caller's stale tracking ref.
     main = git('ls-remote', 'origin', 'refs/heads/main').split()[0]
+    if (p/f'same-tree-drift-{pr}').exists():
+        main = git('commit-tree', main+'^{tree}', '-p', main, '-m', 'outside empty push')
+        subprocess.run(['git', 'push', '-q', 'origin', main+':refs/heads/main'], check=True)
     tree = git('merge-tree', '--write-tree', main, d['headRefOid']).splitlines()[0]
+    if (p/f'wrong-tree-{pr}').exists(): tree = git('rev-parse', main+'^{tree}')
     subject = args[args.index('--subject')+1]; body = args[args.index('--body')+1]
     oid = git('commit-tree', tree, '-p', main, '-m', subject+'\n\n'+body)
     subprocess.run(['git', 'push', '-q', 'origin', oid+':refs/heads/main'], check=True)
@@ -75,6 +87,8 @@ elif args[:2] == ['pr', 'merge']:
     with (p/'merge-args').open('a') as f: f.write(' '.join(args)+'\n')
     (p/f'message-{pr}').write_text(subject+'\n\n'+body)
     d['state'] = 'MERGED'; d['mergeCommit'] = dict(oid=oid)
+    if (p/f'unconfirmed-{pr}').exists():
+        d.update(json.loads((p/f'unconfirmed-{pr}').read_text()))
     data(pr).write_text(json.dumps(d))
     if (p/'crash-after-merge').exists():
         (p/'crash-after-merge').unlink()
@@ -136,6 +150,7 @@ setup_train() {
   cd "$T/repo" || exit 1; mkdir .sidstack
   cat > .sidstack/gate.sh <<'G'
 echo gate >> "$T/gates"
+git write-tree >> "$T/gated-trees"
 echo "${SID_LANE:-unset}" >> "$T/lane-input"
 git diff HEAD --name-only | tr '\n' ' ' >> "$T/gate-diffs"
 echo >> "$T/gate-diffs"
@@ -166,14 +181,17 @@ add_pr() {
   local n=$1 file=$2 value=${3:-x}
   git checkout -q -B "work$n" origin/main; echo "$value" > "$file"; git add -A
   git commit -qm "change $n" -m 'Agent: writer'; git push -q origin "work$n"
-  local h; h=$(git rev-parse HEAD)
+  record_pr "$n"
+  git checkout -q main
+}
+record_pr() {
+  local n=$1 h; h=$(git rev-parse HEAD)
   python3 - "$T/pr-$n.json" "$n" "$h" <<'PY'
 import json, sys
 p, n, h = sys.argv[1:]
 json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], headRefOid=h, headRefName='work'+n, baseRefName='main', title='change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nAstra approved.\n'), open(p, 'w'))
 PY
   "$here/sid-verdict.sh" "$n" "$h" PASS composer thread-1 'ran tests' >/dev/null
-  git checkout -q main
 }
 queue_pr() { "$here/sid-merge.sh" --no-wait "$1" > "$T/out" 2>&1; }
 run_train() { "$here/sid-train.sh" > "$T/runner-out" 2>&1; }
@@ -301,10 +319,10 @@ queue_pr 11; "$here/sid-merge.sh" --cancel 11 > "$T/out"; grep -q 'cancelled #11
 run_train; ok "cancelled request never gates" "$(count_gates)" 0; [ ! -f "$T/merge-calls" ]; ok "cancelled request never merges" "$?" 0
 setup_train bot-mode
 add_pr 11 a; echo auth/login.ts > "$T/files"
-queue_pr 11; ok "bot auto still requires risky path review" "$?" 7
+"$here/sid-mode.sh" set bot auto; queue_pr 11; ok "bot auto still requires risky path review" "$?" 7
 "$here/sid-mode.sh" set bot off --note 'Sid waived for recovery'; touch "$T/open-thread"; queue_pr 11; ok "bot off waives risky paths and open threads" "$?" 0
 run_train; ok "waived PR merges" "$(code 11)" 0
-grep -q '^Bot: waived by mode (Sid waived for recovery)' "$T/message-11"; ok "squash carries mode waiver" "$?" 0
+grep -q '^Bot:' "$T/message-11"; ok "bot off adds no bot trailer" "$?" 1
 setup_train health-red
 "$here/sid-health.sh" > "$T/out"; ok "missing health runs gate" "$(count_gates)" 1
 touch "$T/always-fail"; sha=$(git rev-parse origin/main); rm "$health/$sha"; "$here/sid-health.sh" > "$T/out"
@@ -348,11 +366,108 @@ touch "$T/red-on-refuse-12"; run_train
 ok "CI turning red after a refused attempt stops its retry" "$(code 12)" 1
 ok "refused retry never merges the now-red member" "$(cat "$T/merge-calls")" 11
 setup_train bot-rules
+"$here/sid-mode.sh" set bot auto
 add_pr 11 a; touch "$T/open-thread"; queue_pr 11; ok "auto bot mode blocks open findings" "$?" 6
 rm "$T/open-thread"; touch "$T/threads-down"; queue_pr 11; ok "thread API failure stays fail-closed" "$?" 7
 rm "$T/threads-down"; "$here/sid-merge.sh" --bot --no-wait 11 > "$T/out" 2>&1; ok "explicit bot still requires a head review" "$?" 7
 touch "$T/bot-completed"; "$here/sid-merge.sh" --bot --no-wait 11 > "$T/out" 2>&1; ok "completed head bot review permits queueing" "$?" 0
 run_train; ok "explicit bot member merges" "$(code 11)" 0
+# Dependent PRs must have the same squash semantics in the gate and on live main.
+setup_train dependent-squash
+add_pr 11 bad
+git checkout -q -b work12 work11; git rm -q bad; echo y > y; git add -A; git commit -qm 'drop bad, add y'; git push -q origin work12
+record_pr 12; git checkout -q main
+queue_pr 11; queue_pr 12; run_train
+ok "dependent deletion cannot hide a failing earlier member" "$(code 11)" 1
+ok "independently safe dependent member merges" "$(code 12)" 0
+ok "only the safe squash lands" "$(cat "$T/merge-calls")" 12
+git cat-file -e origin/main:bad 2>/dev/null; ok "ungated bad file never reaches main" "$?" 128
+ok "landed safe tree was gated" "$(grep -c "^$(git rev-parse 'origin/main^{tree}')$" "$T/gated-trees")" 1
+setup_train dependent-pass
+add_pr 11 a
+git checkout -q -b work12 work11; git rm -q a; echo b > b; git add -A; git commit -qm 'drop a, add b'; git push -q origin work12
+record_pr 12; git checkout -q main
+queue_pr 11; queue_pr 12; run_train
+ok "compatible dependent squashes share one gate" "$(count_gates)" 1
+ok "both compatible dependent members merge" "$(code 11) $(code 12)" '0 0'
+ok "dependent final squash matches the gated tree" "$(git rev-parse 'origin/main^{tree}')" "$(cat "$T/gated-trees")"
+# A successful CLI exit can mean queued, or an unconfirmed completion.
+for outcome in queued state head commit fetch api; do
+  setup_train "unconfirmed-$outcome"
+  add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
+  git worktree add -q "$T/worker" work11
+  case "$outcome" in
+    queued) touch "$T/queue-only-11";;
+    state) echo '{"state":"OPEN"}' > "$T/unconfirmed-11";;
+    head) echo '{"headRefOid":"0000000000000000000000000000000000000000"}' > "$T/unconfirmed-11";;
+    commit) echo '{"mergeCommit":null}' > "$T/unconfirmed-11";;
+    fetch) echo '{"mergeCommit":{"oid":"ffffffffffffffffffffffffffffffffffffffff"}}' > "$T/unconfirmed-11";;
+    api) touch "$T/post-api-down-11";;
+  esac
+  run_train
+  ok "$outcome completion is not reported merged" "$(code 11)" 1
+  grep -q 'the merge did not complete; nothing was cleaned up' "$q/result/11"; ok "$outcome completion explains retained work" "$?" 0
+  [ -d "$T/worker" ]; ok "$outcome completion retains worktree" "$?" 0
+  git show-ref --verify --quiet refs/heads/work11; ok "$outcome completion retains local branch" "$?" 0
+  git ls-remote --exit-code origin refs/heads/work11 >/dev/null; ok "$outcome completion retains remote branch" "$?" 0
+  ok "$outcome completion rebuilds remaining member" "$(count_gates)" 2
+  ok "$outcome completion permits freshly gated remaining member" "$(code 12)" 0
+done
+# The server can move main after the caller's final base check, or land an unexpected tree.
+for mismatch in parent tree; do
+  setup_train "landed-$mismatch"
+  add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
+  expected=$(git rev-parse origin/main)
+  if [ "$mismatch" = parent ]; then
+    git checkout -q -b outside origin/main; echo outside > outside; git add -A; git commit -qm outside; git push -q origin outside
+    git rev-parse HEAD > "$T/drift-on-merge-11"; git checkout -q main
+  else touch "$T/wrong-tree-11"; fi
+  run_train
+  ok "$mismatch mismatch after landing exits 5" "$(code 11)" 5
+  oid=$(cat "$T/merge-oid-11"); parent=$(git rev-parse "$oid^1")
+  grep -Fq "merged #11 as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})" "$q/result/11"
+  ok "$mismatch mismatch identifies the actual and gated bases" "$?" 0
+  ok "$mismatch mismatch regates the remaining member" "$(code 12)" 0
+  # Health checks the unexpected landing before the remainder is rebuilt.
+  sha=$oid
+  [ -f "$health/$sha" ] && grep -q '^pass full$' "$health/$sha" && grep -q "/health-$sha.log$" "$health/$sha"
+  ok "$mismatch mismatch starts detached full health on real main" "$?" 0
+  ok "$mismatch mismatch requires a fresh train and health gate" "$(count_gates)" 3
+done
+setup_train landed-after-prefix
+add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12; touch "$T/same-tree-drift-12"
+run_train
+ok "checked prefix still reports success before later drift" "$(code 11)" 0
+ok "second-member parent drift reports exit 5" "$(code 12)" 5
+sha=$(cat "$T/merge-oid-12")
+grep -q "/health-$sha.log$" "$health/$sha"; ok "stopped train preserves actual health evidence" "$?" 0
+ok "second-member drift checks main without another train" "$(count_gates)" 2
+setup_train recovered-unsafe-merge
+add_pr 11 a; queue_pr 11; touch "$T/same-tree-drift-11" "$T/crash-after-merge"
+run_train; run_train
+ok "crash recovery checks the original gated base" "$(code 11)" 5
+sha=$(cat "$T/merge-oid-11")
+grep -q "/health-$sha.log$" "$health/$sha"; ok "unsafe recovered merge starts full health" "$?" 0
+ok "unsafe recovery never merges twice" "$(cat "$T/merge-calls")" 11
+setup_train invalid-mode
+add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
+printf 'lane=broken\n' > .git/sid-gate/mode
+run_train; ok "broken mode fails the runner" "$?" 1
+for n in 11 12; do
+  ok "broken mode terminates member #$n" "$(code "$n")" 1
+  grep -q 'invalid stored mode: lane=broken' "$q/result/$n" && grep -q 'fix it with sid-mode.sh set' "$q/result/$n"
+  ok "broken mode explains error and repair for #$n" "$?" 0
+  [ ! -f "$q/queue/$n.req" ]; ok "broken mode removes request #$n" "$?" 0
+done
+ok "broken mode runs no gate" "$(count_gates)" 0
+"$here/sid-mode.sh" set lane full > "$T/out" 2>&1; ok "mode set can repair its broken stored value" "$?" 0
+setup_train default-bot-off
+ok "bot defaults to off" "$("$here/sid-mode.sh" get bot)" off
+add_pr 11 a; echo auth/login.ts > "$T/files"; touch "$T/open-thread" "$T/threads-down"
+"$here/sid-merge.sh" --bot --no-wait 11 > "$T/out" 2>&1; ok "default off ignores explicit bot request" "$?" 0
+run_train; ok "default off merges risky member despite bot outage" "$(code 11)" 0
+[ ! -f "$T/bot-read" ]; ok "default off never queries bot state or threads" "$?" 0
+grep -q '^Bot:' "$T/message-11"; ok "default off squash has no bot trailer" "$?" 1
 setup_train cap
 add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
 SID_TRAIN_MAX=1 run_train; ok "train member cap is respected" "$(count_gates)" 2
@@ -383,7 +498,29 @@ add_pr 11 a
 SID_TRAIN_INLINE=0 "$here/sid-merge.sh" 11 > "$T/out" 2>&1
 ok "fallback runner completes waiting caller" "$?" 0
 grep -q 'merged #11:' "$T/out"; ok "waiting caller prints result" "$?" 0
-[ ! -f "$q/result/11" ]; ok "waiting caller consumes result" "$?" 0
+[ -f "$q/result/11" ]; ok "waiting caller retains result for other waiters" "$?" 0
+# Start both callers before publishing a result; neither may consume the other's result.
+setup_train duplicate-waiters
+add_pr 11 a
+for n in 1 2; do timeout --foreground 12 "$here/sid-merge.sh" 11 > "$T/waiter-$n" 2>&1 & eval "wp$n=$!"; done
+for ((j=0; j<100; j++)); do grep -q 'train:' "$T/waiter-1" && grep -q 'train:' "$T/waiter-2" && break; sleep .05; done
+run_train
+wait "$wp1"; ok "first waiter returns merge result" "$?" 0
+wait "$wp2"; ok "second waiter returns same merge result" "$?" 0
+[ -f "$q/result/11" ]; ok "multiple waiters leave terminal result available" "$?" 0
+for terminal in missing cancelled; do
+  setup_train "waiter-$terminal"
+  add_pr 11 a
+  timeout --foreground 8 "$here/sid-merge.sh" 11 > "$T/waiter" 2>&1 & wp=$!
+  for ((j=0; j<100; j++)); do grep -q 'train:' "$T/waiter" && break; sleep .05; done
+  if [ "$terminal" = missing ]; then rm "$q/queue/11.req"
+  else "$here/sid-merge.sh" --cancel 11 > "$T/out"; fi
+  wait "$wp"; ok "$terminal request terminates its waiting caller" "$?" 1
+  if [ "$terminal" = missing ]; then
+    grep -q 'neither a request nor a result' "$T/waiter"
+  else grep -q cancelled "$T/waiter" && [ "$(code 11)" = 1 ]; fi
+  ok "$terminal request explains the terminal outcome" "$?" 0
+done
 setup_train service
 add_pr 11 a
 cat > "$t/bin/systemd-run" <<'S'

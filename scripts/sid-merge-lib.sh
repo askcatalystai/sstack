@@ -39,10 +39,3 @@ ready_verdict() {
   esac
   verified="Verified-By: $(printf '%s' "$verdict" | cut -f5) $result, T3 thread $(printf '%s' "$verdict" | cut -f6)"
 }
-bot_waiver() {
-  [ "$bot_mode" = off ] || return 0
-  local entry note when
-  entry=$(awk -F'\t' '$2=="bot"{v=$0} END{print v}' "$gate/mode.log" 2>/dev/null)
-  when=$(printf '%s' "$entry" | cut -f1); note=$(printf '%s' "$entry" | cut -f4-)
-  printf 'Bot: waived by mode (%s)\n' "${note:-$when}"
-}
