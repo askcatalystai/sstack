@@ -632,6 +632,26 @@ add_pr 11 a; queue_pr 11
 for ((j=0; j<100; j++)); do [ -f "$T/service-args" ] && break; sleep .05; done
 grep -q -- '--unit=sid-after-merge-' "$T/service-args"; ok "available systemd without inline uses a hook unit" "$?" 0
 for ((j=0; j<100; j++)); do [ -f "$T/service-hook-done" ] && break; sleep .05; done
+# A detached train must still run the hook when user systemd is down.
+setup_train hook-fallback-no-systemd
+printf '#!/usr/bin/env bash\necho fallback > "$T/hook-fallback"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
+cat > "$t/bin/systemctl" <<'S'
+#!/usr/bin/env bash
+exit 1
+S
+chmod +x "$t/bin/systemctl"
+cat > "$t/bin/systemd-run" <<'S'
+#!/usr/bin/env bash
+echo hook >> "$T/hook-systemd-attempts"
+exit 1
+S
+chmod +x "$t/bin/systemd-run"
+add_pr 11 a; queue_pr 11
+( unset SID_TRAIN_INLINE INVOCATION_ID; run_train )
+for ((j=0; j<100; j++)); do [ -f "$T/hook-fallback" ] && break; sleep .05; done
+[ -f "$T/hook-fallback" ]; ok "detached train runs hook without user systemd" "$?" 0
+[ ! -f "$T/hook-systemd-attempts" ]; ok "hook never depends on a failing systemd-run" "$?" 0
 # An active runner, and a usable manager rejecting a unit, must not spawn fallback runners.
 cat > "$t/bin/systemctl" <<'S'
 #!/usr/bin/env bash

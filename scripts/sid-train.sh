@@ -121,7 +121,7 @@ after_merge() {
   # A private snapshot lets the next train reuse verify while deployment keeps running.
   hookwt=$repo-wt/after-merge-$id
   launch=(setsid -f env PATH="$PATH")
-  if [ -n "${INVOCATION_ID:-}" ] || { [ -z "${SID_TRAIN_INLINE+x}" ] && command -v systemd-run >/dev/null; }; then
+  if [ -n "${INVOCATION_ID:-}" ] || { [ -z "${SID_TRAIN_INLINE+x}" ] && command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1; }; then
     unit=sid-after-merge-$(printf '%s' "$common" | sha256sum | cut -c1-16)-$id
     launch=(systemd-run --user --collect --unit="$unit" --setenv=PATH="$PATH" --setenv=HOME="$HOME"
       --property="StandardOutput=append:$train/after-merge.log" --property="StandardError=append:$train/after-merge.log")
