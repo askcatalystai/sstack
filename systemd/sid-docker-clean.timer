@@ -1,0 +1,10 @@
+[Unit]
+Description=Clean disposable Docker resources hourly
+
+[Timer]
+OnBootSec=1h
+OnUnitActiveSec=1h
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

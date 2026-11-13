@@ -60,6 +60,8 @@ if command -v systemctl >/dev/null 2>&1; then
   mkdir -p "$HOME/.config/systemd/user"
   cp "$S"/systemd/sid-health.service "$S"/systemd/sid-health.timer "$HOME/.config/systemd/user/"
   { systemctl --user daemon-reload && systemctl --user enable --now sid-health.timer >/dev/null 2>&1; } || echo "health timer: not enabled; check systemctl --user status sid-health.timer"
+  cp "$S"/systemd/sid-docker-clean.service "$S"/systemd/sid-docker-clean.timer "$HOME/.config/systemd/user/"
+  { systemctl --user daemon-reload && systemctl --user enable --now sid-docker-clean.timer >/dev/null 2>&1; } || echo "docker cleanup timer: not enabled; check systemctl --user status sid-docker-clean.timer"
 fi
 # Kanzo card tags refresh on a timer.
 if command -v systemctl >/dev/null 2>&1 && command -v kanzo >/dev/null 2>&1; then

@@ -800,4 +800,183 @@ echo n > models.md; echo s > rules.md; git add -A; git commit -qm two; git push 
 echo t > rules.md; echo b > b; git add -A; git commit -qm both; git push -q origin main 2>/dev/null; ok "rules.md with anything else can't" "$?" 1
 git reset -q --hard HEAD~1; git rm -q models.md; git commit -qm gone; git push -q --no-verify origin main; echo code > code; git add -A; git commit -qm code; git push -q --no-verify origin main; git mv code models.md; git commit -qm renamed; git push -q origin main 2>/dev/null; ok "a rename into models.md can't hide a deleted file" "$?" 1
 git reset -q --hard HEAD~1; git push -q origin --delete main 2>/dev/null; ok "deleting main is refused" "$?" 1
+# Docker tests assert observable selections and run arguments, independent of shell/Python internals.
+mkdir -p "$t/docker-bin"
+export DOCKER_TEST_DIR="$t/docker-fixture"
+mkdir -p "$DOCKER_TEST_DIR"
+cat > "$t/docker-bin/docker" <<'PY'
+#!/usr/bin/env python3
+import datetime, json, os, sys
+from pathlib import Path
+p = Path(os.environ['DOCKER_TEST_DIR']); a = sys.argv[1:]
+with (p/'calls').open('a') as f: f.write(json.dumps(a)+'\n')
+def emit(data): print(json.dumps(data))
+def container(name, hours, status='exited', labels=None, started_at=None, finished_at=None):
+    at = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+    started_at = started_at if started_at is not None else at
+    finished_at = finished_at if finished_at is not None else at
+    return dict(Created=at, Id=name, Name='/'+name, Config=dict(Labels=labels or {}), State=dict(Status=status, Running=status=='running', StartedAt=started_at, FinishedAt=finished_at), NetworkSettings=dict(Ports={'5432/tcp':[dict(HostIp='127.0.0.1' if name in ('throw-old', 'new-db') else '0.0.0.0', HostPort='54321')]}), Mounts=[dict(Type='volume', Name='precious_named_volume')])
+throw = {'sidstack.throwaway':'1'}; compose = {'com.docker.compose.project':'keep'}
+unset = '0001-01-01T00:00:00Z'
+cs = [container('plain-old', 25), container('throw-exited', .1, labels=throw),
+      container('throw-old', 9, 'running', throw), container('compose-running', 50, 'running', {**throw, **compose}),
+      container('compose-exited', 50, labels=compose), container('plain-running', 50, 'running'),
+      container('plain-young', 23), container('throw-young', 1, 'running', throw),
+      container('plain-unset-finished', 50, finished_at=unset),
+      container('throw-unset-started', 3, 'running', throw, started_at=unset)]
+if (p/'lifecycle').exists():
+    cs += [container('throw-session', 3, 'running', throw)]
+    for status in ('created', 'dead'):
+        for age in (1, 3):
+            cs.append(container(f'{status}-{age}', age, status, throw, started_at=unset))
+        for value in (unset, 'unreadable', ''):
+            c = container(f'{status}-unknown-{len(cs)}', 50, status, throw)
+            c['Created'] = value
+            cs.append(c)
+        c = container(f'{status}-missing', 50, status, throw)
+        del c['Created']
+        cs.append(c)
+    cs.append(container('compose-created', 50, 'created', {**throw, **compose}))
+if a == ['info']:
+    sys.exit(1 if (p/'down').exists() else 0)
+elif a[0] == 'version': emit(dict(Server=dict(Version='29.9.2', ApiVersion='1.56'), Client=dict(ApiVersion='1.56')))
+elif a[:2] == ['system','df']:
+    if (p/'df-fail').exists(): sys.exit('cannot read system df')
+    emit(dict(Size='bad' if (p/'df-invalid').exists() else '1GB'))
+elif a[0] == 'ps': print('\n'.join(c['Id'] for c in cs if '--filter' not in a or c['Config']['Labels'].get('sidstack.throwaway') == '1'))
+elif a[0] == 'inspect':
+    emit([next((c for c in cs if c['Id']==a[1]), container('new-db', 0, 'running', throw))])
+elif a[:2] == ['image','inspect']:
+    sys.exit(1 if (p/'missing-image').exists() else 0)
+elif a[0] == 'run': print('new-db')
+elif a[0] == 'exec': pass
+elif a[0] == 'rm':
+    if (p/'restart-race').exists() and a[-1] == 'plain-old': sys.exit('container is running')
+    if (p/'concurrent-removal').exists() and a[-1] == 'throw-exited': sys.exit('No such container')
+elif a[:2] == ['volume','ls']:
+    print('anonymous-volume\nanonymous-later\ncompose-project-volume\ncompose-volume' if 'label=com.docker.volume.anonymous' in a else 'anonymous-volume\nprecious_named_volume')
+elif a[:2] == ['volume','inspect']:
+    labels = {'com.docker.compose.project':'keep'} if a[-1]=='compose-project-volume' else {'com.docker.compose.volume':'keep'} if a[-1]=='compose-volume' else {'com.docker.volume.anonymous':''}
+    emit([dict(Name=a[-1], Labels=labels)])
+elif a[:2] == ['volume','rm']:
+    if (p/'volume-fail').exists() and a[-1]=='anonymous-volume': sys.exit('volume is in use')
+elif a[:2] == ['image','ls']: print('dangling-image')
+elif a[1:2] == ['prune']:
+    if (p/'image-fail').exists() and a[0]=='image': sys.exit('image prune failed')
+else: sys.exit('unexpected docker command: '+repr(a))
+PY
+chmod +x "$t/docker-bin/docker"
+export PATH="$t/docker-bin:$PATH"
+unset DOCKER_API_VERSION
+"$here/sid-docker-clean.sh" > "$t/clean-out"; ok "janitor runs" "$?" 0
+python3 - <<'PY'
+import json, os
+from pathlib import Path
+calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+removed = {a[-1]:a[1] for a in calls if a[0]=='rm'}
+assert removed == {'throw-exited':'-fv', 'throw-old':'-fv', 'plain-old':'-v'}, removed
+assert 'plain-unset-finished' not in removed and 'throw-unset-started' not in removed
+assert ['volume','ls','-q','--filter','dangling=true','--filter','label=com.docker.volume.anonymous'] in calls
+assert [a[-1] for a in calls if a[:2]==['volume','rm']] == ['anonymous-volume', 'anonymous-later']
+assert not any(a[:2]==['volume','prune'] for a in calls)
+assert ['image','prune','-f'] in calls
+assert ['builder','prune','-f','--filter','until=72h'] in calls
+assert not any('precious_named_volume' in a or '--all' in a or '-a' in a for a in calls)
+PY
+ok "janitor expires exactly eligible containers; preserves Compose, running and recent containers and named volumes" "$?" 0
+: > "$DOCKER_TEST_DIR/calls"
+"$here/sid-docker-clean.sh" --dry-run > "$t/clean-dry"; ok "janitor dry-run succeeds" "$?" 0
+python3 - "$t/clean-dry" <<'PY'
+import json, os, sys
+from pathlib import Path
+calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+assert not any('rm' in a or 'prune' in a for a in calls)
+out=Path(sys.argv[1]).read_text()
+for name in ['throw-exited','throw-old','plain-old','anonymous-volume','anonymous-later','dangling-image']: assert name in out, name
+for name in ['compose-running','compose-exited','plain-running','plain-young','throw-young','plain-unset-finished','throw-unset-started','precious_named_volume','compose-project-volume','compose-volume']: assert name not in out, name
+PY
+ok "dry-run lists eligible resources without any removal" "$?" 0
+touch "$DOCKER_TEST_DIR/lifecycle"; : > "$DOCKER_TEST_DIR/calls"
+"$here/sid-docker-clean.sh" > "$t/lifecycle" 2>&1
+ok "created/dead and session cleanup succeeds" "$?" 0
+python3 - <<'PYTEST'
+import json, os
+from pathlib import Path
+calls=[json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+removed={a[-1] for a in calls if a[0]=='rm'}
+assert removed == {'throw-exited', 'throw-old', 'plain-old', 'created-3', 'dead-3'}, removed
+PYTEST
+ok "created/dead expire after 2h using known creation time; running sessions survive 3h and expire at 9h" "$?" 0
+rm "$DOCKER_TEST_DIR/lifecycle"
+for scenario in restart-race concurrent-removal volume-fail df-fail df-invalid image-fail; do
+  touch "$DOCKER_TEST_DIR/$scenario"; : > "$DOCKER_TEST_DIR/calls"
+  "$here/sid-docker-clean.sh" > "$t/failure-out" 2>&1
+  ok "$scenario returns failure after cleanup" "$?" 1
+  python3 - "$t/failure-out" "$scenario" <<'PYTEST'
+import json, os, sys
+from pathlib import Path
+calls=[json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+assert [a[-1] for a in calls if a[0]=='rm'] == ['plain-old','throw-exited','throw-old']
+assert ['volume','rm','anonymous-volume'] in calls
+assert ['volume','rm','anonymous-later'] in calls
+assert ['image','prune','-f'] in calls
+assert ['builder','prune','-f','--filter','until=72h'] in calls
+assert sum(a[:2]==['system','df'] for a in calls)==2
+out=Path(sys.argv[1]).read_text()
+assert 'sid-docker-clean:' in out, out
+if sys.argv[2].startswith('df-'): assert 'space reclaimed unavailable' in out, out
+PYTEST
+  ok "$scenario reports failure and still attempts later containers, volumes, image/cache cleanup and totals" "$?" 0
+  rm "$DOCKER_TEST_DIR/$scenario"
+done
+touch "$DOCKER_TEST_DIR/down"; : > "$DOCKER_TEST_DIR/calls"
+"$here/sid-docker-clean.sh" > "$t/clean-down" 2>&1; ok "Docker down is a successful janitor no-op" "$?" 0
+ok "Docker down makes no further calls" "$(wc -l < "$DOCKER_TEST_DIR/calls")" 1
+"$here/sid-db.sh" start > "$t/db-down" 2>&1; ok "database helper fails clearly when Docker is down" "$?" 1
+rm "$DOCKER_TEST_DIR/down"
+: > "$DOCKER_TEST_DIR/calls"
+"$here/sid-db.sh" start test-db > "$t/db-url"; ok "database helper starts" "$?" 0
+python3 - "$t/db-url" <<'PY'
+import json, os, sys
+from pathlib import Path
+from urllib.parse import urlparse
+calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+a = next(a for a in calls if a[0]=='run')
+assert '--rm' in a and '--pull=never' in a
+assert a[a.index('--tmpfs')+1] == '/var/lib/postgresql/data'
+assert 'sidstack.throwaway=1' in a
+assert any(s.startswith('sidstack.started-at=') and s.split('=')[1].isdigit() for s in a)
+assert a[a.index('-p')+1] == '127.0.0.1::5432'
+assert a[-1]=='pgvector/pgvector:pg17'
+u=urlparse(Path(sys.argv[1]).read_text().strip())
+assert u.scheme=='postgres' and u.hostname=='127.0.0.1' and u.port==54321 and u.password and u.path=='/sid'
+assert any(a[0]=='exec' and 'pg_isready' in a for a in calls)
+PY
+ok "database starts with automatic removal, tmpfs, labels, loopback port, readiness and one URL" "$?" 0
+"$here/sid-db.sh" list > "$t/db-list"
+python3 - "$t/db-list" <<'PYTEST'
+import sys
+from pathlib import Path
+rows=Path(sys.argv[1]).read_text().splitlines()
+assert {r.split()[0] for r in rows} == {'throw-old', 'throw-young', 'throw-unset-started'}
+assert all('age=' in r for r in rows)
+PYTEST
+ok "database list includes only running owned databases with age" "$?" 0
+: > "$DOCKER_TEST_DIR/calls"
+"$here/sid-db.sh" stop "$(cat "$t/db-url")" > "$t/db-stop"; ok "database stop resolves a local URL" "$?" 0
+: > "$DOCKER_TEST_DIR/calls"
+"$here/sid-db.sh" stop compose-running > "$t/db-stop" 2>&1; ok "database stop refuses Compose even if labelled throwaway" "$?" 1
+"$here/sid-db.sh" stop plain-running > "$t/db-stop" 2>&1; ok "database stop refuses unlabelled containers" "$?" 1
+"$here/sid-db.sh" stop throw-old > "$t/db-stop"; ok "database stop accepts owned container name" "$?" 0
+python3 - <<'PY'
+import json, os
+from pathlib import Path
+calls = [json.loads(s) for s in (Path(os.environ['DOCKER_TEST_DIR'])/'calls').read_text().splitlines()]
+assert [a for a in calls if a[0]=='rm'] == [['rm','-fv','throw-old']]
+PY
+ok "database stop only removes owned non-Compose container" "$?" 0
+touch "$DOCKER_TEST_DIR/missing-image"; : > "$DOCKER_TEST_DIR/calls"
+"$here/sid-db.sh" start > "$t/db-missing" 2>&1; ok "missing image fails instead of pulling" "$?" 1
+grep -q 'not pulled' "$t/db-missing"; ok "missing image explains the failure" "$?" 0
+grep -Eq '"(pull|run)"' "$DOCKER_TEST_DIR/calls"; ok "missing image never pulls or runs" "$?" 1
 exit $fail
