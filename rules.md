@@ -24,6 +24,7 @@ Where things are: models for every role in `~/.local/share/sidstack/models.md`; 
 
 ## Building
 
+- **Use the throwaway database helper.** Start a throwaway database with `~/.local/share/sidstack/scripts/sid-db.sh start` and stop it with `sid-db.sh stop` when done; never use raw `docker run` for a database. The hourly janitor removes what is left. (2026-11-13: "docker volumes are not being cleaned after usage and piling up in storage ... make sid stack clean the docker cleanup completely after using them")
 - **Never bespoke.** Extend the existing shell, components, tokens and patterns. Before building a control, find the one the app already has and use it. A new dialog, composer, sheet or list where one exists is a defect. (2026-11-11: "not a new bespoke option")
 - **Match the reference.** Chat, threads and subagent views follow T3 Code (`~/templates/t3code`); Spaces follow OpenDots; tables and commerce follow Medusa admin. Open the reference and copy its structure before designing. (2026-11-13: "see how t3code is doing it")
 - **No extra words in the UI.** No static labels, helper text under inputs, subtitles, or explanations a placeholder or layout already gives. (2026-11-07: "we dont need these secondary explanations")

@@ -1,0 +1,7 @@
+[Unit]
+Description=Clean disposable Docker resources
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/sidstack/env
+ExecStart=%h/.local/share/sidstack/scripts/sid-docker-clean.sh
