@@ -288,6 +288,8 @@ queue_pr 11; ok "unknown card refuses queue" "$?" 1
 "$here/sid-merge.sh" --check --card b#2 --card c#3 11 > "$T/out" 2>&1
 ok "explicit cards override text" "$?" 0
 grep -Fxq 'cards: b#2,c#3' "$T/out"; ok "reports repeated explicit keys" "$?" 0
+"$here/sid-merge.sh" --check --card A#1 11 > "$T/out" 2>&1
+grep -Fxq 'cards: a#1' "$T/out"; ok "explicit card keys match case-insensitively" "$?" 0
 [ ! -f "$q/queue/11.req" ]; ok "check does not queue" "$?" 0
 [ ! -f "$t/links" ]; ok "check never links" "$?" 0
 printf '%s' "$PWD/$q/queue/11.req" > "$t/queue-path"

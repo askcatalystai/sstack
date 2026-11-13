@@ -132,7 +132,8 @@ def link_pr(key, repo, number):
 
 
 def resolve_pr(path, explicit):
-    candidates = list(dict.fromkeys(explicit)) if explicit else pr_keys(json.loads(Path(path).read_text()))
+    candidates = (list(dict.fromkeys(key.lower() for key in explicit)) if explicit
+                  else pr_keys(json.loads(Path(path).read_text())))
     try:
         known = tasks()
     except Exception as error:
