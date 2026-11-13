@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Real runs against a throwaway repo, with a fake gh: a stale pass never counts, and a merge only follows a fresh read.
 set -u
+# Do not inherit the harness service identity; systemd cases opt in with fakes.
+unset INVOCATION_ID
 here=$(cd "$(dirname "$0")" && pwd); t=$(mktemp -d); trap 'rm -rf "$t"' EXIT; fail=0
 ok() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (want $3, got $2)"; fail=1; fi; }
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -14,7 +16,12 @@ git checkout -q main; printf 'exit 1\n' > .sidstack/gate.sh; git add -A; git com
 git checkout -q main; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm good; git push -q origin main; git checkout -q work
 "$here/sid-gate.sh" work >/dev/null; origin_url=$(git remote get-url origin); git remote set-url origin "$t/gone.git"
 "$here/sid-gate.sh" work >/dev/null 2>&1; ok "a gate that can't reach origin fails" "$?" 1; [ ! -f "$stamp" ]; ok "and clears the old pass too" "$?" 0; git remote set-url origin "$origin_url"
-mkdir "$t/bin"; cat > "$t/bin/gh" <<'F'
+mkdir "$t/bin"
+# Every systemd interaction is stubbed, including on hosts with a working manager.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$t/bin/systemctl"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$t/bin/systemd-run"
+chmod +x "$t/bin/systemctl" "$t/bin/systemd-run"
+cat > "$t/bin/gh" <<'F'
 #!/usr/bin/env python3
 import json, os, signal, subprocess, sys
 from pathlib import Path
@@ -41,8 +48,9 @@ elif args[:2] == ['pr', 'comment']:
     with (p/'comments').open('a') as f: f.write(' '.join(args)+'\n')
 elif args[:2] == ['pr', 'view']:
     if (p/'api-down').exists(): sys.exit(1)
-    pr = args[2]; d = json.loads(data(pr).read_text())
+    pr = args[2]; d = json.loads(data(pr).read_text()); d.setdefault('autoMergeRequest', None)
     fields = args[args.index('--json')+1]
+    if fields == 'autoMergeRequest' and (p/'auto-read-down').exists(): sys.exit(1)
     if fields == 'mergeCommit':
         print((p/f'merge-oid-{pr}').read_text().strip()); sys.exit()
     if (p/f'post-api-down-{pr}').exists() and d['state'] == 'MERGED': sys.exit(1)
@@ -56,10 +64,18 @@ elif args[:2] == ['pr', 'view']:
         d['baseRefName'] = 'parent'
     print(json.dumps(d))
 elif args[:2] == ['pr', 'merge']:
-    pr = args[2]; d = json.loads(data(pr).read_text())
+    pr = args[2]; d = json.loads(data(pr).read_text()); d.setdefault('autoMergeRequest', None)
+    if '--disable-auto' in args:
+        if (p/'disable-fails').exists(): sys.exit(1)
+        d['autoMergeRequest'] = None; data(pr).write_text(json.dumps(d))
+        (p/f'auto-disabled-{pr}').touch(); sys.exit(0)
     if d['headRefOid'] != args[args.index('--match-head-commit')+1]: sys.exit(1)
-    if (p/'refuse-merge').exists(): sys.exit(1)
-    if (p/f'queue-only-{pr}').exists(): sys.exit(0)
+    if (p/'refuse-merge').exists():
+        if (p/'arm-on-refuse').exists():
+            d['autoMergeRequest'] = dict(enabledAt='now'); data(pr).write_text(json.dumps(d))
+        sys.exit(1)
+    if (p/f'queue-only-{pr}').exists():
+        d['autoMergeRequest'] = dict(enabledAt='now'); data(pr).write_text(json.dumps(d)); sys.exit(0)
     drift = p/f'drift-on-merge-{pr}'
     if drift.exists():
         subprocess.run(['git', '--git-dir='+str(p/'origin.git'), 'update-ref', 'refs/heads/main', drift.read_text().strip()], check=True)
@@ -77,7 +93,8 @@ elif args[:2] == ['pr', 'merge']:
     if (p/f'same-tree-drift-{pr}').exists():
         main = git('commit-tree', main+'^{tree}', '-p', main, '-m', 'outside empty push')
         subprocess.run(['git', 'push', '-q', 'origin', main+':refs/heads/main'], check=True)
-    tree = git('merge-tree', '--write-tree', main, d['headRefOid']).splitlines()[0]
+    # Model server settings, independent of the client's hostile config.
+    tree = subprocess.check_output(['git', '-c', 'merge.renames=true', '-c', 'merge.directoryRenames=conflict', '-c', 'merge.renameLimit=0', 'merge-tree', '--write-tree', main, d['headRefOid']], env=dict(os.environ, GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_SYSTEM='/dev/null'), text=True).splitlines()[0]
     if (p/f'wrong-tree-{pr}').exists(): tree = git('rev-parse', main+'^{tree}')
     subject = args[args.index('--subject')+1]; body = args[args.index('--body')+1]
     oid = git('commit-tree', tree, '-p', main, '-m', subject+'\n\n'+body)
@@ -197,6 +214,77 @@ queue_pr() { "$here/sid-merge.sh" --no-wait "$1" > "$T/out" 2>&1; }
 run_train() { "$here/sid-train.sh" > "$T/runner-out" 2>&1; }
 count_gates() { if [ -f "$T/gates" ]; then wc -l < "$T/gates" | tr -d ' '; else echo 0; fi; }
 code() { head -n 1 "$q/result/$1"; }
+# Rename/edit merges must have server semantics even with operator overrides.
+# Exercise the hook boundary with real local commits, independent of merge timing.
+setup_train hook-boundary
+printf '#!/usr/bin/env bash\necho "$PWD" >> "$T/hook-calls"\nwhile [ ! -f "$T/release-hook" ]; do sleep .05; done\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
+(
+  source "$here/sid-gate-lib.sh"; gate_repo
+  source <(sed -n '/^after_merge() {/,/^run_train() {/p' "$here/sid-train.sh" | sed '$d')
+  exec 7>"$train/runner.lock" 8>"$train/queue.lock" 9>"$gate/lock"
+  id=1; hook_sequence=0; lane=fast; log=$gate/logs/stale.log; echo stale > "$log"
+  tree=$(git rev-parse HEAD^{tree}); sha=$(git rev-parse HEAD)
+  after_merge "$tree"
+  [ ! -f "$gate/health/$sha" ]; ok "recovery never stamps an inherited gate log" "$?" 0
+  for ((j=0; j<100; j++)); do [ -f "$T/hook-calls" ] && break; sleep .05; done
+  after_merge "$tree"
+  for ((j=0; j<100; j++)); do [ "$(wc -l < "$T/hook-calls")" = 2 ] && break; sleep .05; done
+  ok "two hooks in one train get independent snapshots" "$(sort -u "$T/hook-calls" | wc -l)" 2
+  touch "$T/release-hook"
+  echo advance > advance; git add -A; git commit -qm advance; git push -q origin main
+  sha=$(git rev-parse HEAD)
+  before=$(wc -l < "$T/hook-calls")
+  after_merge "$tree"; after_merge health
+  sleep .2
+  ok "normal recovery and post-health paths reject unchecked main" "$(wc -l < "$T/hook-calls")" "$before"
+  printf 'pass full\nhealth-log\n' > "$gate/health/$sha"
+  after_merge "$tree"
+  for ((j=0; j<100; j++)); do [ "$(wc -l < "$T/hook-calls")" = 3 ] && break; sleep .05; done
+  ok "existing health pass permits hook after main advances" "$(wc -l < "$T/hook-calls")" 3
+) > "$T/boundary-out" 2>&1
+cat "$T/boundary-out"
+grep -q '^FAIL' "$T/boundary-out" && fail=1
+setup_train armed-readiness
+add_pr 11 a
+python3 - "$T/pr-11.json" <<'P'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d['autoMergeRequest']={'enabledAt':'now'}; json.dump(d,open(p,'w'))
+P
+queue_pr 11; ok "readiness refuses prearmed auto-merge" "$?" 1
+grep -q 'gh pr merge 11 --disable-auto' "$T/out"; ok "readiness names exact disarm command" "$?" 0
+for refusal in queued refused read; do
+  setup_train "armed-$refusal"; add_pr 11 a; queue_pr 11
+  if [ "$refusal" != refused ]; then touch "$T/queue-only-11"
+  else touch "$T/refuse-merge" "$T/arm-on-refuse"; fi
+  if [ "$refusal" = read ]; then touch "$T/auto-read-down"; else touch "$T/disable-fails"; fi
+  run_train
+  ok "$refusal armed merge returns failure" "$(code 11)" 1
+  grep -q 'gh pr merge 11 --disable-auto' "$q/result/11"; ok "$refusal failed disarm names exact command" "$?" 0
+done
+setup_train pinned-renames
+seq 1 100 > old; git add old; git commit -qm base; git push -q origin main
+base=$(git rev-parse HEAD)
+git checkout -q -b work11; git mv old renamed; git commit -qm rename; git push -q origin work11
+record_pr 11; git checkout -q main
+sed -i '50s/.*/main edit/' old; git add old; git commit -qm edit; git push -q origin main
+# Also force the caller's command-scope config to disagree with the server.
+git config merge.renames false
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=merge.renames GIT_CONFIG_VALUE_0=false "$here/sid-gate.sh" work11 > "$T/out" 2>&1
+ok "plain gate detects rename despite operator config" "$?" 0
+queue_pr 11; run_train
+ok "train merges rename with pinned server settings" "$(code 11)" 0
+git show origin/main:renamed | grep -q 'main edit'; ok "pinned rename preserves main edit in renamed file" "$?" 0
+# A global default custom driver must not turn a content conflict into a pass.
+setup_train pinned-driver
+printf 'base\n' > content; git add content; git commit -qm base; git push -q origin main
+add_pr 11 content branch
+printf 'main\n' > content; git add content; git commit -qm main; git push -q origin main
+printf '[merge]\n default = ignore\n[merge "ignore"]\n driver = true\n' > "$T/gitconfig"
+GIT_CONFIG_GLOBAL="$T/gitconfig" "$here/sid-gate.sh" work11 > "$T/out" 2>&1
+ok "plain gate rejects conflict hidden by global merge driver" "$?" 3
+queue_pr 11; GIT_CONFIG_GLOBAL="$T/gitconfig" run_train
+ok "train rejects conflict hidden by global merge driver" "$(code 11)" 3
 setup_train batch
 add_pr 11 a; add_pr 12 b; echo fast > "$T/reported-lane"; git worktree add -q "$T/worker" work11
 "$here/sid-mode.sh" set lane full --note 'operator full test'; queue_pr 11; queue_pr 12; run_train
@@ -405,12 +493,24 @@ for outcome in queued state head commit fetch api; do
     api) touch "$T/post-api-down-11";;
   esac
   run_train
-  ok "$outcome completion is not reported merged" "$(code 11)" 1
-  grep -q 'the merge did not complete; nothing was cleaned up' "$q/result/11"; ok "$outcome completion explains retained work" "$?" 0
+  expected_rc=1; expected_message='the merge did not complete; nothing was cleaned up'
+  if [ "$outcome" = fetch ]; then
+    expected_rc=5; expected_message='merged #11 as .*but the landed tree could not be verified'
+    sha=$(cat "$T/merge-oid-11")
+    grep -q '^pass full$' "$health/$sha"; ok "$outcome uncertain landing checks actual main" "$?" 0
+  fi
+  if [ "$outcome" = api ]; then
+    expected_message='gh pr merge 11 --disable-auto'
+  fi
+  if [ "$outcome" = queued ]; then
+    [ -f "$T/auto-disabled-11" ]; ok "queued auto-merge is disabled before refusal" "$?" 0
+  fi
+  ok "$outcome completion reports verification outcome" "$(code 11)" "$expected_rc"
+  grep -q "$expected_message" "$q/result/11"; ok "$outcome completion explains retained work" "$?" 0
   [ -d "$T/worker" ]; ok "$outcome completion retains worktree" "$?" 0
   git show-ref --verify --quiet refs/heads/work11; ok "$outcome completion retains local branch" "$?" 0
   git ls-remote --exit-code origin refs/heads/work11 >/dev/null; ok "$outcome completion retains remote branch" "$?" 0
-  ok "$outcome completion rebuilds remaining member" "$(count_gates)" 2
+  ok "$outcome completion rebuilds remaining member" "$(count_gates)" "$((expected_rc == 5 ? 3 : 2))"
   ok "$outcome completion permits freshly gated remaining member" "$(code 12)" 0
 done
 # The server can move main after the caller's final base check, or land an unexpected tree.
@@ -434,7 +534,10 @@ for mismatch in parent tree; do
   ok "$mismatch mismatch starts detached full health on real main" "$?" 0
   ok "$mismatch mismatch requires a fresh train and health gate" "$(count_gates)" 3
 done
+# Health-approved unsafe landings must deploy the checked main, preserving its health log.
 setup_train landed-after-prefix
+printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/health-hook-head"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
 add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12; touch "$T/same-tree-drift-12"
 run_train
 ok "checked prefix still reports success before later drift" "$(code 11)" 0
@@ -442,13 +545,35 @@ ok "second-member parent drift reports exit 5" "$(code 12)" 5
 sha=$(cat "$T/merge-oid-12")
 grep -q "/health-$sha.log$" "$health/$sha"; ok "stopped train preserves actual health evidence" "$?" 0
 ok "second-member drift checks main without another train" "$(count_gates)" 2
+for ((j=0; j<100; j++)); do [ -f "$T/health-hook-head" ] && break; sleep .05; done
+ok "health pass launches hook for actual main" "$(cat "$T/health-hook-head" 2>/dev/null)" "$sha"
 setup_train recovered-unsafe-merge
+printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/health-hook-head"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
 add_pr 11 a; queue_pr 11; touch "$T/same-tree-drift-11" "$T/crash-after-merge"
 run_train; run_train
 ok "crash recovery checks the original gated base" "$(code 11)" 5
 sha=$(cat "$T/merge-oid-11")
 grep -q "/health-$sha.log$" "$health/$sha"; ok "unsafe recovered merge starts full health" "$?" 0
 ok "unsafe recovery never merges twice" "$(cat "$T/merge-calls")" 11
+for ((j=0; j<100; j++)); do [ -f "$T/health-hook-head" ] && break; sleep .05; done
+ok "recovered unsafe landing launches hook after health" "$(cat "$T/health-hook-head" 2>/dev/null)" "$sha"
+setup_train recovered-hook
+printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/recovered-hook-head"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
+add_pr 11 a; queue_pr 11; touch "$T/crash-after-merge"; run_train; run_train
+for ((j=0; j<100; j++)); do [ -f "$T/recovered-hook-head" ] && break; sleep .05; done
+ok "recovered verified merge launches hook" "$(cat "$T/recovered-hook-head" 2>/dev/null)" "$(cat "$T/merge-oid-11")"
+setup_train unhealthy-hook
+printf '#!/usr/bin/env bash\necho ran > "$T/unhealthy-hook"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
+add_pr 11 a; queue_pr 11; touch "$T/same-tree-drift-11"
+# Fail only health, after the train has passed and the server has landed.
+sed -i '/echo gate/a [ "$SID_LANE" != full ] || exit 1' .sidstack/gate.sh
+git add -A; git commit -qm health-only-failure; git push -q origin main
+"$here/sid-mode.sh" set lane fast
+run_train
+[ ! -f "$T/unhealthy-hook" ]; ok "failed post-landing health never launches hook" "$?" 0
 setup_train invalid-mode
 add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
 printf 'lane=broken\n' > .git/sid-gate/mode
@@ -521,6 +646,7 @@ for terminal in missing cancelled; do
   else grep -q cancelled "$T/waiter" && [ "$(code 11)" = 1 ]; fi
   ok "$terminal request explains the terminal outcome" "$?" 0
 done
+printf '#!/usr/bin/env bash\n[ "$2" != is-active ]\n' > "$t/bin/systemctl"
 setup_train service
 add_pr 11 a
 cat > "$t/bin/systemd-run" <<'S'
@@ -535,7 +661,8 @@ for arg in "$@"; do
   esac
 done
 printf '%s\n' "$PATH" "$HOME" > "$T/service-env"
-exec setsid "${!#}" </dev/null >>"$T/service-log" 2>&1 &
+while [[ $1 == --* ]]; do shift; done
+INVOCATION_ID=test exec setsid "$@" </dev/null >>"$T/service-log" 2>&1 &
 S
 chmod +x "$t/bin/systemd-run"
 ( unset SID_TRAIN_INLINE; "$here/sid-merge.sh" --no-wait 11 > "$T/out" 2>&1 )
@@ -545,7 +672,106 @@ ok "service runner outlives enqueue caller" "$(code 11)" 0
 ok "service receives caller PATH" "$(sed -n 1p "$T/service-env")" "$PATH"
 ok "service receives caller HOME" "$(sed -n 2p "$T/service-env")" "$HOME"
 grep -Eq -- '--user --collect --unit=sid-train-[0-9a-f]+ --working-directory=' "$T/service-args"; ok "transient service is named for repo" "$?" 0
-rm "$t/bin/systemd-run"
+# A runner in a transient service must launch the hook in another unit even
+# when SID_TRAIN_INLINE is set (as in this suite).
+setup_train service-hook
+printf '#!/usr/bin/env bash\ngit rev-parse HEAD > "$T/service-hook-head"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
+add_pr 11 a; queue_pr 11; INVOCATION_ID=test run_train
+for ((j=0; j<100; j++)); do [ -f "$T/service-hook-head" ] && break; sleep .05; done
+ok "systemd hook executes on merged snapshot" "$(cat "$T/service-hook-head" 2>/dev/null)" "$(git rev-parse origin/main)"
+grep -Eq -- '--user --collect --unit=sid-after-merge-[0-9a-f]+-1-[0-9]+ --setenv=PATH=.* --setenv=HOME=' "$T/service-args"
+ok "systemd hook gets its own unit and caller environment" "$?" 0
+grep -Fq -- "StandardOutput=append:$(pwd)/$q/after-merge.log" "$T/service-args"
+ok "systemd hook writes persistent train log" "$?" 0
+# The same choice applies outside inline mode even without INVOCATION_ID.
+setup_train service-hook-auto
+printf '#!/usr/bin/env bash\necho done > "$T/service-hook-done"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
+add_pr 11 a; queue_pr 11
+( unset SID_TRAIN_INLINE INVOCATION_ID; run_train )
+for ((j=0; j<100; j++)); do [ -f "$T/service-args" ] && break; sleep .05; done
+grep -q -- '--unit=sid-after-merge-' "$T/service-args"; ok "available systemd without inline uses a hook unit" "$?" 0
+for ((j=0; j<100; j++)); do [ -f "$T/service-hook-done" ] && break; sleep .05; done
+# A detached train must still run the hook when user systemd is down.
+setup_train hook-fallback-no-systemd
+printf '#!/usr/bin/env bash\necho fallback > "$T/hook-fallback"\n' > .sidstack/after-merge.sh
+chmod +x .sidstack/after-merge.sh; git add -A; git commit -qm hook; git push -q origin main
+cat > "$t/bin/systemctl" <<'S'
+#!/usr/bin/env bash
+exit 1
+S
+chmod +x "$t/bin/systemctl"
+cat > "$t/bin/systemd-run" <<'S'
+#!/usr/bin/env bash
+echo hook >> "$T/hook-systemd-attempts"
+exit 1
+S
+chmod +x "$t/bin/systemd-run"
+add_pr 11 a; queue_pr 11
+( unset SID_TRAIN_INLINE; INVOCATION_ID=test run_train )
+for ((j=0; j<100; j++)); do [ -f "$T/hook-fallback" ] && break; sleep .05; done
+[ -f "$T/hook-fallback" ]; ok "unit train runs hook without user systemd" "$?" 0
+[ ! -f "$T/hook-systemd-attempts" ]; ok "hook never depends on a failing systemd-run" "$?" 0
+# An active runner, and a usable manager rejecting a unit, must not spawn fallback runners.
+cat > "$t/bin/systemctl" <<'S'
+#!/usr/bin/env bash
+case "$2" in
+  is-active) [ -f "$T/unit-active" ];;
+  show) [ ! -f "$T/unit-loaded" ] || printf 'LoadState=loaded\nActiveState=activating\n';;
+  *) exit 0;;
+esac
+S
+chmod +x "$t/bin/systemctl"
+cat > "$t/bin/systemd-run" <<'S'
+#!/usr/bin/env bash
+echo attempted >> "$T/service-attempts"
+echo transient-start-failure >&2
+exit 1
+S
+for manager in active collecting missing unavailable; do
+  setup_train "service-$manager"; add_pr 11 a
+  [ "$manager" != active ] || touch "$T/unit-active"
+  [ "$manager" != collecting ] || touch "$T/unit-loaded"
+  if [ "$manager" = unavailable ]; then
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$t/bin/systemctl"
+  fi
+  ( unset SID_TRAIN_INLINE; "$here/sid-merge.sh" --no-wait 11 > "$T/out" 2>&1 )
+  if [ "$manager" = unavailable ] || [ "$manager" = missing ]; then
+    for ((j=0; j<200; j++)); do [ -f "$q/result/11" ] && break; sleep .05; done
+    ok "unusable systemd falls back to detached runner" "$(code 11)" 0
+  else
+    sleep .2
+    [ ! -f "$q/result/11" ]; ok "$manager systemd never spawns detached duplicate" "$?" 0
+    [ ! -f "$q/result/11" ]; ok "$manager runner request stays queued" "$?" 0
+    if [ "$manager" = active ]; then
+      [ ! -f "$T/service-attempts" ]; ok "active unit is not started again" "$?" 0
+    fi
+  fi
+done
+# A collected unit left a request; the periodic health pass must rescue it,
+# even when main already has a full health record.
+cat > "$t/bin/systemctl" <<'S'
+#!/usr/bin/env bash
+case "$2" in
+  is-active) exit 1;;
+  show) [ ! -f "$T/unit-loaded" ] || printf 'LoadState=loaded\nActiveState=activating\n';;
+  *) exit 0;;
+esac
+S
+setup_train health-rescue; add_pr 11 a; touch "$T/unit-loaded"
+( unset SID_TRAIN_INLINE; "$here/sid-merge.sh" --no-wait 11 > "$T/out" 2>&1 )
+[ -f "$q/queue/11.req" ]; ok "transient start failure retains queued request" "$?" 0
+rm "$T/unit-loaded"
+( flock 7; unset SID_TRAIN_INLINE; "$here/sid-health.sh" > "$T/busy-health-out" 2>&1 ) 7>"$q/runner.lock"
+[ ! -f "$q/result/11" ]; ok "health leaves a locked runner in charge" "$?" 0
+sha=$(git rev-parse origin/main); printf 'pass full\nold-log\n' > "$health/$sha"
+( unset SID_TRAIN_INLINE; "$here/sid-health.sh" > "$T/health-out" 2>&1 )
+for ((j=0; j<200; j++)); do [ -f "$q/result/11" ] && break; sleep .05; done
+ok "later health drains request after transient failure" "$(code 11)" 0
+grep -q transient-start-failure "$q/runner.log"; ok "runner log retains systemd startup failure" "$?" 0
+printf '#!/usr/bin/env bash\nexit 1\n' > "$t/bin/systemctl"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$t/bin/systemd-run"
 setup_train active-cancel
 add_pr 11 a; queue_pr 11; touch "$T/block-train"
 "$here/sid-train.sh" > "$T/runner-out" 2>&1 & rp=$!

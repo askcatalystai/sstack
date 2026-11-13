@@ -55,16 +55,6 @@ PY
   [ "$?" = 0 ] || { echo "could not queue #$pr"; exit 1; }
 fi
 flock -u 8
-start_runner() {
-  [ "${SID_TRAIN_INLINE:-}" != 1 ] || return 0
-  local unit
-  unit=sid-train-$(printf '%s' "$common" | sha256sum | cut -c1-16)
-  if [ -z "${SID_TRAIN_INLINE+x}" ] && command -v systemd-run >/dev/null; then
-    systemd-run --user --collect --unit="$unit" --working-directory="$repo" --setenv=PATH="$PATH" --setenv=HOME="$HOME" "$here/sid-train.sh" >/dev/null 2>&1 && return
-  fi
-  # A second runner waits on runner.lock, covering service shutdown/enqueue races too.
-  ( exec 8>&-; exec setsid -f "$here/sid-train.sh" </dev/null >>"$train/runner.log" 2>&1 ) &
-}
 start_runner
 if [ "$no_wait" = true ]; then echo "queued #$pr"; exit 0; fi
 request_pending() {

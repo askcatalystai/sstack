@@ -33,6 +33,7 @@ with open(p+'.tmp', 'w') as f:
 os.replace(p+'.tmp', p)
 PY
 }
+hook_sequence=0
 id=0; lane=; main=; started=$(date -u +%FT%TZ)
 finish() {
   id=$(cat "$train/sequence" 2>/dev/null || echo 0)
@@ -104,20 +105,32 @@ start_health() {
   flock -u 9
   wait "$health_pid"
   flock 9
+  after_merge health
 }
 after_merge() {
-  local gated_tree=$1 newmain hookwt
+  local gated_tree=$1 stamp_log=${2:-} newmain hookwt unit newtree
+  local -a launch
   git fetch -q origin "$default" || return
   newmain=$(git rev-parse "origin/$default")
-  if [ "$(git rev-parse "$newmain^{tree}")" = "$gated_tree" ]; then
-    printf 'pass %s\n%s\n' "$lane" "$log" > "$gate/health/$newmain.tmp"
+  newtree=$(git rev-parse "$newmain^{tree}") || return 1
+  if [ "$newtree" != "$gated_tree" ]; then
+    grep -q '^pass ' "$gate/health/$newmain" 2>/dev/null || return 0
+  elif [ -n "$stamp_log" ]; then
+    printf 'pass %s\n%s\n' "$lane" "$stamp_log" > "$gate/health/$newmain.tmp"
     mv "$gate/health/$newmain.tmp" "$gate/health/$newmain"
   fi
   [ "$(git ls-tree "$newmain" .sidstack/after-merge.sh | cut -d' ' -f1)" = 100755 ] || return 0
   # A private snapshot lets the next train reuse verify while deployment keeps running.
-  hookwt=$repo-wt/after-merge-$id
+  hook_sequence=$((hook_sequence+1))
+  hookwt=$repo-wt/after-merge-$id-$hook_sequence
+  launch=(setsid -f env PATH="$PATH")
+  if { [ -n "${INVOCATION_ID:-}" ] || [ -z "${SID_TRAIN_INLINE+x}" ]; } && command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+    unit=sid-after-merge-$(printf '%s' "$common" | sha256sum | cut -c1-16)-$id-$hook_sequence
+    launch=(systemd-run --user --collect --unit="$unit" --setenv=PATH="$PATH" --setenv=HOME="$HOME"
+      --property="StandardOutput=append:$train/after-merge.log" --property="StandardError=append:$train/after-merge.log")
+  fi
   ( exec 7>&- 8>&- 9>&-
-    exec setsid -f env PATH="$PATH" bash -c '
+    exec "${launch[@]}" bash -c '
       repo=$1; wt=$2; sha=$3
       git -C "$repo" worktree add -q --detach "$wt" "$sha" || exit 1
       trap '\''git -C "$repo" worktree remove --force "$wt"'\'' EXIT
@@ -158,10 +171,14 @@ run_train() {
         if [ "$rc" = 0 ]; then
           result_for "$pr" 0 "merged #$pr: $oid (found already merged)"
           cleanup_branch "$branch"
+          after_merge "$member_tree"
         elif [ "$rc" = 5 ]; then
           result_for "$pr" 5 "merged #$pr as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})"
           start_health
-        else result_for "$pr" 1 'the merge did not complete; nothing was cleaned up'; fi
+        else
+          result_for "$pr" 5 "merged #$pr as $oid, but the landed tree could not be verified"
+          start_health
+        fi
         continue
       fi
       if ! python3 - "$train/active/$pr.json" "$head" "$default" <<'PY'
@@ -173,8 +190,8 @@ PY
       branch=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["headRefName"])' "$train/active/$pr.json")
       git fetch -q origin "$branch" || { result_for "$pr" 1 "cannot fetch $branch"; continue; }
       [ "$(git rev-parse "origin/$branch")" = "$head" ] || { result_for "$pr" 1 "#$pr head changed since queueing; run sid-merge again"; continue; }
-      out=$(git merge-tree --write-tree "$main" "$head") || { result_for "$pr" 3 "conflicts with $default: merge origin/$default into $branch, then run sid-merge again"; continue; }
-      if ! out=$(git merge-tree --write-tree "$combined" "$head"); then
+      out=$(merge_tree --write-tree "$main" "$head") || { result_for "$pr" 3 "conflicts with $default: merge origin/$default into $branch, then run sid-merge again"; continue; }
+      if ! out=$(merge_tree --write-tree "$combined" "$head"); then
         flock 8; rm -f "$train/active/$pr"; flock -u 8
         continue
       fi
@@ -227,7 +244,7 @@ PY
         if [ "$(git ls-remote origin "refs/heads/$default" | cut -f1)" != "$expected" ]; then
           needs_rebuild=true; break
         fi
-        if ! out=$(git merge-tree --write-tree "$expected" "$head") || [ "${out%%$'\n'*}" != "$member_tree" ]; then
+        if ! out=$(merge_tree --write-tree "$expected" "$head") || [ "${out%%$'\n'*}" != "$member_tree" ]; then
           needs_rebuild=true; break
         fi
         branch=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["headRefName"])' "$train/active/$pr.json")
@@ -239,14 +256,31 @@ PY
         printf '%s\n%s\n' "$expected" "$member_tree" > "$train/queue/$pr.merge"
         rc=1
         gh pr merge "$pr" --repo "$gh" --squash --match-head-commit "$head" --subject "$title (#$pr)" --body "$message" >/dev/null && { rc=0; break; }
+        if ! message=$(disarm_auto "$pr"); then
+          result_for "$pr" 1 "$message"; needs_rebuild=true; break
+        fi
       done
       if [ "$needs_rebuild" = true ]; then
         [ ! -f "$train/queue/$pr.req" ] || remaining+=("$pr")
         continue
       fi
       if [ "$rc" != 0 ]; then result_for "$pr" 1 "merge refused for #$pr after retries"; needs_rebuild=true; continue; fi
-      if ! gh pr view "$pr" --repo "$gh" --json state,headRefOid,mergeCommit > "$train/active/$pr.json" || ! oid=$(merged_oid "$pr" "$head"); then
-        result_for "$pr" 1 'the merge did not complete; nothing was cleaned up'
+      gh pr view "$pr" --repo "$gh" --json state,headRefOid,mergeCommit,autoMergeRequest > "$train/active/$pr.json"; rc=$?
+      if [ "$rc" != 0 ] || ! oid=$(merged_oid "$pr" "$head"); then
+        if ! message=$(disarm_auto "$pr"); then
+          result_for "$pr" 1 "$message"; needs_rebuild=true; continue
+        fi
+        # A separate commit read can still confirm a landing after a failed status read.
+        oid=
+        if [ "$rc" != 0 ]; then
+          oid=$(gh pr view "$pr" --repo "$gh" --json mergeCommit -q '.mergeCommit.oid // empty') || oid=
+        fi
+        if [ -n "$oid" ]; then
+          result_for "$pr" 5 "merged #$pr as $oid, but the landed tree could not be verified"
+          start_health; unsafe=true
+        else
+          result_for "$pr" 1 'the merge did not complete; nothing was cleaned up'
+        fi
         needs_rebuild=true; continue
       fi
       landed_tree; rc=$?
@@ -254,14 +288,14 @@ PY
         result_for "$pr" 5 "merged #$pr as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})"
         start_health; unsafe=true; needs_rebuild=true; continue
       elif [ "$rc" != 0 ]; then
-        result_for "$pr" 1 'the merge did not complete; nothing was cleaned up'
-        needs_rebuild=true; continue
+        result_for "$pr" 5 "merged #$pr as $oid, but the landed tree could not be verified"
+        start_health; unsafe=true; needs_rebuild=true; continue
       fi
       result_for "$pr" 0 "merged #$pr: $oid" "$record"
       merged=$((merged+1)); expected=$oid
       cleanup_branch "$branch"
     done
-    if [ "$merged" != 0 ] && [ "$unsafe" = false ]; then after_merge "$tree"; fi
+    if [ "$merged" != 0 ] && [ "$unsafe" = false ]; then after_merge "$tree" "$log"; fi
     if [ "$needs_rebuild" = false ]; then history merged; return; fi
     history failed
     candidates=("${remaining[@]}")
