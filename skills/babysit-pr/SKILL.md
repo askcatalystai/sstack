@@ -117,4 +117,5 @@ head. Merge only when the user explicitly requested it;
 otherwise report that the PR is ready. Right before a merge, run `git fetch` and
 check the PR again. Never merge when it is BEHIND or DIRTY, or when base commits
 that landed after the last green run touch this PR's files. Rebase, push, and
-wait for green again.
+wait for green again if the repo has CI checks; if it has none, rerun its local
+checks and renew `## Proof` instead, since nothing will turn green.

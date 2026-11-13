@@ -13,7 +13,7 @@ gate or a wrong shipped doc blocks; the rest is a follow-up or gets declined.
 
 ## The sequence
 
-The builder builds (Sol for logic, an Opus builder for visible UI) and the orchestrator commits it and opens the PR → **bug pass** (Composer) → the orchestrator commits its fixes → **Astra** reviews that commit with the bug-pass report and returns one list → the orchestrator takes the final call → the builder (the Opus builder for visible UI, Sol for logic) fixes once → **a fix that changes behaviour goes back to Astra**, for the changed code only (user, 2026-11-01) → the orchestrator verifies → Astra's approval of the head commit is recorded as the merge verdict (`sid-verdict.sh`) → merge train → live check. The PR bot joins on risky PRs unless `sid-mode.sh get bot` says `off`, and `sid-mode.sh get reviewers` can narrow the reviewers to Astra alone or none. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
+The builder builds (Sol for logic, an Opus builder for visible UI) and the orchestrator commits it and opens the PR → **bug pass** (Composer) → the orchestrator commits its fixes → **Astra** reviews that commit with the bug-pass report and returns one list → the orchestrator takes the final call → the builder (the Opus builder for visible UI, Sol for logic) fixes once → **a fix that changes behaviour goes back to Astra**, for the changed code only (user, 2026-11-01) → the orchestrator verifies → Astra's approval of the head commit is recorded as the merge verdict (`sid-verdict.sh`) → merge train → live check. Risky PRs get one more model from another family (step 6), and `sid-mode.sh get reviewers` can narrow the reviewers to Astra alone or none. "sol loop": Sol only, up to 3 rounds. A model or round count the user names wins.
 
 1. **Bug pass** (`bug pass` in models.md, Cursor Composer 2.5, started with `options: { fastMode: "false" }` — Plus rejects Composer without it), before Astra. It follows pstack's poteto-mode bug-fix playbook (`~/.local/share/pstack-src/pstack/skills/poteto-mode/playbooks/bug-fix.md`) and the fix-root-causes principle, applied to the change:
    - **Hunt:** read the diff and the code it touches; list candidate defects (correctness, races, data loss, security/privacy, auth, idempotency, error paths, regressions in callers).
@@ -114,6 +114,6 @@ After Sol's fix, a behaviour change gets a fresh `delegate_task` to Astra with t
 
 ## 5. Stop
 
-Agreed: APPROVE on the current behaviour diff, no blocker or should open, no concern of your own. If an item stays disputed after two replies, show both sides in 2-3 lines each, and the user decides.
+Agreed: APPROVE on the current behaviour diff, no blocker or should open, no concern of your own. If an item stays disputed after two replies, it blocks only when every reviewer on the PR calls it risky; otherwise the orchestrator decides and `## Review` shows both sides in 2-3 lines each and the decision.
 
 Report: rounds, what the review changed, diff size before and after, fixed and declined findings with reasons.
