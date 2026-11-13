@@ -62,6 +62,8 @@ if command -v systemctl >/dev/null 2>&1; then
   { systemctl --user daemon-reload && systemctl --user enable --now sid-health.timer >/dev/null 2>&1; } || echo "health timer: not enabled; check systemctl --user status sid-health.timer"
   cp "$S"/systemd/sid-docker-clean.service "$S"/systemd/sid-docker-clean.timer "$HOME/.config/systemd/user/"
   { systemctl --user daemon-reload && systemctl --user enable --now sid-docker-clean.timer >/dev/null 2>&1; } || echo "docker cleanup timer: not enabled; check systemctl --user status sid-docker-clean.timer"
+  cp "$S"/systemd/sid-mcp-reap.service "$S"/systemd/sid-mcp-reap.timer "$HOME/.config/systemd/user/"
+  { systemctl --user daemon-reload && systemctl --user enable --now sid-mcp-reap.timer >/dev/null 2>&1; } || echo "MCP reaper timer: not enabled; check systemctl --user status sid-mcp-reap.timer"
 fi
 # Kanzo card tags refresh on a timer.
 if command -v systemctl >/dev/null 2>&1 && command -v kanzo >/dev/null 2>&1; then

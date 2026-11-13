@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reap finished subagent MCP children and old servers without a matching thread."""
+"""Reap finished helper MCP servers and old servers without a matching thread."""
 import argparse
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +22,8 @@ class Process:
     rss: int
     argv: tuple
     state: str = 'S'
+    cwd: str | None = None
+    uid: int | None = None
 
 
 def process_table():
@@ -37,8 +39,12 @@ def process_table():
             stat = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
             argv = tuple(os.fsdecode(a) for a in (entry / 'cmdline').read_bytes().split(b'\0') if a)
             pid, start = int(entry.name), int(stat[19])
+            try:
+                cwd = str((entry / 'cwd').readlink())
+            except OSError:
+                cwd = None
             result[pid] = Process(pid, int(stat[1]), int(stat[2]), start,
-                                  uptime - start / ticks, int(stat[21]) * page, argv, stat[0])
+                                  uptime - start / ticks, int(stat[21]) * page, argv, stat[0], cwd, entry.stat().st_uid)
         except (OSError, ValueError, IndexError):
             continue  # Exited or inaccessible while taking the snapshot.
     return result
@@ -49,40 +55,68 @@ def app_server(p):
 
 
 def mcp_server(p):
-    if app_server(p) or any(Path(a).name == 'codex-code-mode' for a in p.argv):
+    if not p.argv or app_server(p):
         return False
-    command = ' '.join(p.argv)
-    return (any(p.argv[i:i + 3] == ('railway', 'mcp', 'proxy') or
-                (Path(p.argv[i]).name == 'railway' and p.argv[i + 1:i + 3] == ('mcp', 'proxy'))
-                for i in range(len(p.argv) - 2)) or
-            any('rea-agents' in a or Path(a).name in ('node_repl', 'cua_repl', 'launch_codex_app_tools_mcp') or
-                re.search(r'(?:^|/)mcp/(?:[^/]+/)*launch\.mjs$', a) for a in p.argv))
+    executable = Path(p.argv[0])
+    if executable in (Path('/usr/lib/chatgpt/resources/cua_node/bin/node_repl'),
+                      Path('/usr/lib/chatgpt/resources/cua_node/bin/cua_repl')):
+        return True
+    if executable.name == 'railway' and p.argv[1:] == ('mcp', 'proxy'):
+        return True
+    # npm rewrites /proc/cmdline to a single process title on this machine.
+    rea = r'rea-agents@[^\s/]+'
+    if (len(p.argv) == 1 and re.fullmatch(r'npm exec ' + rea + r' mcp', p.argv[0]) or
+            executable.name == 'npm' and len(p.argv) == 4 and
+            p.argv[1] == 'exec' and re.fullmatch(rea, p.argv[2]) and p.argv[3] == 'mcp'):
+        return True
+    # Only executable/script positions count, never arbitrary argv keywords.
+    script = p.argv[1] if executable.name == 'node' and len(p.argv) >= 2 else p.argv[0]
+    path = Path(script)
+    if not path.is_absolute():
+        if p.cwd is None:
+            return False
+        path = Path(p.cwd) / path
+    try:
+        path = path.resolve()
+        roots = (Path.home() / '.codex', Path.home() / '.cache/codex-runtimes')
+        installed = any(path.is_relative_to(root.resolve()) for root in roots)
+    except (OSError, RuntimeError):
+        return False
+    return installed and (path.name == 'launch_codex_app_tools_mcp' or
+                          path.name == 'launch.mjs' and 'mcp' in path.parts)
+
+
+def user_systemd(p):
+    return (p.uid == os.getuid() and p.argv in
+            (('/usr/lib/systemd/systemd', '--user'), ('/lib/systemd/systemd', '--user')))
 
 
 @dataclass(frozen=True)
 class Thread:
-    first_run: float
+    requested_at: float
     title: str
     running: bool
     subagent: bool
+    operator: bool
 
 
 def codex_threads(database, emit):
     try:
         with sqlite3.connect(Path(database).resolve().as_uri() + '?mode=ro', uri=True, timeout=0.2) as db:
             rows = db.execute("""
-                SELECT min(r.requested_at), t.title,
-                       max(r.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')),
-                       json_extract(t.payload_json, '$.lineage.parentThreadId') IS NOT NULL
+                SELECT r.requested_at, t.title,
+                       max(r.status IN ('queued', 'preparing', 'starting', 'running', 'waiting'))
+                           OVER (PARTITION BY t.thread_id),
+                       json_extract(t.payload_json, '$.lineage.parentThreadId') IS NOT NULL,
+                       json_extract(t.payload_json, '$.createdBy') = 'user'
                 FROM orchestration_v2_projection_threads t
                 JOIN orchestration_v2_projection_runs r ON r.thread_id = t.thread_id
                 WHERE r.provider_instance_id = 'codex'
-                GROUP BY t.thread_id
                 ORDER BY t.thread_id
             """).fetchall()
-        return [Thread(datetime.fromisoformat(first.replace('Z', '+00:00')).timestamp(),
-                       title, bool(running), bool(subagent))
-                for first, title, running, subagent in rows]
+        return [Thread(datetime.fromisoformat(requested.replace('Z', '+00:00')).timestamp(),
+                       title, bool(running), bool(subagent), bool(operator))
+                for requested, title, running, subagent, operator in rows]
     except (sqlite3.Error, OSError, ValueError, TypeError, AttributeError) as error:
         emit(f'Skipped: T3 database cannot be read: {error}')
         return None
@@ -90,16 +124,17 @@ def codex_threads(database, emit):
 
 def decision(p, threads, now):
     started = now - p.age
-    matches = [t for t in threads if 0 <= started - t.first_run <= 120]
+    matches = [t for t in threads if 0 <= started - t.requested_at <= 120]
     # Threads started within seconds of each other (parallel reviewers) make the match ambiguous,
     # so a running thread that could own the server keeps it until that thread finishes.
     if any(t.running for t in matches):
         return False, 'running thread'
-    thread = max(matches, key=lambda t: t.first_run) if matches else None
+    thread = max(matches, key=lambda t: t.requested_at) if matches else None
     if thread is not None:
-        if not thread.subagent:
+        if thread.operator:
             return False, 'operator thread'
-        return True, f'subagent {thread.title} finished'
+        kind = 'subagent' if thread.subagent else 'agent thread'
+        return True, f'{kind} {thread.title} finished'
     if p.age > 7200:
         return True, f'no thread, {int(p.age // 3600)}h old'
     return False, 'no thread, too young'
@@ -116,17 +151,21 @@ def reap(database, dry=False, table=process_table, send=os.kill, wait=time.sleep
         return 0
     snapshot_time = now()
     initial = table()
-    parents = {p.pid: p for p in initial.values() if app_server(p)}
-    candidates = [p for p in initial.values() if p.ppid in parents and mcp_server(p)]
+    parents = {p.pid: p for p in initial.values() if app_server(p) or user_systemd(p)}
+    candidates = [p for p in initial.values()
+                  if (p.ppid in parents or p.ppid == 1) and mcp_server(p)]
     stopped, freed, failed = 0, 0, False
     pending = []
     planned_count, planned_rss = 0, 0
     for p in candidates:
         # Refresh both identity and ownership immediately before signalling.
         current = table()
-        if (not same(p, current) or not same(parents[p.ppid], current) or
+        if (not same(p, current) or
+                p.ppid != 1 and (not same(parents[p.ppid], current) or
+                                 not (app_server(current[p.ppid]) or user_systemd(current[p.ppid]))) or
                 current[p.pid].ppid != p.ppid or current[p.pid].pgid != p.pgid or
-                current[p.pid].argv != p.argv or not app_server(current[p.ppid])):
+                current[p.pid].argv != p.argv or current[p.pid].cwd != p.cwd or
+                current[p.pid].uid != p.uid):
             continue
         # Re-read run state before each signal, so a resumed thread is protected.
         threads = codex_threads(database, emit)
