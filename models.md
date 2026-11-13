@@ -6,31 +6,32 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 
 ## Core roles
 
-- orchestrator: claudesahitya / claude-opus-5-5 / medium
-- claude fallback: claudeAgent_claude_2 / claude-opus-5-5 / medium (only after a usage or rate limit on the orchestrator's instance; same model, never a different one)
-- implementer: codex / gpt-6.1-sol / high
+- orchestrator: claudeAgent / claude-opus-5-5 / medium
+- claude fallback: claudeAgent_claude_2 / claude-opus-5-5 / medium (only after a usage or rate limit on the orchestrator's instance; same model, never a different one; not set up in T3 as of 2026-11-13: `orchestrator_capabilities` lists `claudeAgent` only)
+- implementer: codex / gpt-6.1-sol / high (logic: server, runtime, data and tests; visible UI goes to the ui builder)
+- ui builder: claudeAgent / claude-opus-5-5 / medium (writes everything a user can see, in its own worktree, to the `ui-lead` rules; user 2026-11-13: "yes opus for ui")
 - hardest tasks: codex / gpt-6.1-sol / xhigh
-- bug pass: cursor / composer-2.5 / fastMode=false (first, before any review; pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix; user 2026-11-01)
+- bug pass: cursor / composer-2.5 / fastMode=false (alongside Astra since 2026-11-13; pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix; user 2026-11-01)
 - review panel: none (user 2026-11-01: Sol → bug pass → Astra directly; Muse stays on the council)
-- reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; Claude takes the final call, Sol fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
-- ui lead: claudesahitya / claude-opus-5-5 / medium (judges all visible UI before other review and does the final test; writes no code; user 2026-11-01; see the `ui-lead` skill)
+- reviewer: codex / gpt-6-astra / medium (alongside the bug pass since 2026-11-13; its approval of the head commit is the merge verdict; Claude takes the final call, the builder fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
+- ui lead: claudeAgent / claude-opus-5-5 / medium (the orchestrator: judges all visible UI before other review and does the final test; the ui builder writes it; user 2026-11-01; see the `ui-lead` skill)
 - screenshots: codex / gpt-6.1-terra / medium (low stopped after two shots and posted nothing, 2026-11-01; before and after shots in T3's in-app browser, posted on the Kanzo card; user 2026-11-01)
 - pr bot: chatgpt-codex-connector (GitHub app; on request only since user 2026-11-01: comment `@codex review` on risky PRs, such as auth, payments, data, migrations or a PR that skipped review, then merge with `sid-merge.sh --bot`; open bot threads always block)
-- judgment and prose: claudesahitya / claude-opus-5-5 / medium
+- judgment and prose: claudeAgent / claude-opus-5-5 / medium
 
 ## Panels (one subagent per entry)
 
-- council: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; codex / gpt-6-astra / medium; codex / gpt-6.1-terra / high; cursor / composer-2.5 / fastMode=false; opencode / opencode-go/muse-spark-1.3-contributor / high; opencode / opencode-go/deepseek-v4.1-flash / high (seven seats, user 2026-11-01; every seat plans the whole brief, no per-seat categories; the orchestrator synthesises and leads UI and UX itself)
-- council small: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; cursor / composer-2.5 / fastMode=false (smaller plans, user 2026-11-01)
+- council: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; codex / gpt-6-astra / medium; codex / gpt-6.1-terra / high; cursor / composer-2.5 / fastMode=false; opencode / opencode-go/muse-spark-1.3-contributor / high; opencode / opencode-go/deepseek-v4.1-flash / high (seven seats, user 2026-11-01; every seat plans the whole brief, no per-seat categories; the orchestrator synthesises and leads UI and UX itself)
+- council small: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; cursor / composer-2.5 / fastMode=false (smaller plans, user 2026-11-01)
 - interrogate reviewers: opencode / opencode-go/deepseek-v4.1-flash / low; opencode / opencode-go/muse-spark-1.3-contributor / high; codex / gpt-6.1-sol / high
-- arena runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
-- architect runners: claudesahitya / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
+- arena runners: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
+- architect runners: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
 
 ## Workers
 
 - swarm workers: opencode / opencode-go/deepseek-v4.1-flash / high; opencode / opencode-go/muse-spark-1.3-contributor / high (alternate)
 - explorers (how explorer, why investigators, reflect tooling): opencode / opencode-go/deepseek-v4.1-flash / high
-- explainers (how explainer, why synthesizer, reflect judgment): claudesahitya / claude-opus-5-5 / medium
+- explainers (how explainer, why synthesizer, reflect judgment): claudeAgent / claude-opus-5-5 / medium
 
 ## Notes
 

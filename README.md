@@ -4,16 +4,17 @@ Sid's agent stack: pstack's rigor with tstack's ship loop, set up for my models 
 
 - **From pstack** ([cursor/plugins/pstack](https://github.com/cursor/plugins/tree/main/pstack), MIT, by Lauren Tan): the playbooks, the principles, and the tools (`how`, `why`, `architect`, `interrogate`, `arena`, `swarm`, `unslop`, `blast-radius`, `tdd`, `show-me-your-work`…). They stay installed from upstream and run here through `docs/adapter.md`, so upstream fixes keep flowing.
 - **From tstack** ([t3dotgg/tstack](https://github.com/t3dotgg/tstack), MIT): `full-send`, `full-stop`, `council`, `file-pr`, `babysit-pr`, `takeover`, `modernize`, `leaving-pr-comments`, forked and tailored here. `sol-loop` became `review-loop`.
-- **New**: `sid-mode` (the entry point), `models.md` (one file for every role), `setup-sidstack`, `install.sh`.
+- **New**: `sid-mode` (the entry point), `models.md` (one file for every role), `rules.md` (the operator's standing orders, linked into every harness), the merge train (`sid-merge.sh`, `sid-train.sh`), the board sync (`sid-board.py`), `setup-sidstack`, `install.sh`.
 
 ## The idea
 
 sstack is three things on T3 Code:
 
-- **Claude Opus judges UI and UX:** Sol writes it to the `ui-lead` rules, Terra posts before and after screenshots on the card, and Opus decides before any other review.
+- **Claude Opus builds and judges UI and UX:** an Opus builder writes it to the `ui-lead` rules, Terra posts before and after screenshots on the card, and the orchestrator decides before any other review. Sol writes the logic.
 - **pstack is how we write:** code, tests, reviews and bug work follow its playbooks and principles as closely as this setup allows.
 - **Council is how we plan:** several models plan the work once, at the start, onto Kanzo cards, which are the source of truth.
-- **tstack's full send is how we ship:** fast and autonomous, from brief to merged PR.
+- **tstack's full send is how we ship:** fast and autonomous, from brief to merged PR. Ready PRs join a merge train: one gate for all of them, then they merge in order.
+- **Nobody has to remember:** `rules.md` reaches every model, `sid-mode.sh` holds the current arrangement, and the board moves itself.
 
 ## Use
 
@@ -25,11 +26,11 @@ sstack is three things on T3 Code:
 
 ## The board
 
-Kanzo at http://localhost:4242 is the source of truth, built from `kanzo/` in this repo (upstream v0.2.1 plus our changes, such as workspaces with a dropdown for each product). `install.sh` builds and installs it when `kanzo/` changes. Doing is coding, Review is the bug pass and Astra, Deployment is the gate, a manual Codex cloud review and waiting on deploy, and Done means checked on prod. `scripts/sid-card.py` sets labels and elapsed time, posts screenshots, and reads the user's comments.
+Kanzo at http://localhost:4242 is the source of truth, built from `kanzo/` in this repo (upstream v0.2.1 plus our changes, such as workspaces with a dropdown for each product). `install.sh` builds and installs it when `kanzo/` changes. Doing is coding, Review is the bug pass and Astra, Deployment is the merge train and waiting on deploy, and Done means live on prod. `scripts/sid-board.py` moves the cards every 20 seconds from facts: running subagents whose titles name a card, PRs whose bodies name it, the train, and the deploy. It tags idle cards and restarts a thread that stopped with unfinished work (`touch ~/.config/sidstack/watchdog.off` turns that off). `sid-board.py status` prints where everything stands. `scripts/sid-card.py` posts screenshots and reads the user's comments.
 
 ## Roles
 
-See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the code; Composer runs a bug pass and Astra reviews, returning one list; every model runs as a subagent; the Codex GitHub bot reviews risky PRs; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.
+See `models.md` (the only place models and efforts are set). Claude Opus orchestrates, triages every review finding and takes the final call; GPT-6.1 Sol writes the logic and an Opus builder writes visible UI; Composer runs a bug pass while Astra reviews, and Astra's approval is the merge verdict; every model runs as a subagent; the Codex GitHub bot reviews risky PRs; the council is Claude, Sol, Astra, Terra, Composer, Muse and DeepSeek, and the orchestrator synthesises.
 
 ## Install
 
@@ -50,7 +51,7 @@ and `scripts/upstream-check.sh` for upstream change reports.
 
 ## How sstack itself ships
 
-Like pstack: each change is its own PR from a worktree, never tangled with feature work. `install.sh` adds a git hook that refuses a direct push to main, except a change to `models.md` alone, which `/setup-sidstack` makes. `git push --no-verify` bypasses it, so it stops accidents only. `.sidstack/gate.sh` runs `scripts/check.sh`, which validates the skills. Composer and Astra review it, and `sid-merge.sh` merges it. Changes to the merge scripts also need the PR bot. Then run `git -C ~/.local/share/sidstack pull --ff-only`, because the installed scripts run from that checkout. To let T3 make the worktree, start the thread in T3's `sstack` project; delegates can only use their parent thread's project.
+Like pstack: each change is its own PR from a worktree, never tangled with feature work. `install.sh` adds a git hook that refuses a direct push to main, except a change to `models.md` or `rules.md` alone, which `/setup-sidstack` and the `nightly-rules` skill make. `git push --no-verify` bypasses it, so it stops accidents only. `.sidstack/gate.sh` runs `scripts/check.sh`, which validates the skills. Composer and Astra review it, and `sid-merge.sh` merges it. Changes to the merge scripts also need the PR bot. Then run `git -C ~/.local/share/sidstack pull --ff-only`, because the installed scripts run from that checkout. To let T3 make the worktree, start the thread in T3's `sstack` project; delegates can only use their parent thread's project.
 
 The local gate is the only CI. Hosted CI is paused until a provider is chosen.
 

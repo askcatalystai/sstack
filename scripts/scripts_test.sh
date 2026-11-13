@@ -70,6 +70,9 @@ git push -q origin HEAD:refs/heads/work 2>/dev/null; ok "a branch still pushes" 
 git push -q --no-verify origin main 2>/dev/null; ok "--no-verify bypasses it" "$?" 0
 echo m > models.md; git add -A; git commit -qm models; git push -q origin main 2>/dev/null; ok "a models.md change alone can push" "$?" 0
 echo n > models.md; echo b > b; git add -A; git commit -qm both; git push -q origin main 2>/dev/null; ok "models.md with anything else can't" "$?" 1
+git reset -q --hard HEAD~1; echo r > rules.md; git add -A; git commit -qm rules; git push -q origin main 2>/dev/null; ok "a rules.md change alone can push" "$?" 0
+echo n > models.md; echo s > rules.md; git add -A; git commit -qm two; git push -q origin main 2>/dev/null; ok "models.md and rules.md together can push" "$?" 0
+echo t > rules.md; echo b > b; git add -A; git commit -qm both; git push -q origin main 2>/dev/null; ok "rules.md with anything else can't" "$?" 1
 git reset -q --hard HEAD~1; git rm -q models.md; git commit -qm gone; git push -q --no-verify origin main; echo code > code; git add -A; git commit -qm code; git push -q --no-verify origin main; git mv code models.md; git commit -qm renamed; git push -q origin main 2>/dev/null; ok "a rename into models.md can't hide a deleted file" "$?" 1
 git reset -q --hard HEAD~1; git push -q origin --delete main 2>/dev/null; ok "deleting main is refused" "$?" 1
 exit $fail

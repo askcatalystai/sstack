@@ -43,16 +43,19 @@ one appears.
 ## Roles
 
 Models come from `~/.local/share/sidstack/models.md`. The implementer writes
-the change in its own worktree (never the main checkout); the orchestrator
-reviews it, makes small fixes directly, and owns the PR. A role the user names
-for the session wins.
+logic in its own worktree (never the main checkout), the `ui builder` (Opus)
+writes anything a user can see, and the orchestrator reviews it, makes small
+fixes directly, and owns the PR. Read `~/.local/share/sidstack/rules.md` first.
+`scripts/sid-mode.sh` prints the current arrangement and beats these defaults;
+a role the user names for the session wins, and goes there with `sid-mode.sh set`.
 
 ## Steps
 
 T3 Code is the orchestrator: every worker is a `delegate_task` thread, the PR is
-linked to this thread, and `watch_pull_request` wakes you. Two scripts in
-`~/.local/share/sidstack/scripts/` hold the checks that shouldn't depend on
-judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
+linked to this thread, and `watch_pull_request` wakes you. In
+`~/.local/share/sidstack/scripts/`, `sid-merge.sh [--check] <pr>` holds the
+checks that shouldn't depend on judgment and queues the PR for the merge train.
+`sid-gate.sh <branch>` runs the same gate on one branch, as an optional early check.
 
 1. **Define done and pick the playbook.** State the exit condition as something you
    can check. Match the task to a pstack playbook (`<pstack>/skills/poteto-mode/playbooks/`:
@@ -61,70 +64,79 @@ judgment: `sid-gate.sh <branch>` and `sid-merge.sh [--check] <pr>`.
    for code crossing a function boundary, use `architect`. Skip a step only by saying why.
    If an answer is a fact you can observe by running something, sketch it instead of asking.
 2. **Brief and code.** Anything a user can see follows the `ui-lead` skill: Terra's before
-   screenshots come first, and Opus judges Sol's UI before any other review. The brief has the user's goal in their words, the smallest change
+   screenshots come first, an Opus builder writes it, and the orchestrator judges it before any other review. The brief has the user's goal in their words, the smallest change
    that meets it, the evidence that proves it's done, the area to work in, and any files
    parallel PRs own. It tells the worker to follow that playbook and the Tests section
-   below. Use `delegate_task` on the implementer role with `isolation: "worktree"`.
+   below. Use `delegate_task` on the implementer role, or the `ui builder` role for
+   visible UI, with `isolation: "worktree"`. Put the card key in its title: that is how
+   the board finds it. Every brief starts "Read ~/.local/share/sidstack/rules.md first.".
    T3 makes the worktree and a `t3/...` branch but doesn't run setup scripts for
    delegates, so the brief starts with the repo's setup command (project
-   instructions name it). Sol reports its `pwd` and branch; it doesn't commit. Before replying it runs what the gate will run for its diff (the repo's changed-tests command, eslint, typecheck), because a gate is minutes of everyone's queue. Check the gate's exit status before opening a PR or writing "gate passed" in it.
+   instructions name it). The builder reports its `pwd` and branch; it doesn't commit. Before replying it runs what the gate will run for its diff (the repo's changed-tests command, eslint, typecheck), because a PR that fails in the train costs every PR in it a second gate.
    For a trivial change Claude may do this in a worktree itself.
    **Read the diff when it returns, before any review.** If it's bigger than the brief,
    touches unrelated files or is the wrong approach, scrap it (see "Scrap") and start a
    fresh worker with a sharper brief. Then run the slop pass: Claude Code's `simplify`,
    then `no-comments` (`comment-sicko`), then your own read for dead code and needless guards.
-3. **Review** (see `review-loop`): Composer bug pass, then Astra, each a
-   `delegate_task` whose brief names Sol's worktree path. Claude takes the final
-   call, Sol fixes once through a new `delegate_task` naming the same path, a fix that
-   changes behaviour goes back to Astra for the changed code, and Claude verifies each
-   fix. Skip the fix pass if Astra approved cleanly. If any step is skipped, the PR's
+3. **Review** (see `review-loop`). First Claude commits, pushes and opens the PR
+   (`file-pr`, `link_pull_request`, the card key in the body), so the review covers a
+   commit and its result can be recorded. Then Composer's bug pass and Astra run at the
+   same time, each a `delegate_task` whose brief names the worktree path and the commit.
+   Claude takes the final call, the builder fixes once through a new `delegate_task`
+   naming the same path, a fix that changes behaviour goes back to Astra for the changed
+   code, and Claude verifies each fix. Skip the fix pass if Astra approved cleanly. When
+   Astra approves the head commit, record it at once with `sid-verdict.sh` (step 4): that
+   is the merge verdict, with no separate verifier run. If any step is skipped, the PR's
    `## Review` section says "skipped" and why, and `sid-merge.sh` then requires the bot.
 4. **Prove it.** Run the real thing (see "Proof"). The author doesn't verify its own
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
    PR's `## Proof` section, naming the commit it covers: commands, pass counts,
    screenshot paths, and what wasn't checked. It can't be a copy of the review notes.
-   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is the bug pass, or Opus when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Once the PR exists, record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
+   This comes after the last fix. Claude commits first, and the brief names that commit. The verifier checks `git status` is clean and `git rev-parse HEAD` matches, runs the change, and ends with the commit and `PASS`, `PASS+NOTES` or `FAIL`. The verifier is Astra, whose review runs the covering tests on the head commit, or the orchestrator when it tests visible UI in the local app before merge, and never whoever wrote the code; tests after deploy come too late. Record it from the delegate's result with `sid-verdict.sh <pr> <tested-commit> <result> <verifier> <its childThreadId> "<what it ran and saw>"`. It refuses a commit whose patch isn't the PR's, and any later code change needs a new verdict, whitespace included.
    Run checks so a failure stops you before you commit or push.
-5. **Ship.** Claude commits in the worktree and pushes with `--force-with-lease`.
-   Run `sid-gate.sh <branch>` under `systemd-run --user` when available, so a T3
-   restart doesn't kill it, and wait with a background check and
-   `t3_background_wait`. Open the PR (`file-pr`) and `link_pull_request`.
-   If it needs the PR bot, `watch_pull_request` and end the turn. If not, go straight to
-   step 7: with no CI and no bot, nothing would wake you.
-6. **Risky PRs only: ask the PR bot.** For auth, payments, data, migrations, `commerce/`,
+5. **Ship.** Push the last fixes with `--force-with-lease` and renew `## Proof` for
+   the head commit. If the PR needs the PR bot, `watch_pull_request` and end the turn.
+   If not, go straight to step 7: with no CI and no bot, nothing would wake you.
+6. **Risky PRs only: ask the PR bot,** unless `sid-mode.sh get bot` says `off`. For auth, payments, data, migrations, `commerce/`,
    the gate, or a PR that skipped a review step, comment `@codex review`. `sid-merge.sh`
    works out most of these from the paths and forces it; add `--bot` for what it can't see. Findings:
    Claude triages per `<pstack>/skills/poteto-mode/references/bugbot-triage.md` (fix,
    dismiss with a reason, or ask); noise doesn't get code. Sol fixes once, Claude verifies,
    push, resolve the threads. On any PR, conflicts: merge the default branch in the
-   worktree and gate again.
+   worktree and run `sid-merge.sh` again.
 7. **Merge.** Run `sid-merge.sh --check <pr>` first. If it prints `proof-failures:` lines, read them and decide from the plan: back to the bug pass, review or coding, or go ahead and say why on the card. No fixed rule. `sid-merge.sh <pr>` refuses until the PR is really ready (`## Proof` must
-   name the head commit, so a later push needs fresh proof), reruns the
-   gate if the default branch moved, squash-merges using the PR body as the commit
-   message, and removes the worktree and branch. Post the `Gate-Passed` line it prints on the card. Then `unwatch_pull_request`.
+   name the head commit, so a later push needs fresh proof), then queues it for the
+   merge train and waits for the result. The train gates every queued PR together,
+   once, on the latest main, squash-merges them in order using each PR body as the
+   commit message, and removes the worktree and branch. Run it in the background and
+   wait with `t3_background_wait`; the train runs under systemd, so it finishes even if
+   this thread doesn't. Exit 1 means this PR failed the gate (it prints the log tail),
+   3 a conflict with main, and 4 that main itself is red: fix main first, don't compare
+   failures by hand. Then `unwatch_pull_request`.
 8. **Check it live** once deployed, then report: the PR link, the merge commit,
    your proof, what was checked on prod and what wasn't, and each decision you
    made for the user.
 
 If you stop before the merge, call `unwatch_pull_request` first.
 
-If the project is on the user's Kanzo board (http://localhost:4242, MCP `kanzo`),
-keep its card current: Doing while it's being coded; Review for the Composer bug pass and
-Astra; Deployment for the gate, a manual Codex cloud review, and waiting on deploy; Done
-once it's merged and checked on prod, with a comment linking the PR. Also comment at every
-step (worker started or finished, review findings, gate result, PR opened, bot result,
-merge, prod check): what happened, what's next, and anything waiting on the user. The
+The Kanzo board (http://localhost:4242, MCP `kanzo`) follows the work by itself:
+`scripts/sid-board.py` sets each card from facts every 20 seconds. A running subagent
+whose title names the card puts it in Doing or Review, a PR whose body names the card
+links it, the train puts it in Deployment, and the deploy puts it in Done. So name the
+card key (`chat#299`) in every `delegate_task` title and PR body, and don't move cards
+by hand. Your part is the comments a script can't write: review findings and what you
+decided, what you're waiting on, anything waiting on the user, and the prod check. The
 user follows work from the board and may not read the chat. The card is the
 record of what the work asks for; Kanzo is the source of truth, not a plan file.
+`sid-board.py status` prints where every card stands.
 
-**Don't wait on Deployment.** Review and local testing are finished by then, so the next card starts as soon as a card reaches Deployment. If it depends on that card's unmerged work, branch from that card's branch; once the parent squash-merges, `git rebase --onto origin/main <parent-head>` before its gate. Its Deployment queue merges in order, and prod checks catch up after each deploy. Until then `sid-merge.sh --check` can pass a stacked PR, but `sid-merge.sh` won't merge it until its base is main.
+**Don't wait on Deployment.** Review and local testing are finished by then, so the next card starts as soon as a card reaches Deployment. If it depends on that card's unmerged work, branch from that card's branch; once the parent squash-merges, `git rebase --onto origin/main <parent-head>` before `sid-merge.sh`. Its Deployment queue merges in order, and prod checks catch up after each deploy. Until then `sid-merge.sh --check` can pass a stacked PR, but `sid-merge.sh` won't merge it until its base is main.
 
-Card labels are coloured provider, model and reasoning, plus time in the column, and the
-`#` is the `pr-<n>` tag. Put neither in the title. Each time a worker starts, show it on the card with
-`scripts/sid-card.py work <oe#n> <provider> <model> <effort> [status]`. While the PR
-bot reviews, use `codex-bot chatgpt-codex-connector - deployment`. Doing and review cards
-show those tags plus time in the column; a one-minute timer (`sid-card.timer`)
-refreshes it, and moving a card elsewhere clears them.
+Card labels show who is working (provider, model and effort), what the card is doing
+now (`queued`, `gating`, `deploying`, `idle 40m`, `needs-you`), time in the column, and
+the `#` is the `pr-<n>` tag. The board sets all of them; put none in the title. A thread
+that stops with unfinished work gets a "continue" from the watchdog
+(`sid-board.py nudge`), up to three times, and then the card is flagged for the user.
 
 ## Proof
 
@@ -193,7 +205,8 @@ Full confidence means all of these are true on the latest commit:
 - Each review finding is fixed or dismissed with a written reason. The `pr bot` in
   `models.md` reviews risky PRs, and `sid-merge.sh` requires its review of the head
   commit for those. Open bot threads block any merge.
-- The deploy gate passed on the head merged onto the latest default branch.
+- The train's gate passed on the head merged with the latest default branch and the
+  other queued PRs.
 - No human review still requests changes.
 - The branch is up to date with the default branch, and GitHub reports it as
   mergeable.
