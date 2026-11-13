@@ -23,7 +23,6 @@ gate_repo || exit 1
 cd "$repo" || exit 1
 git fetch -q origin "$default" || exit 1
 main=$(git rev-parse "origin/$default")
-if [ "$wait_gate" = false ] && grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
 exec 8>"$train/queue.lock"; flock 8
 exec 9>"$gate/lock"
 if [ "$wait_gate" = true ]; then
@@ -33,7 +32,15 @@ if [ "$wait_gate" = true ]; then
   git fetch -q origin "$default" || exit 1
   main=$(git rev-parse "origin/$default")
 else
-  compgen -G "$train/queue/*.req" >/dev/null && exit 0
+  if compgen -G "$train/queue/*.req" >/dev/null; then
+    exec 7>"$train/runner.lock"
+    if flock -n 7; then
+      flock -u 7
+      start_runner
+    fi
+    exit 0
+  fi
+  if grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
   flock -n 9 || exit 0
 fi
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$gate/health.pid"

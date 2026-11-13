@@ -8,7 +8,11 @@ ready() {
   # GitHub answers UNKNOWN until it has worked out mergeability, and a just-pushed head has checks still pending.
   for wait in 0 3 5 10 15 30 30 30; do
     sleep "$wait"
-    gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
+    gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName,autoMergeRequest > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
+    if python3 -c 'import json,sys;sys.exit(not bool(json.load(open(sys.argv[1])).get("autoMergeRequest")))' "$tmp/pr.json"; then
+      echo "#$pr has auto-merge armed; run gh pr merge $pr --disable-auto"
+      exit 1
+    fi
     [ "$(field mergeable)" != UNKNOWN ] && ! python3 -c 'import json,sys;sys.exit(any(not (c.get("conclusion") or c.get("state") not in (None,"PENDING","EXPECTED")) for c in json.load(open(sys.argv[1]))["statusCheckRollup"]) is False)' "$tmp/pr.json" && break
   done
   # The files API handles PRs too big for `gh pr diff`, and a rename counts under both its names. It stops at 3000 files.
@@ -38,4 +42,20 @@ ready_verdict() {
     *) echo "no verdict on patch ${patch:0:8}: have a verifier who didn't write it run the change, then sid-verdict.sh $pr <tested-commit> <PASS|PASS+NOTES|FAIL> <verifier> <t3-thread-id> \"<what it ran and saw>\""; exit 8;;
   esac
   verified="Verified-By: $(printf '%s' "$verdict" | cut -f5) $result, T3 thread $(printf '%s' "$verdict" | cut -f6)"
+}
+
+# Refused/unconfirmed CLI calls can arm auto-merge. Re-read after disarming,
+# including when the disable command itself fails: only observed state counts.
+disarm_auto() {
+  local pr=$1 snapshot
+  snapshot=$(gh pr view "$pr" --repo "$gh" --json autoMergeRequest) || {
+    echo "could not confirm auto-merge is off; run gh pr merge $pr --disable-auto"; return 1;
+  }
+  if ! python3 -c 'import json,sys;sys.exit(bool(json.load(sys.stdin)["autoMergeRequest"]))' <<< "$snapshot"; then
+    gh pr merge "$pr" --repo "$gh" --disable-auto >/dev/null 2>&1
+    snapshot=$(gh pr view "$pr" --repo "$gh" --json autoMergeRequest) || snapshot=
+    if ! python3 -c 'import json,sys;sys.exit(bool(json.load(sys.stdin)["autoMergeRequest"]))' <<< "$snapshot" 2>/dev/null; then
+      echo "could not confirm auto-merge is off; run gh pr merge $pr --disable-auto"; return 1
+    fi
+  fi
 }

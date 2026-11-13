@@ -33,6 +33,7 @@ with open(p+'.tmp', 'w') as f:
 os.replace(p+'.tmp', p)
 PY
 }
+hook_sequence=0
 id=0; lane=; main=; started=$(date -u +%FT%TZ)
 finish() {
   id=$(cat "$train/sequence" 2>/dev/null || echo 0)
@@ -107,22 +108,24 @@ start_health() {
   after_merge health
 }
 after_merge() {
-  local gated_tree=$1 newmain hookwt unit
+  local gated_tree=$1 stamp_log=${2:-} newmain hookwt unit newtree
   local -a launch
   git fetch -q origin "$default" || return
   newmain=$(git rev-parse "origin/$default")
-  if [ "$gated_tree" = health ]; then
+  newtree=$(git rev-parse "$newmain^{tree}") || return 1
+  if [ "$newtree" != "$gated_tree" ]; then
     grep -q '^pass ' "$gate/health/$newmain" 2>/dev/null || return 0
-  elif [ -n "${log:-}" ] && [ "$(git rev-parse "$newmain^{tree}")" = "$gated_tree" ]; then
-    printf 'pass %s\n%s\n' "$lane" "$log" > "$gate/health/$newmain.tmp"
+  elif [ -n "$stamp_log" ]; then
+    printf 'pass %s\n%s\n' "$lane" "$stamp_log" > "$gate/health/$newmain.tmp"
     mv "$gate/health/$newmain.tmp" "$gate/health/$newmain"
   fi
   [ "$(git ls-tree "$newmain" .sidstack/after-merge.sh | cut -d' ' -f1)" = 100755 ] || return 0
   # A private snapshot lets the next train reuse verify while deployment keeps running.
-  hookwt=$repo-wt/after-merge-$id
+  hook_sequence=$((hook_sequence+1))
+  hookwt=$repo-wt/after-merge-$id-$hook_sequence
   launch=(setsid -f env PATH="$PATH")
-  if [ -n "${INVOCATION_ID:-}" ] || { [ -z "${SID_TRAIN_INLINE+x}" ] && command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1; }; then
-    unit=sid-after-merge-$(printf '%s' "$common" | sha256sum | cut -c1-16)-$id
+  if { [ -n "${INVOCATION_ID:-}" ] || [ -z "${SID_TRAIN_INLINE+x}" ]; } && command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+    unit=sid-after-merge-$(printf '%s' "$common" | sha256sum | cut -c1-16)-$id-$hook_sequence
     launch=(systemd-run --user --collect --unit="$unit" --setenv=PATH="$PATH" --setenv=HOME="$HOME"
       --property="StandardOutput=append:$train/after-merge.log" --property="StandardError=append:$train/after-merge.log")
   fi
@@ -253,6 +256,9 @@ PY
         printf '%s\n%s\n' "$expected" "$member_tree" > "$train/queue/$pr.merge"
         rc=1
         gh pr merge "$pr" --repo "$gh" --squash --match-head-commit "$head" --subject "$title (#$pr)" --body "$message" >/dev/null && { rc=0; break; }
+        if ! message=$(disarm_auto "$pr"); then
+          result_for "$pr" 1 "$message"; needs_rebuild=true; break
+        fi
       done
       if [ "$needs_rebuild" = true ]; then
         [ ! -f "$train/queue/$pr.req" ] || remaining+=("$pr")
@@ -261,6 +267,9 @@ PY
       if [ "$rc" != 0 ]; then result_for "$pr" 1 "merge refused for #$pr after retries"; needs_rebuild=true; continue; fi
       gh pr view "$pr" --repo "$gh" --json state,headRefOid,mergeCommit,autoMergeRequest > "$train/active/$pr.json"; rc=$?
       if [ "$rc" != 0 ] || ! oid=$(merged_oid "$pr" "$head"); then
+        if ! message=$(disarm_auto "$pr"); then
+          result_for "$pr" 1 "$message"; needs_rebuild=true; continue
+        fi
         # A separate commit read can still confirm a landing after a failed status read.
         oid=
         if [ "$rc" != 0 ]; then
@@ -270,15 +279,6 @@ PY
           result_for "$pr" 5 "merged #$pr as $oid, but the landed tree could not be verified"
           start_health; unsafe=true
         else
-          if python3 - "$train/active/$pr.json" <<'PYTHON'
-import json, sys
-try:
-    p = json.load(open(sys.argv[1]))
-    sys.exit(not (p['state'] == 'OPEN' and p.get('autoMergeRequest')))
-except (ValueError, OSError):
-    sys.exit(1)
-PYTHON
-          then gh pr merge "$pr" --repo "$gh" --disable-auto >/dev/null 2>&1; fi
           result_for "$pr" 1 'the merge did not complete; nothing was cleaned up'
         fi
         needs_rebuild=true; continue
@@ -295,7 +295,7 @@ PYTHON
       merged=$((merged+1)); expected=$oid
       cleanup_branch "$branch"
     done
-    if [ "$merged" != 0 ] && [ "$unsafe" = false ]; then after_merge "$tree"; fi
+    if [ "$merged" != 0 ] && [ "$unsafe" = false ]; then after_merge "$tree" "$log"; fi
     if [ "$needs_rebuild" = false ]; then history merged; return; fi
     history failed
     candidates=("${remaining[@]}")
