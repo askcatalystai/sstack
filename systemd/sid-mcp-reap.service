@@ -1,0 +1,8 @@
+[Unit]
+Description=Stop MCP servers left by finished Codex threads
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/sidstack/env
+ExecStart=%h/.local/share/sidstack/scripts/sid-mcp-reap.sh
+TimeoutStartSec=2min

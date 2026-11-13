@@ -1,0 +1,10 @@
+[Unit]
+Description=Stop MCP servers left by finished Codex threads, hourly
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=1h
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

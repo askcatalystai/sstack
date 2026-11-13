@@ -979,4 +979,379 @@ touch "$DOCKER_TEST_DIR/missing-image"; : > "$DOCKER_TEST_DIR/calls"
 "$here/sid-db.sh" start > "$t/db-missing" 2>&1; ok "missing image fails instead of pulling" "$?" 1
 grep -q 'not pulled' "$t/db-missing"; ok "missing image explains the failure" "$?" 0
 grep -Eq '"(pull|run)"' "$DOCKER_TEST_DIR/calls"; ok "missing image never pulls or runs" "$?" 1
+
+# MCP reaper: synthetic process identities and signals only; never signal host MCPs.
+SID_REAP_MODULE_DIR="$here" python3 - <<'PY'
+from dataclasses import replace
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import signal
+import sqlite3
+import sys
+import tempfile
+import unittest
+sys.path.insert(0, os.environ['SID_REAP_MODULE_DIR'])
+import sid_mcp_reap as reaper
+
+class ReaperTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / 'state.sqlite'
+        with sqlite3.connect(self.db) as db:
+            db.execute('CREATE TABLE orchestration_v2_projection_threads '
+                       '(thread_id TEXT, title TEXT, payload_json TEXT)')
+            db.execute('CREATE TABLE orchestration_v2_projection_runs '
+                       '(thread_id TEXT, requested_at TEXT, status TEXT, provider_instance_id TEXT)')
+        self.now = 1800000000
+        self.rows = {}
+        self.calls, self.waits, self.output = [], [], []
+        self.add(100, 1, ('/opt/codex', 'app-server', '--listen', 'stdio://'))
+        self.add(101, 1, ('codex', 'app-server'))
+
+    def add(self, pid, parent, argv, age=7201, pgid=None):
+        self.rows[pid] = reaper.Process(pid, parent, pid if pgid is None else pgid,
+                                        pid * 10, age, 1024, tuple(argv))
+
+    def thread(self, name, age, running=False, subagent=False, provider='codex', status=None,
+               created_by='user'):
+        requested = datetime.fromtimestamp(self.now - age, timezone.utc).isoformat()
+        payload = {'createdBy': 'agent' if subagent else created_by}
+        if subagent:
+            payload['lineage'] = {'parentThreadId': 'parent'}
+        with sqlite3.connect(self.db) as db:
+            db.execute('INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?)',
+                       (name, name, json.dumps(payload)))
+            db.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)',
+                       (name, requested, status or ('running' if running else 'completed'), provider))
+
+    def run_reaper(self, dry=False, table=None, send=None):
+        def fake_kill(target, sig):
+            self.calls.append((target, sig))
+            # TERM-resistant processes force the five-second escalation path.
+            if sig == signal.SIGKILL:
+                self.rows = {pid: p for pid, p in self.rows.items()
+                             if not (p.pgid == -target if target < 0 else pid == target)}
+        return reaper.reap(self.db, dry, table or (lambda: self.rows.copy()),
+                           send or fake_kill, self.waits.append, self.output.append, now=lambda: self.now)
+
+    def test_selection_and_signal_targets(self):
+        commands = [('railway', 'mcp', 'proxy'), ('npm', 'exec', 'rea-agents@1', 'mcp'),
+                    ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), ('/usr/lib/chatgpt/resources/cua_node/bin/cua_repl',),
+                    ('node', str(Path.home() / '.codex/plugins/data/mcp/launch.mjs')), (str(Path.home() / '.cache/codex-runtimes/apps/launch_codex_app_tools_mcp'),)]
+        for i, cmd in enumerate(commands, 200):
+            self.add(i, 100 if i % 2 else 101, cmd, pgid=100 if i == 200 else i)
+        keep = [(300, 100, commands[0], 7200), (301, 100, commands[1], 50),
+                (302, 100, ('node', 'ordinary.js'), 9000), (303, 999, commands[0], 9000),
+                (304, 200, commands[2], 9000),
+                (305, 100, ('codex-code-mode', 'node_repl'), 9000),
+                (306, 100, ('node', '/a/not-mcp/launch.mjs'), 9000),
+                (307, 100, ('codex', 'app-server', '-c', 'rea-agents'), 9000)]
+        for pid, parent, argv, age in keep:
+            self.add(pid, parent, argv, age, pgid=100 if pid == 307 else None)
+        self.assertEqual(self.run_reaper(), 0)
+        targets = {200, -201, -202, -203, -204, -205}
+        self.assertEqual(set(self.calls), {(t, signal.SIGTERM) for t in targets} | {(abs(t), signal.SIGKILL) for t in targets})
+        self.assertEqual(set(self.rows), {100, 101, *(p[0] for p in keep)})
+        self.assertEqual(self.waits, [5])
+        self.assertIn('stopped 6 server(s); RSS freed 6144 bytes', self.output[-1])
+        self.assertEqual(sum(line.startswith('Stopped pid=') for line in self.output), 6)
+
+    def test_every_run_can_match_a_fresh_server(self):
+        for status in ('running', 'waiting', 'completed'):
+            with self.subTest(status=status):
+                with sqlite3.connect(self.db) as db:
+                    db.execute('DELETE FROM orchestration_v2_projection_threads')
+                    db.execute('DELETE FROM orchestration_v2_projection_runs')
+                self.thread('resumed child', age=20000, subagent=True)
+                requested = datetime.fromtimestamp(self.now - 8050, timezone.utc).isoformat()
+                with sqlite3.connect(self.db) as db:
+                    db.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)',
+                               ('resumed child', requested, status, 'codex'))
+                self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=8000)
+                self.calls.clear()
+                self.output.clear()
+                self.run_reaper()
+                self.assertEqual(bool(self.calls), status == 'completed')
+                reason = 'subagent resumed child finished' if status == 'completed' else 'running thread'
+                self.assertTrue(any('reason=' + reason in line for line in self.output))
+
+    def test_unfinished_thread_matching_later_run_blocks_closer_finished_thread(self):
+        self.thread('live child', age=20000, subagent=True, running=True)
+        requested = datetime.fromtimestamp(self.now - 8050, timezone.utc).isoformat()
+        with sqlite3.connect(self.db) as db:
+            db.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)',
+                       ('live child', requested, 'completed', 'codex'))
+        self.thread('closer finished child', age=8020, subagent=True)
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=8000)
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+
+    def test_only_user_created_threads_are_operator_threads(self):
+        for creator in ('agent', None, 'unknown', 'user'):
+            with self.subTest(creator=creator):
+                with sqlite3.connect(self.db) as db:
+                    db.execute('DELETE FROM orchestration_v2_projection_threads')
+                    db.execute('DELETE FROM orchestration_v2_projection_runs')
+                self.thread('top level', age=30, created_by=creator)
+                self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=20)
+                self.calls.clear()
+                self.output.clear()
+                self.run_reaper()
+                self.assertEqual(bool(self.calls), creator != 'user')
+                reason = 'operator thread' if creator == 'user' else 'agent thread top level finished'
+                self.assertTrue(any('reason=' + reason in line for line in self.output))
+
+    def test_project_lookalikes_and_keyword_arguments_are_kept(self):
+        commands = [('/project/node_repl',), ('/project/cua_repl',),
+                    ('node', '/project/mcp/launch.mjs'), ('/project/launch_codex_app_tools_mcp',),
+                    ('python', '/project/run-diagnostic.py', 'rea-agents'),
+                    ('python', '/project/run-diagnostic.py', '/usr/lib/chatgpt/resources/cua_node/bin/node_repl'),
+                    ('echo', 'railway', 'mcp', 'proxy'), ('npm', 'exec', 'rea-agents', 'mcp'),
+                    ('npm exec rea-agents@1 mcp extra',),
+                    ('node', str(Path.home() / '.codex-evil/mcp/launch.mjs'))]
+        for pid, command in enumerate(commands, 200):
+            self.add(pid, 100, command)
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(all(pid in self.rows for pid in range(200, 200 + len(commands))))
+
+    def test_relative_launch_paths_and_npm_process_title(self):
+        self.add(200, 100, ('node', './mcp/launch.mjs'))
+        self.add(201, 100, ('node', './mcp/launch.mjs'))
+        self.add(202, 100, ('npm exec rea-agents@6.8.0 mcp',))
+        self.add(203, 100, ('node', './mcp/launch.mjs'))
+        self.rows[200] = replace(self.rows[200], cwd=str(Path.home() / '.codex/plugins/data'))
+        self.rows[201] = replace(self.rows[201], cwd='/project')
+        self.rows[203] = replace(self.rows[203], cwd=str(Path.home() / '.cache/codex-runtimes/data'))
+        self.run_reaper()
+        self.assertEqual({abs(target) for target, _ in self.calls}, {200, 202, 203})
+        self.assertIn(201, self.rows)
+
+    def test_orphans_use_the_same_thread_and_age_rules(self):
+        for parent in (1, 110):
+            with self.subTest(parent=parent):
+                self.add(110, 1, ('/usr/lib/systemd/systemd', '--user'))
+                self.rows[110] = replace(self.rows[110], uid=os.getuid())
+                self.thread('finished orphan child ' + str(parent), age=30, subagent=True)
+                self.thread('live orphan child ' + str(parent), age=300, subagent=True, running=True)
+                self.thread('orphan operator ' + str(parent), age=600)
+                for pid, age in ((200, 20), (201, 290), (202, 590), (203, 8000), (204, 5000)):
+                    self.add(pid, parent, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=age)
+                self.calls.clear()
+                self.run_reaper()
+                self.assertEqual({abs(target) for target, _ in self.calls}, {200, 203})
+                self.assertTrue(all(pid in self.rows for pid in (201, 202, 204)))
+
+    def test_foreign_systemd_and_changed_orphan_parent_are_kept(self):
+        self.add(110, 1, ('/usr/lib/systemd/systemd', '--user'))
+        self.rows[110] = replace(self.rows[110], uid=os.getuid() + 1)
+        self.add(200, 110, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.add(200, 1, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        initial = self.rows.copy()
+        self.rows[200] = replace(self.rows[200], ppid=110)
+        snapshots = iter([initial, self.rows])
+        self.run_reaper(table=lambda: next(snapshots))
+        self.assertEqual(self.calls, [])
+
+    def test_group_children_survive_leader_term(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.add(201, 200, ('worker',), pgid=200)
+        def send(target, sig):
+            self.calls.append((target, sig))
+            self.rows.pop(200 if sig == signal.SIGTERM else 201, None)
+        self.assertEqual(self.run_reaper(send=send), 0)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (201, signal.SIGKILL)])
+        self.assertIn('RSS freed 2048 bytes', self.output[-1])
+
+    def test_dry_run_never_signals_or_waits(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.run_reaper(dry=True)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.waits, [])
+        self.assertIn(200, self.rows)
+        self.assertTrue(any('Would stop pid=200' in s for s in self.output))
+
+    def test_finished_subagent_stops_even_when_young_and_other_thread_running(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=10)
+        self.thread('finished child', age=20, subagent=True)
+        self.thread('other active thread', age=500, running=True)
+        self.assertEqual(self.run_reaper(), 0)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (200, signal.SIGKILL)])
+        self.assertTrue(any('reason=subagent finished child finished' in s for s in self.output))
+
+    def test_running_thread_kept(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.thread('active operator', age=7250, running=True)
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_running_subagent_kept_including_later_run(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.thread('active child', age=7250, subagent=True)
+        with sqlite3.connect(self.db) as db:
+            requested = datetime.fromtimestamp(self.now - 1, timezone.utc).isoformat()
+            db.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)',
+                       ('active child', requested, 'running', 'codex'))
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_finished_operator_thread_kept(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.thread('operator', age=7250)
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=operator thread' in s for s in self.output))
+
+    def test_closest_preceding_thread_wins(self):
+        for closer_subagent in (True, False):
+            with self.subTest(closer_subagent=closer_subagent):
+                with sqlite3.connect(self.db) as db:
+                    db.execute('DELETE FROM orchestration_v2_projection_threads')
+                    db.execute('DELETE FROM orchestration_v2_projection_runs')
+                self.thread('earlier', age=130, subagent=not closer_subagent)
+                self.thread('closer', age=30, subagent=closer_subagent)
+                self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=20)
+                self.calls.clear()
+                self.output.clear()
+                self.run_reaper()
+                self.assertEqual(bool(self.calls), closer_subagent)
+                reason = 'subagent closer finished' if closer_subagent else 'operator thread'
+                self.assertTrue(any('reason=' + reason in s for s in self.output))
+
+    def test_server_before_any_thread_has_no_match(self):
+        self.thread('future operator', age=7200, running=True)
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=10800)
+        self.run_reaper()
+        self.assertEqual(len(self.calls), 2)
+        self.assertTrue(any('reason=no thread, 3h old' in s for s in self.output))
+
+    def test_no_match_age_threshold_and_window(self):
+        self.thread('too early operator', age=11000)
+        for pid, age in ((200, 10800), (201, 7200), (202, 10)):
+            self.add(pid, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=age)
+        self.run_reaper()
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (200, signal.SIGKILL)])
+        self.assertEqual(sum('reason=no thread, too young' in s for s in self.output), 2)
+
+    def test_match_window_includes_exact_start_and_120_seconds(self):
+        self.thread('child', age=200, subagent=True)
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=200)
+        self.add(201, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=80)
+        self.add(202, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=79)
+        self.run_reaper()
+        self.assertEqual({abs(target) for target, _ in self.calls}, {200, 201})
+        self.assertTrue(any('Keep pid=202' in s for s in self.output))
+
+    def test_other_provider_does_not_match(self):
+        self.thread('claude operator', age=7250, running=True, provider='claude')
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.run_reaper()
+        self.assertEqual(len(self.calls), 2)
+        self.assertTrue(any('reason=no thread,' in s for s in self.output))
+
+    def test_resumed_subagent_is_rechecked_before_signal(self):
+        self.thread('resumed child', age=7250, subagent=True)
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        def table():
+            with sqlite3.connect(self.db) as db:
+                db.execute("UPDATE orchestration_v2_projection_runs SET status='running'")
+            return self.rows.copy()
+        self.run_reaper(table=table)
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_unreadable_database_skips_without_creating_it(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        self.db.unlink()
+        self.run_reaper()
+        self.assertFalse(self.db.exists())
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('cannot be read' in s for s in self.output))
+        self.db.write_text('not a sqlite database')
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+
+    def test_pid_reuse_and_changed_parent_are_protected(self):
+        for change in ({'started': 999}, {'ppid': 1}, {'pgid': 999},
+                       {'argv': ('codex-code-mode',)}):
+            with self.subTest(change=change):
+                self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+                initial = self.rows.copy()
+                self.rows[200] = replace(self.rows[200], **change)
+                snapshots = iter([initial, self.rows])
+                self.run_reaper(table=lambda: next(snapshots))
+                self.assertEqual(self.calls, [])
+
+    def test_group_outside_subtree_is_protected(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        for parent, argv in [(1, ('unrelated',)), (100, ('sibling',)),
+                             (200, ('codex-code-mode',)), (200, ('codex', 'app-server'))]:
+            with self.subTest(parent=parent, argv=argv):
+                self.add(201, parent, argv, pgid=200)
+                self.run_reaper()
+                self.assertEqual(self.calls, [])
+
+    def test_parent_must_start_with_codex_app_server(self):
+        for argv in [('node', 'codex', 'app-server'), ('codex-code-mode', 'app-server'),
+                     ('codex', 'exec'), ('echo', 'codex app-server')]:
+            with self.subTest(argv=argv):
+                self.add(100, 1, argv)
+                self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+                self.run_reaper()
+                self.assertEqual(self.calls, [])
+
+    def test_term_success_does_not_escalate(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        def send(target, sig):
+            self.calls.append((target, sig))
+            del self.rows[200]
+        self.run_reaper(send=send)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM)])
+
+    def test_running_match_blocks_stop_even_if_later_finished_subagent_is_closer(self):
+        self.thread('running-sub', age=30, subagent=True, running=True)
+        self.thread('finished-sub', age=25, subagent=True)
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=15)
+        self.run_reaper()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_unfinished_run_states_keep_the_server(self):
+        for status in ('queued', 'preparing', 'starting', 'waiting'):
+            with self.subTest(status=status):
+                with sqlite3.connect(self.db) as db:
+                    db.execute('DELETE FROM orchestration_v2_projection_threads')
+                    db.execute('DELETE FROM orchestration_v2_projection_runs')
+                self.thread('child', age=30, subagent=True, status=status)
+                self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',), age=20)
+                self.calls.clear()
+                self.output.clear()
+                self.run_reaper()
+                self.assertEqual(self.calls, [])
+                self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_process_joining_group_during_grace_is_not_killed(self):
+        self.add(200, 100, ('/usr/lib/chatgpt/resources/cua_node/bin/node_repl',))
+        def send(target, sig):
+            self.calls.append((target, sig))
+            if sig == signal.SIGTERM:
+                self.add(210, 200, ('codex-code-mode',), pgid=200)
+            elif target > 0:
+                self.rows.pop(target, None)
+        self.run_reaper(send=send)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (200, signal.SIGKILL)])
+        self.assertIn(210, self.rows)
+
+suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReaperTests)
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+sys.exit(not result.wasSuccessful())
+PY
+ok "MCP reaper fixture cases (no host process signals)" "$?" 0
 exit $fail
