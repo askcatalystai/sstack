@@ -9,7 +9,7 @@
   sid-card.py inbox                                              print the user's new comments on any card, once each
 
 The user's comments carry a "new-comment" tag until inbox reads them. Screenshot comments start "Terra:" and don't count.
-A card more than 2 hours in one column gets a "stale" tag, so stuck work shows without opening it.
+The board synchronizer derives idle tags from worker and PR facts.
 
 The clock is time in the current column: it restarts when a card moves, not when the worker changes.
 Only doing, review and deployment cards show tags; moving a card anywhere else clears them.
@@ -17,51 +17,8 @@ Only doing, review and deployment cards show tags; moving a card anywhere else c
 import datetime as dt, json, os, re, subprocess, sys, urllib.request
 from pathlib import Path
 
-KANZO = os.path.expanduser("~/.local/bin/kanzo")
-URL = "http://127.0.0.1:4242/mcp"
-STATE = Path(os.path.expanduser("~/.local/state/sidstack/cards.json"))
-ELAPSED = re.compile(r"^(<1m|\d+m|\d+h( \d+m)?|\d+d( \d+h)?|stale)$")
-ACTIVE = ("doing", "review", "deployment")
-session, seq = None, 0
-
-
-def rpc(method, params=None, notify=False):
-    global session, seq
-    seq += 1
-    body = {"jsonrpc": "2.0", "method": method}
-    if params is not None:
-        body["params"] = params
-    if not notify:
-        body["id"] = seq
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    if session:
-        headers["mcp-session-id"] = session
-    reply = urllib.request.urlopen(urllib.request.Request(URL, json.dumps(body).encode(), headers), timeout=10)
-    session = reply.headers.get("mcp-session-id") or session
-    for line in reply.read().decode().splitlines():
-        if line.startswith("data: {"):
-            return json.loads(line[6:])
-
-
-def connect():
-    rpc("initialize", {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "sid-card", "version": "1"}})
-    rpc("notifications/initialized", notify=True)
-
-
-def update(task, **fields):
-    reply = rpc("tools/call", {"name": "update_task", "arguments": {"id": task, **fields}})
-    if "error" in reply or reply["result"].get("isError"):
-        sys.exit(f"{task}: {reply}")
-
-
-def tasks():
-    data = json.loads(subprocess.run([KANZO, "export", "-f", "json"], check=True, capture_output=True, text=True).stdout)
-    found = {}
-    for project in data["projects"]:
-        for task in project["tasks"]:
-            found[task["key"]] = task
-    return found
-
+from kanzo_client import (KANZO, URL, STATE, ELAPSED, ACTIVE, connect, update, tasks,
+                          user_comments, load, save, lock)
 
 def elapsed(start):
     minutes = int((dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(start)).total_seconds() // 60)
@@ -84,10 +41,6 @@ def shots(task, caption, images):
     urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:4242/api/tasks/{number}/comments", body, {"Content-Type": "application/json"}), timeout=10)
 
 
-def user_comments(task):
-    return [c for c in task.get("comments", []) if c.get("author") == "me" and not c.get("body", "").startswith("Terra:")]
-
-
 def inbox(state, found):
     seen = state.setdefault("_comments_seen", {})
     for key, task in found.items():
@@ -97,15 +50,6 @@ def inbox(state, found):
                 seen.setdefault(key, []).append(comment["id"])
         if "new-comment" in task["tags"]:
             update(key, tags=", ".join(tag for tag in task["tags"] if tag != "new-comment"))
-
-
-def load():
-    return json.loads(STATE.read_text()) if STATE.exists() else {}
-
-
-def save(state):
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps(state, indent=1))
 
 
 def own_tags(tags, record):
@@ -124,21 +68,22 @@ def tick(state):
         if task["status"] not in ACTIVE:
             if record:
                 update(task_id, tags=", ".join(own_tags(task["tags"], record)))
-                del state[task_id]
+                record["worker"] = []
             continue
         if not record:
             record = state[task_id] = {"worker": [], "status": task["status"], "since": now}
         if record["status"] != task["status"]:
             record.update(status=task["status"], since=now)
-        tags = own_tags(task["tags"], record) + [tag.lower() for tag in record["worker"]] + [elapsed(record["since"])]
-        if (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["since"])).total_seconds() > 7200:
-            tags.append("stale")
+        tags = own_tags(task["tags"], record) + [tag.lower() for tag in record.get("worker", [])] + [elapsed(record["since"])]
         if tags != task["tags"]:
             update(task_id, tags=", ".join(tags))
 
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
+    guard = lock()
+    if guard is None:
+        return
     connect()
     state = load()
     if command == "work":
@@ -164,4 +109,5 @@ def main():
     save(state)
 
 
-main()
+if __name__ == "__main__":
+    main()
