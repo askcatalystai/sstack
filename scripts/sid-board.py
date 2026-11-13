@@ -202,7 +202,7 @@ def reconcile(facts, previous, now):
             continue
         title = 'Main is red: ' + repo['name'].split('/')[-1]
         existing = next((c for c in facts['cards'] if c.get('title') == title and c['key'].startswith('process#')), None)
-        if existing and existing.get('human'):
+        if existing and (existing.get('human') or existing['status'] == 'backlog'):
             continue
         marker = '_health:' + path
         if health['result'] == 'fail':
@@ -325,6 +325,8 @@ def gather_github(path, info, cards):
             return
         live = None
         for deploy in deploys:
+            if 'production' not in deploy.get('environment', '').lower():
+                continue
             statuses = json.loads(command('gh', 'api', f"repos/{name}/deployments/{deploy['id']}/statuses", cwd=path))
             if any(s['state'] == 'success' for s in statuses):
                 live = deploy['sha']
@@ -376,15 +378,20 @@ def gather_repo(path, cards=()):
     gate = common / 'sid-gate'
     def train():
         value = json.loads((gate / 'train/state.json').read_text()) if (gate / 'train/state.json').exists() else {}
+        updates = []
         for pr in prs or []:
+            fields = {}
             n = pr['number']
             if n in value.get('members', []) and value.get('phase') in ('gating', 'merging'):
-                pr['phase'] = value['phase']
+                fields['phase'] = value['phase']
             elif (gate / f'train/queue/{n}.req').exists():
-                pr['phase'] = 'queued'
+                fields['phase'] = 'queued'
             h = gate / 'health' / pr['headRefOid']
             if h.exists() and h.read_text().startswith('fail '):
-                pr['failed_at'] = h.stat().st_mtime
+                fields['failed_at'] = h.stat().st_mtime
+            updates.append((pr, fields))
+        for pr, fields in updates:
+            pr.update(fields)
         return True
     repo['train_ok'] = bool(attempt(repo['name'] + ' train', train))
     def health():
@@ -457,7 +464,6 @@ def main():
         return
     guard = kanzo.lock()
     if guard is None:
-        print('sid-board: another card run is active; skipped')
         return
     previous = kanzo.load()
     facts = gather(json.loads(args.config.read_text()))
@@ -491,6 +497,12 @@ def main():
             print(json.dumps(action, ensure_ascii=False))
         print(f'{len(actions)} changes (dry run; board and state unchanged)')
         return
+    apply_actions(actions, facts, previous, state, stalled)
+
+
+def apply_actions(actions, facts, previous, state, stalled, transport=None, save=None):
+    transport = transport or apply
+    save = save or kanzo.save
     # Receipts are durable after each successful side effect. Never acknowledge
     # planned comments or nudges that were filtered out or failed to send.
     for key, record in state.items():
@@ -507,15 +519,26 @@ def main():
     actions = outbox + [a for a in actions if a not in outbox]
     state['_outbox'] = []
     failures = False
+    blocked_moves = set()
+    actions.sort(key=lambda a: a['kind'] != 'comment')
     for action in actions:
-        if action['kind'] == 'stuck' and state['_nudges'].get(action['thread'], {}).get('count', 0) < 3:
+        if action['kind'] == 'stuck':
+            card = next((c for c in facts.get('cards', []) if c['key'] == action['key']), None)
+            if (not card or card.get('human') or card['status'] in ('done', 'backlog') or
+                    not any(item['thread'] == action['thread'] for item in stalled) or
+                    state['_nudges'].get(action['thread'], {}).get('count', 0) < 3):
+                continue
+        if (action['kind'] == 'update' and 'status' in action['fields'] and
+                action['key'] in blocked_moves):
             continue
         try:
-            apply([action], facts)
+            transport([action], facts)
             mirror_update(facts, action)
         except Exception as error:
             print(f"{action['kind']} {action.get('key', action.get('thread', ''))}: skipped ({str(error)[:180]})", file=sys.stderr)
             failures = True
+            if action['kind'] == 'comment':
+                blocked_moves.add(action['key'])
             if action['kind'] in ('comment', 'stuck') and action not in state['_outbox']:
                 state['_outbox'].append(action)
             continue
@@ -531,8 +554,8 @@ def main():
                         state['_outbox'].append(follow)
         if action in state['_outbox']:
             state['_outbox'].remove(action)
-        kanzo.save(state)
-    kanzo.save(state)
+        save(state)
+    save(state)
     if failures:
         raise SystemExit(1)
 

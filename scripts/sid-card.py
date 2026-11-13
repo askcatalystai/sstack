@@ -81,8 +81,11 @@ def tick(state):
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
-    guard = lock()
+    explicit = command in ("work", "clear", "shots", "inbox")
+    guard = lock(timeout=60 if explicit else 0)
     if guard is None:
+        if explicit:
+            sys.exit("sid-card: board was busy for 60 seconds; command not applied")
         return
     connect()
     state = load()

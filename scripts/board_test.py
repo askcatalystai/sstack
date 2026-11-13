@@ -1,5 +1,6 @@
 """Behavior tests: all facts are local values; no network, Kanzo or T3."""
 import copy
+import fcntl
 import importlib.util
 from pathlib import Path
 import sys
@@ -13,6 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 spec = importlib.util.spec_from_file_location('board', Path(__file__).with_name('sid-board.py'))
 board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
+spec = importlib.util.spec_from_file_location('sid_card', Path(__file__).with_name('sid-card.py'))
+sid_card = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sid_card)
 NOW = 2000000000
 
 
@@ -129,7 +133,7 @@ class BoardTests(unittest.TestCase):
             if args[:2] == ('gh', 'api'):
                 if args[2].endswith('/statuses'):
                     return '[{"state":"success"}]'
-                return '[{"id":1,"sha":"live"}]'
+                return '[{"id":1,"sha":"live","environment":"OpenEcommerce / production"}]'
             if args[:2] == ('git', 'rev-parse'):
                 return str(common)
             if args[:2] == ('git', 'ls-remote'):
@@ -394,11 +398,148 @@ class BoardTests(unittest.TestCase):
         ]
         with patch.object(board.kanzo, 'connect'), patch.object(board.kanzo, 'human'), \
                 patch.object(board.kanzo, 'update', side_effect=lambda _k, **kw: captured.append(kw.get('tags', ''))):
-            for action in planned:
-                board.apply([action], working)
-                board.mirror_update(working, action)
+            board.apply_actions(planned, working, {'_nudges': {'root': {'count': 3}}}, {},
+                                [{'thread': 'root'}], save=lambda _: None)
         self.assertIn('pr-8', captured[-1])
         self.assertIn('stuck', captured[-1])
+
+    def test_only_production_deployments_are_live(self):
+        info = dict(nameWithOwner='owner/repo', defaultBranchRef={'name': 'main'})
+        for environments, expected in [([], 'done'), (['preview'], 'deployment'),
+                (['OpenEcommerce / PrOdUcTiOn'], 'done'),
+                (['preview', 'production'], 'done'), ([''], 'deployment')]:
+            with self.subTest(environments=environments):
+                calls = []
+                base = self.github_command(calls, Path('/unused'))
+                def command(*args, **kw):
+                    if args[:3] == ('gh', 'pr', 'list'):
+                        return json.dumps([pr(state='MERGED', mergeCommit={'oid': 'merged'})])
+                    if args[:2] == ('gh', 'api') and not args[2].endswith('/statuses'):
+                        return json.dumps([dict(id=i, sha=f'live{i}', environment=env)
+                                           for i, env in enumerate(environments)])
+                    return base(*args, **kw)
+                with patch.object(board, 'command', side_effect=command), \
+                        patch.object(board.subprocess, 'run') as ancestry:
+                    ancestry.return_value.returncode = 0
+                    repo = board.gather_github('/repo', info, [])
+                f = facts(ts=[])
+                f['repos']['/repo'] = dict(repo, train_ok=True)
+                actions, _, rows, _ = result(f)
+                self.assertEqual(rows[0]['column'], expected)
+                live_comments = [a for a in actions if 'Live on prod' in a.get('body', '')]
+                self.assertEqual(bool(live_comments), bool(environments) and expected == 'done')
+                if environments == ['preview', 'production']:
+                    self.assertEqual(repo['prs'][0]['live'], 'live1')
+
+    def test_comments_precede_done_and_failure_blocks_move(self):
+        for failure in (None, 'Merged', 'Live on prod'):
+            with self.subTest(failure=failure):
+                f = facts(p=pr(state='MERGED', mergeCommit={'oid': 'abc'}, live='live'), ts=[])
+                actions, state, _, stalled = result(f)
+                calls = []
+                def transport(batch, _facts):
+                    action = batch[0]
+                    calls.append(action)
+                    if failure and action['kind'] == 'comment' and action['body'].startswith(failure):
+                        raise RuntimeError('comment unavailable')
+                if failure:
+                    with self.assertRaises(SystemExit):
+                        board.apply_actions(actions, f, {}, state, stalled, transport, lambda _: None)
+                    self.assertFalse(any(a['kind'] == 'update' and 'status' in a['fields'] for a in calls))
+                    self.assertTrue(state['_outbox'])
+                else:
+                    board.apply_actions(actions, f, {}, state, stalled, transport, lambda _: None)
+                    self.assertEqual([a['kind'] for a in calls], ['comment', 'comment', 'update'])
+                    self.assertEqual(f['cards'][0]['status'], 'done')
+
+    def test_replayed_stuck_is_dropped_when_no_longer_eligible(self):
+        action = dict(kind='stuck', key='chat#29', thread='root')
+        for change, stalled in [({'human': True}, [{'thread': 'root'}]),
+                ({'status': 'done'}, [{'thread': 'root'}]),
+                ({'status': 'backlog'}, [{'thread': 'root'}]), ({}, []),
+                ({}, [{'thread': 'root'}])]:
+            with self.subTest(change=change, stalled=stalled):
+                previous = {'_outbox': [action], '_nudges': {'root': {'count': 3}}}
+                state = copy.deepcopy(previous)
+                sent = []
+                board.apply_actions([], facts(card(**change)), previous, state, stalled,
+                                    lambda batch, _: sent.extend(batch), lambda _: None)
+                self.assertEqual(sent, [action] if not change and stalled else [])
+                self.assertEqual(state['_outbox'], [])
+
+    def test_main_health_respects_backlog_and_human_but_reopens_done(self):
+        for health in ('fail', 'pass'):
+            for status, human in [('backlog', False), ('done', True), ('done', False)]:
+                with self.subTest(health=health, status=status, human=human):
+                    f = facts(card(key='process#99', title='Main is red: repo', status=status, human=human), ts=[])
+                    f['repos']['/repo']['health'] = dict(sha='bad', result=health, lane='checks')
+                    actions, *_ = result(f)
+                    if status == 'backlog' or human or health == 'pass':
+                        self.assertEqual(actions, [])
+                    else:
+                        self.assertEqual(apply(f, actions)['cards'][0]['status'], 'todo')
+
+    def test_train_read_failure_does_not_publish_partial_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            queue = directory / 'sid-gate/train/queue/8.req'
+            queue.parent.mkdir(parents=True)
+            queue.touch()
+            health = directory / 'sid-gate/health/head'
+            health.parent.mkdir(parents=True)
+            health.write_text('fail checks')
+            bad_health = health.with_name('unreadable')
+            bad_health.mkdir()  # A later PR's read fails after the first PR's facts were read.
+            cached = dict(name='owner/repo', prs=[pr(), pr(number=9, headRefOid='unreadable')])
+            cache = directory / ('github-' + board.digest('/repo')[:20] + '.json')
+            cache.write_text(json.dumps(dict(attempted=NOW, fetched=NOW, facts=cached)))
+            with patch.object(board.kanzo, 'STATE', directory / 'cards.json'), \
+                    patch.object(board.time, 'time', return_value=NOW), \
+                    patch.object(board, 'command', return_value=str(directory)):
+                repo = board.gather_repo('/repo')
+                self.assertFalse(repo['train_ok'])
+                self.assertFalse(any('phase' in p or 'failed_at' in p for p in repo['prs']))
+                bad_health.rmdir()
+                repo = board.gather_repo('/repo')
+                self.assertTrue(repo['train_ok'])
+                self.assertEqual(repo['prs'][0]['phase'], 'queued')
+                self.assertIn('failed_at', repo['prs'][0])
+
+    def test_explicit_card_commands_wait_and_report_busy(self):
+        for command in ('work', 'clear', 'shots', 'inbox', 'tick'):
+            with self.subTest(command=command), \
+                    patch.object(sys, 'argv', ['sid-card', command]), \
+                    patch.object(sid_card, 'lock', return_value=None) as lock, \
+                    patch.object(sid_card, 'connect') as connect:
+                if command == 'tick':
+                    sid_card.main()
+                else:
+                    with self.assertRaises(SystemExit) as error:
+                        sid_card.main()
+                    self.assertTrue(error.exception.code)
+                    self.assertIn('board was busy', str(error.exception))
+                lock.assert_called_once_with(timeout=0 if command == 'tick' else 60)
+                connect.assert_not_called()
+
+    def test_lock_waits_for_release_and_times_out(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(board.kanzo, 'STATE', Path(tmp) / 'cards.json'):
+            held = board.kanzo.lock()
+            self.assertIsNotNone(held)
+            try:
+                self.assertIsNone(board.kanzo.lock())
+                with patch('time.monotonic', side_effect=[0, 0, 60]), \
+                        patch('time.sleep') as sleep:
+                    self.assertIsNone(board.kanzo.lock(timeout=60))
+                    self.assertTrue(sleep.called)
+                def release(_):
+                    fcntl.flock(held, fcntl.LOCK_UN)
+                with patch('time.sleep', side_effect=release):
+                    acquired = board.kanzo.lock(timeout=60)
+                self.assertIsNotNone(acquired)
+                acquired.close()
+            finally:
+                held.close()
 
 
 if __name__ == '__main__':

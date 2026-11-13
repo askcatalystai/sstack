@@ -92,13 +92,19 @@ def human(key):
         response.read()
 
 
-def lock():
+def lock(timeout=0):
     import fcntl
+    import time
     STATE.parent.mkdir(parents=True, exist_ok=True)
     handle = (STATE.parent / "cards.lock").open("w")
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        handle.close()
-        return None
-    return handle
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                handle.close()
+                return None
+            time.sleep(min(0.1, remaining))
