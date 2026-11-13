@@ -7,7 +7,7 @@ description: Sid's way of working. Rigorous engineering from pstack (playbooks, 
 
 **The base idea:** pstack is how we write code, tests, reviews and bug work. Council plans the work once, at the start. tstack's full send ships it autonomously. When this file and a pstack playbook disagree on how to write or review, follow pstack, apart from the role and tool mapping.
 
-Read `<sidstack>/rules.md`, `<sidstack>/models.md` and `<sidstack>/docs/adapter.md` once per session. Run `<sidstack>/scripts/sid-mode.sh` at the start of each task: it prints the current arrangement (who codes, who reviews, which gate lane, whether the bot is waived), and it beats the defaults below. When the user changes the arrangement, set it there with `--note`, not in a memory note. Every model choice below comes from `models.md`; every pstack skill or playbook named here runs through the adapter. `<sidstack>` is `~/.local/share/sidstack`, `<pstack>` is `~/.local/share/pstack-src/pstack`.
+Read `<sidstack>/rules.md` at the start of every task, since the operator's rules change during the day, and `<sidstack>/models.md` and `<sidstack>/docs/adapter.md` once per session. Run `<sidstack>/scripts/sid-mode.sh` at the start of each task: it prints the current arrangement (who codes, who reviews, which gate lane, whether the bot is waived), and it beats the defaults below. When the user changes the arrangement, set it there with `--note`, not in a memory note. Every model choice below comes from `models.md`; every pstack skill or playbook named here runs through the adapter. `<sidstack>` is `~/.local/share/sidstack`, `<pstack>` is `~/.local/share/pstack-src/pstack`.
 
 ## First message on a task
 
@@ -54,7 +54,7 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 
 ## Gates (every PR)
 
-1. The builder's own checks, then Claude reruns them: affected tests, typecheck, lint, with no new failures against main.
+1. The builder's own checks, run once: affected tests through the repo's runner, typecheck, lint, with no new failures against main, pasted in `## Proof` with the commit. Claude reads that output and reruns a check only when a finding or a later change needs it.
 2. Open the PR early (`file-pr`), naming the card key in its body, and link it in T3, so reviews cover a commit and their results can be recorded.
 3. `no-comments` and a slop pass, then `review-loop`: bug pass, then Astra; Claude takes the final call, the builder fixes once, behaviour changes go back to Astra, Claude verifies each fix. Decline nits with a reason. Work that doesn't earn its place gets scrapped, not patched.
 4. Behavioural verification before merge: covering tests with pass counts; for UI, the app in a browser and a screenshot. Green mocked tests alone are not proof. The author doesn't verify its own work. It goes in the PR's `## Proof` section, naming the commit it covers.
