@@ -71,7 +71,8 @@ def codex_threads(database, emit):
     try:
         with sqlite3.connect(Path(database).resolve().as_uri() + '?mode=ro', uri=True, timeout=0.2) as db:
             rows = db.execute("""
-                SELECT min(r.requested_at), t.title, max(r.status = 'running'),
+                SELECT min(r.requested_at), t.title,
+                       max(r.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')),
                        json_extract(t.payload_json, '$.lineage.parentThreadId') IS NOT NULL
                 FROM orchestration_v2_projection_threads t
                 JOIN orchestration_v2_projection_runs r ON r.thread_id = t.thread_id
@@ -174,13 +175,15 @@ def reap(database, dry=False, table=process_table, send=os.kill, wait=time.sleep
         current = table()
         # Include surviving group children even when their leader has exited.
         remaining = [q for q in members if same(q, current) and current[q.pid].state != 'Z']
-        if remaining:
+        # SIGKILL only the checked processes still alive, never the group again: anything that joined
+        # it during the grace period hasn't been checked.
+        for q in remaining:
             try:
-                send(target, signal.SIGKILL)
+                send(q.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             except OSError as error:
-                emit(f'Failed pid={p.pid}: {error}')
+                emit(f'Failed pid={q.pid}: {error}')
                 failed = True
         # Delivery of SIGKILL is asynchronous; give the kernel time to reap.
         for _ in range(10):

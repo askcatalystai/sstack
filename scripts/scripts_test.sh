@@ -1015,14 +1015,14 @@ class ReaperTests(unittest.TestCase):
         self.rows[pid] = reaper.Process(pid, parent, pid if pgid is None else pgid,
                                         pid * 10, age, 1024, tuple(argv))
 
-    def thread(self, name, age, running=False, subagent=False, provider='codex'):
+    def thread(self, name, age, running=False, subagent=False, provider='codex', status=None):
         requested = datetime.fromtimestamp(self.now - age, timezone.utc).isoformat()
         payload = {'lineage': {'parentThreadId': 'parent'}} if subagent else {}
         with sqlite3.connect(self.db) as db:
             db.execute('INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?)',
                        (name, name, json.dumps(payload)))
             db.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)',
-                       (name, requested, 'running' if running else 'completed', provider))
+                       (name, requested, status or ('running' if running else 'completed'), provider))
 
     def run_reaper(self, dry=False, table=None, send=None):
         def fake_kill(target, sig):
@@ -1050,7 +1050,7 @@ class ReaperTests(unittest.TestCase):
             self.add(pid, parent, argv, age, pgid=100 if pid == 307 else None)
         self.assertEqual(self.run_reaper(), 0)
         targets = {200, -201, -202, -203, -204, -205}
-        self.assertEqual(set(self.calls), {(t, s) for t in targets for s in (signal.SIGTERM, signal.SIGKILL)})
+        self.assertEqual(set(self.calls), {(t, signal.SIGTERM) for t in targets} | {(abs(t), signal.SIGKILL) for t in targets})
         self.assertEqual(set(self.rows), {100, 101, *(p[0] for p in keep)})
         self.assertEqual(self.waits, [5])
         self.assertIn('stopped 6 server(s); RSS freed 6144 bytes', self.output[-1])
@@ -1063,7 +1063,7 @@ class ReaperTests(unittest.TestCase):
             self.calls.append((target, sig))
             self.rows.pop(200 if sig == signal.SIGTERM else 201, None)
         self.assertEqual(self.run_reaper(send=send), 0)
-        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (-200, signal.SIGKILL)])
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (201, signal.SIGKILL)])
         self.assertIn('RSS freed 2048 bytes', self.output[-1])
 
     def test_dry_run_never_signals_or_waits(self):
@@ -1079,7 +1079,7 @@ class ReaperTests(unittest.TestCase):
         self.thread('finished child', age=20, subagent=True)
         self.thread('other active thread', age=500, running=True)
         self.assertEqual(self.run_reaper(), 0)
-        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (-200, signal.SIGKILL)])
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (200, signal.SIGKILL)])
         self.assertTrue(any('reason=subagent finished child finished' in s for s in self.output))
 
     def test_running_thread_kept(self):
@@ -1135,7 +1135,7 @@ class ReaperTests(unittest.TestCase):
         for pid, age in ((200, 10800), (201, 7200), (202, 10)):
             self.add(pid, 100, ('node_repl',), age=age)
         self.run_reaper()
-        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (-200, signal.SIGKILL)])
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (200, signal.SIGKILL)])
         self.assertEqual(sum('reason=no thread, too young' in s for s in self.output), 2)
 
     def test_match_window_includes_exact_start_and_120_seconds(self):
@@ -1144,7 +1144,7 @@ class ReaperTests(unittest.TestCase):
         self.add(201, 100, ('node_repl',), age=80)
         self.add(202, 100, ('node_repl',), age=79)
         self.run_reaper()
-        self.assertEqual({target for target, _ in self.calls}, {-200, -201})
+        self.assertEqual({abs(target) for target, _ in self.calls}, {200, 201})
         self.assertTrue(any('Keep pid=202' in s for s in self.output))
 
     def test_other_provider_does_not_match(self):
@@ -1220,6 +1220,32 @@ class ReaperTests(unittest.TestCase):
         self.run_reaper()
         self.assertEqual(self.calls, [])
         self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_unfinished_run_states_keep_the_server(self):
+        for status in ('queued', 'preparing', 'starting', 'waiting'):
+            with self.subTest(status=status):
+                with sqlite3.connect(self.db) as db:
+                    db.execute('DELETE FROM orchestration_v2_projection_threads')
+                    db.execute('DELETE FROM orchestration_v2_projection_runs')
+                self.thread('child', age=30, subagent=True, status=status)
+                self.add(200, 100, ('node_repl',), age=20)
+                self.calls.clear()
+                self.output.clear()
+                self.run_reaper()
+                self.assertEqual(self.calls, [])
+                self.assertTrue(any('reason=running thread' in s for s in self.output))
+
+    def test_process_joining_group_during_grace_is_not_killed(self):
+        self.add(200, 100, ('node_repl',))
+        def send(target, sig):
+            self.calls.append((target, sig))
+            if sig == signal.SIGTERM:
+                self.add(210, 200, ('codex-code-mode',), pgid=200)
+            elif target > 0:
+                self.rows.pop(target, None)
+        self.run_reaper(send=send)
+        self.assertEqual(self.calls, [(-200, signal.SIGTERM), (200, signal.SIGKILL)])
+        self.assertIn(210, self.rows)
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReaperTests)
 result = unittest.TextTestRunner(verbosity=2).run(suite)
