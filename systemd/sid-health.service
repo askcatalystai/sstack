@@ -1,0 +1,7 @@
+[Unit]
+Description=Check full gate health for sidstack repos
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/sidstack/env
+ExecStart=%h/.local/share/sidstack/scripts/sid-health.sh --all

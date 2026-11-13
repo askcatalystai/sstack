@@ -1,96 +1,98 @@
 #!/usr/bin/env bash
-# sid-merge [--check] [--bot] <pr>: merge a PR only when it is really ready, then remove its worktree and branch.
-# Ready means everything in pr_checks.py: open, mergeable, checks passed, no changes requested, real Proof and Review;
-# no open PR bot threads; the PR bot finished on the head commit if it's needed: with --bot, a risky path, or a skipped
-# review step (see pr_checks.py; comment '@codex review' to ask it); and the gate passed on this head merged with the latest
-# default branch (it reruns the gate if the default branch moved). --check stops before merging.
-# A stacked PR can pass --check, but it merges only once its base is the default branch.
-# The squash commit carries the gate's Gate-Passed record. Proof lines reporting failures print as "proof-failures:" and don't block.
-# It also needs a PASS or PASS+NOTES on this patch from a verifier who didn't write it, recorded with sid-verdict.sh.
-# Exit: 0 merged or ready, 1 not ready, 6 open bot findings, 7 bot not finished on the head, 8 no passing verdict, 3 conflicts.
+# sid-merge [--check] [--bot] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
+# --check stops at readiness (including stacked PRs); --cancel withdraws a request not yet gating.
+# Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
+# Exit: 0 merged/ready/queued/cancelled, 1 not ready, 3 conflicts, 4 main red, 5 merged onto an ungated tree, 6 bot findings, 7 bot pending, 8 verdict.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-check=false; need_bot=false
-while [ "${1:-}" = --check ] || [ "${1:-}" = --bot ]; do
-  [ "$1" = --check ] && check=true
-  [ "$1" = --bot ] && need_bot=true
+source "$here/sid-gate-lib.sh"
+source "$here/sid-merge-lib.sh"
+check=false; need_bot=false; no_wait=false; cancel=false
+while [[ ${1:-} == --* ]]; do
+  case "$1" in --check) check=true;; --bot) need_bot=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
   shift
 done
-pr=${1:?usage: sid-merge [--check] <pr>}
-bot=${SID_PR_BOT:-chatgpt-codex-connector}
-repo=$(git rev-parse --show-toplevel) || exit 1
-common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir); repo=$(dirname "$common")
+pr=${1:?usage: sid-merge [--check] [--bot] [--no-wait] [--cancel] <pr>}
+[[ $pr =~ ^[0-9]+$ ]] || { echo 'PR must be a number'; exit 1; }
+gate_repo || exit 1
 cd "$repo" || exit 1
-gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
-default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null); default=${default#origin/}; default=${default:-main}
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$tmp/pr.json" "$1"; }
-# Read everything fresh, and stop on any failure: an API error must never look like "nothing wrong".
-ready() {
-  # GitHub answers UNKNOWN until it has worked out mergeability, and a just-pushed head has checks still pending.
-  for wait in 0 3 5 10 15 30 30 30; do
-    sleep "$wait"
-    gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
-    [ "$(field mergeable)" != UNKNOWN ] && ! python3 -c 'import json,sys;sys.exit(any(not (c.get("conclusion") or c.get("state") not in (None,"PENDING","EXPECTED")) for c in json.load(open(sys.argv[1]))["statusCheckRollup"]) is False)' "$tmp/pr.json" && break
-  done
-  # The files API handles PRs too big for `gh pr diff`, and a rename counts under both its names. It stops at 3000 files.
-  gh api --paginate "repos/$gh/pulls/$pr/files?per_page=100" --jq '.[] | [.filename, .previous_filename // empty] | join(" ")' > "$tmp/files" || { echo "could not read #$pr's files"; exit 1; }
-  [ "$(wc -l < "$tmp/files")" -lt 3000 ] || { echo "#$pr has too many changed files to check"; exit 1; }
-  body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
-  required=$(python3 "$here/pr_checks.py" "$tmp/pr.json" "$tmp/files") || exit 1
-  bot_needed=$need_bot
-  if [ -n "$required" ]; then echo "$required"; bot_needed=true; fi
-  if [ "$bot_needed" = true ]; then
-    read -r sha status < <(python3 "$here/bot_review.py" state "$gh" "$pr" "$bot" 2>/dev/null || echo "- -")
-    [ "$sha" = "$head" ] || { echo "bot has not reviewed ${head:0:8} yet (last: ${sha:0:8} $status); comment '@codex review' if it stays quiet"; exit 7; }
-    [ "$status" = completed ] || { echo "bot status on ${head:0:8}: $status"; exit 7; }
-  fi
-  open=$(python3 "$here/bot_review.py" open "$gh" "$pr" "$bot") || { echo "could not read review threads"; exit 7; }
-  [ -z "$open" ] || { echo "open bot findings:"; echo "$open"; exit 6; }
-}
-# The gate can take minutes, so every merge attempt rereads the PR with no gate in between.
-for attempt in 1 2 3 4; do
-  ready
-  [ "$check" = true ] || [ "$base" = "$default" ] || { echo "#$pr is stacked on $base: land that first, rebase this onto $default, and set its base to $default"; exit 1; }
-  git fetch -q origin "$default" "$base" "$branch" || exit 1
-  # The gate always tests the default branch, even for a stacked PR.
-  main=$(git rev-parse "origin/$default")
-  patch=$(git diff "$(git merge-base "origin/$base" "$head")" "$head" | git patch-id --verbatim | cut -d' ' -f1)
-  verdict=$(awk -F'\t' -v p="$patch" '$3==p{v=$0} END{print v}' "$common/sid-gate/verdicts/$pr.tsv" 2>/dev/null)
-  result=$(printf '%s' "$verdict" | cut -f2)
-  case "$result" in
-    PASS|PASS+NOTES) ;;
-    FAIL) echo "the verifier failed this patch: $(printf '%s' "$verdict" | cut -f7)"; exit 8;;
-    *) echo "no verdict on patch ${patch:0:8}: have a verifier who didn't write it run the change, then sid-verdict.sh $pr <tested-commit> <PASS|PASS+NOTES|FAIL> <verifier> <t3-thread-id> \"<what it ran and saw>\""; exit 8;;
-  esac
-  stamp=$common/sid-gate/${branch//\//_}.pass
-  gate_record=$(sed -n 2p "$stamp" 2>/dev/null)
-  if [ "$(sed -n 1p "$stamp" 2>/dev/null)" != "$head $main" ] || [ -z "$gate_record" ]; then
-    "$here/sid-gate.sh" "$branch"; rc=$?; [ "$rc" = 0 ] || exit "$rc"
-    continue
-  fi
-  if [ "$check" = true ]; then
-    if [ "$base" = "$default" ]; then echo "ready: #$pr ${head:0:8}"; else echo "ready, but stacked on $base: #$pr ${head:0:8}"; fi
-    exit 0
-  fi
-  # No branch protection on this plan, so narrow the window: main must still be what the gate tested.
-  [ "$(git ls-remote origin "refs/heads/$base" | cut -f1)" = "$main" ] || continue
-  # A retarget since the read above would land this on a base the gate didn't test.
-  gh pr view "$pr" --repo "$gh" --json baseRefName > "$tmp/base.json" || continue
-  [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["baseRefName"])' "$tmp/base.json")" = "$default" ] || { echo "#$pr's base just changed"; continue; }
-  # Across the branch, because the head can be a merge commit with no trailers of its own.
-  trailers=$(git log "origin/$base..$head" --format='%(trailers:only,unfold)' | sed '/^$/d' | sort -u)
-  verified="Verified-By: $(printf '%s' "$verdict" | cut -f5) $result, T3 thread $(printf '%s' "$verdict" | cut -f6)"
-  trailers=$(printf '%s\n%s\n%s' "$trailers" "$gate_record" "$verified" | sed '/^$/d')
-  message=$(printf '%s\n\n%s' "$body" "$trailers")
-  gh pr merge "$pr" --repo "$gh" --squash --subject "$title (#$pr)" --body "$message" --match-head-commit "$head" >/dev/null || { echo "merge refused; retrying if $base moved"; sleep 5; continue; }
-  echo "merged #$pr: $(gh pr view "$pr" --repo "$gh" --json mergeCommit -q .mergeCommit.oid)"
-  echo "$gate_record"
-  rm -f "$stamp"
-  wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '/^worktree /{w=$2} $0=="branch "b{print w}')
-  if [ -n "$wt" ]; then git worktree remove "$wt" || echo "kept $wt: it has uncommitted or untracked files"; fi
-  git branch -qD "$branch" 2>/dev/null
-  git push -q origin --delete "$branch" 2>/dev/null
+exec 8>"$train/queue.lock"
+if [ "$cancel" = true ]; then
+  flock 8
+  if [ -f "$train/active/$pr" ]; then echo "#$pr has started gating; cannot cancel"
+  elif [ -f "$train/queue/$pr.req" ]; then
+    printf '1\ncancelled\n' > "$train/result/$pr.tmp"
+    mv "$train/result/$pr.tmp" "$train/result/$pr"
+    rm -f "$train/queue/$pr.req"; echo "cancelled #$pr"
+  else echo "#$pr is not queued"; fi
   exit 0
+fi
+gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
+bot=${SID_PR_BOT:-chatgpt-codex-connector}
+bot_mode=$("$here/sid-mode.sh" get bot) || exit 1
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+ready
+[ "$check" = true ] || [ "$base" = "$default" ] || { echo "#$pr is stacked on $base: land that first, rebase this onto $default, and set its base to $default"; exit 1; }
+ready_verdict
+if [ "$check" = true ]; then
+  if [ "$base" = "$default" ]; then echo "ready: #$pr ${head:0:8}"; else echo "ready, but stacked on $base: #$pr ${head:0:8}"; fi
+  exit 0
+fi
+flock 8
+queued_head=
+if [ -f "$train/queue/$pr.req" ]; then
+  queued_head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || exit 1
+fi
+if [ ! -f "$train/queue/$pr.req" ] || { [ ! -f "$train/active/$pr" ] && [ "$queued_head" != "$head" ]; }; then
+  rm -f "$train/result/$pr" "$train/queue/$pr.merge"
+  python3 - "$train/queue/$pr.req" "$head" "$need_bot" <<'PY'
+import json, os, sys, time
+path, head, bot = sys.argv[1:]
+with open(path+'.tmp', 'w') as f:
+    json.dump(dict(head=head, bot=bot == 'true', queued=time.time_ns()), f)
+os.replace(path+'.tmp', path)
+PY
+  [ "$?" = 0 ] || { echo "could not queue #$pr"; exit 1; }
+fi
+flock -u 8
+start_runner() {
+  [ "${SID_TRAIN_INLINE:-}" != 1 ] || return 0
+  local unit
+  unit=sid-train-$(printf '%s' "$common" | sha256sum | cut -c1-16)
+  if [ -z "${SID_TRAIN_INLINE+x}" ] && command -v systemd-run >/dev/null; then
+    systemd-run --user --collect --unit="$unit" --working-directory="$repo" --setenv=PATH="$PATH" --setenv=HOME="$HOME" "$here/sid-train.sh" >/dev/null 2>&1 && return
+  fi
+  # A second runner waits on runner.lock, covering service shutdown/enqueue races too.
+  ( exec 8>&-; exec setsid -f "$here/sid-train.sh" </dev/null >>"$train/runner.log" 2>&1 ) &
+}
+start_runner
+if [ "$no_wait" = true ]; then echo "queued #$pr"; exit 0; fi
+request_pending() {
+  local pending
+  flock 8
+  if [ -f "$train/result/$pr" ]; then pending=false
+  elif [ -f "$train/queue/$pr.req" ]; then pending=true
+  else
+    flock -u 8
+    echo "#$pr has neither a request nor a result; run sid-merge again"
+    exit 1
+  fi
+  flock -u 8
+  [ "$pending" = true ]
+}
+while request_pending; do
+  python3 - "$train/state.json" <<'PY'
+import datetime, json, sys
+try:
+    s = json.load(open(sys.argv[1]))
+    age = int((datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(s['started'].replace('Z', '+00:00'))).total_seconds() / 60)
+    print(f"train {s['id']}: {s['phase']} " + ' '.join(f'#{p}' for p in s['members']) + f", {s['lane'] or 'auto'} lane, {max(0, age)} min")
+except (OSError, ValueError, KeyError):
+    print('train: waiting for runner')
+PY
+  # Poll results promptly, with one progress line per minute.
+  for ((i=0; i<60; i++)); do request_pending || break; sleep 1; done
+  [ -f "$train/result/$pr" ] || start_runner
 done
-echo "could not merge: $base kept moving, or the merge was refused"; exit 1
+rc=$(head -n 1 "$train/result/$pr"); tail -n +2 "$train/result/$pr"
+exit "$rc"

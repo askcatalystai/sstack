@@ -1,0 +1,10 @@
+[Unit]
+Description=Check sidstack repo health every ten minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
