@@ -104,28 +104,36 @@ def cleanup(token, session=None, since=0):
         time.sleep(.05)
 
 
-def create_cgroup(attempt):
+def create_cgroup(lease, record):
     # Use the nearest writable cgroup v2 delegation; no systemd client or
     # privileged daemon is needed. Publish membership before any workload runs.
     root = Path('/sys/fs/cgroup')
-    relative = next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines()
-                    if line.startswith('0::'))
+    required = 'gate requires a writable cgroup v2 delegation'
+    try:
+        relative = next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines()
+                        if line.startswith('0::'))
+    except (OSError, StopIteration) as error:
+        raise PermissionError(required) from error
     current = root / relative.lstrip('/')
     for parent in (current, *current.parents):
         if parent == root.parent:
             break
-        group = parent / ('sid-gate-' + attempt)
+        group = parent / ('sid-gate-' + record['attempt'])
+        # Publish ownership before mkdir, even for an empty startup cgroup.
+        # A crash after creation or a later write failure is then recoverable.
+        record['cgroup'] = str(group)
+        write(lease, record)
         try:
             group.mkdir()
         except OSError as error:
-            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOENT):
                 continue
             raise
         if not os.access(group/'cgroup.kill', os.W_OK):
             group.rmdir()
             raise PermissionError('gate requires writable cgroup.kill (Linux 5.14+)')
-        return str(group)
-    raise PermissionError('gate requires a writable cgroup v2 delegation')
+        return
+    raise PermissionError(required)
 
 
 def cleanup_record(record):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Supervise a gate body; a detached sibling holds its renewable lease."""
 import json, os, signal, subprocess, sys, time, traceback, uuid
-from gate_lease import BOOT, BOUND, now, identity, write, cleanup_record, create_cgroup, recover, reclaim
+from gate_lease import BOOT, BOUND, now, identity, cleanup_record, create_cgroup, recover, reclaim
 from pathlib import Path
 
 def unconfirmed(kind, value, tb):
@@ -58,8 +58,8 @@ if sys.argv[2:3] != ['--lease-v2']:
 reclaim(lease.parent, common.parent)
 attempt = uuid.uuid4().hex
 record = dict(owner=identity(owner), supervisor=identity(os.getpid()), boot=BOOT,
-              attempt=attempt, expires=now() + BOUND, cgroup=create_cgroup(attempt))
-write(lease, record)
+              attempt=attempt, expires=now() + BOUND)
+create_cgroup(lease, record)
 ready, notify = os.pipe()
 holder = subprocess.Popen([sys.executable, str(Path(__file__).with_name("gate_lease.py")),
                            "hold", str(lease), json.dumps(record), str(notify)],

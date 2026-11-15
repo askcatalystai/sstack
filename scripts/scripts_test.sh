@@ -3,11 +3,20 @@
 set -u
 # Do not inherit the harness service identity; systemd cases opt in with fakes.
 unset INVOCATION_ID
+# Git routing inherited from a caller must never redirect fixture gates/locks.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 export SID_GATE_LEASE_SECONDS=1
 here=$(cd "$(dirname "$0")" && pwd); t=$(mktemp -d); trap 'rm -rf "$t"' EXIT; fail=0
 ok() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (want $3, got $2)"; fail=1; fi; }
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+fixture_repo() {
+  local root; root=$(pwd -P)
+  [[ $root == "$t/"* ]] && [ "$(git rev-parse --path-format=absolute --git-common-dir)" = "$root/.git" ] || {
+    echo 'refusing a non-fixture Git common directory and gate locks' >&2; exit 1;
+  }
+}
 git init -q --bare -b main "$t/origin.git"; git clone -q "$t/origin.git" "$t/repo" 2>/dev/null; cd "$t/repo" || exit 1
+fixture_repo
 git checkout -q -b main; mkdir .sidstack; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm one; git push -q origin main; git remote set-head origin main
 git checkout -q -b work; echo x > x; git add -A; git commit -qm two; git push -q origin work; head=$(git rev-parse HEAD); stamp=.git/sid-gate/work.pass
 "$here/sid-gate.sh" work >/dev/null; ok "a passing gate records the head" "$?" 0; [ -f "$stamp" ]; ok "pass exists" "$?" 0; [ -f .git/sid-gate/work.log ]; ok "plain gate retains its latest log path" "$?" 0
@@ -129,7 +138,7 @@ export PATH="$t/bin:$PATH"
 setup_train() {
   export T=$t/$1; mkdir -p "$T"
   git init -q --bare -b main "$T/origin.git"; git clone -q "$T/origin.git" "$T/repo" 2>/dev/null
-  cd "$T/repo" || exit 1; mkdir .sidstack
+  cd "$T/repo" || exit 1; fixture_repo; mkdir .sidstack
   cat > .sidstack/gate.sh <<'G'
 # Tests are files named test-*: "fail" always fails, "flaky" fails on its first run only.
 run_tests() {
@@ -433,6 +442,8 @@ cat > "$T/nondump.py" <<'PYTEST'
 import ctypes, os, signal, sys
 from pathlib import Path
 os.setsid()
+# A production-like process name must not turn the unrelated sentinel into a target.
+assert ctypes.CDLL(None).prctl(15, b'sid-train.sh', 0, 0, 0) == 0
 assert ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) == 0
 if len(sys.argv) > 2:
     signal.signal(signal.SIGTERM, lambda *_: Path(sys.argv[2]).touch())
@@ -470,6 +481,26 @@ for pid in sys.argv[1:]:
     raise AssertionError('fixture environment is readable')
 PYTEST
 ok "both same-uid non-dumpable environments deny access" "$?" 0
+python3 - "$descendant" "$unrelated" <<'PYTEST'
+import json, os, sys
+from pathlib import Path
+record = json.loads(Path('.git/sid-gate/lease.json').read_text())
+group = Path(record['cgroup'])
+members = {int(pid) for procs in group.rglob('cgroup.procs') for pid in procs.read_text().split()}
+root = int(Path(os.environ['T'], 'body-pid').read_text())
+assert {root, int(sys.argv[1])} <= members
+assert int(sys.argv[2]) not in members
+for member in members:
+    pid, seen = member, set()
+    while pid != root:
+        assert pid > 1 and pid not in seen, ('non-fixture cgroup member', member)
+        seen.add(pid)
+        try:
+            pid = int(Path('/proc', str(pid), 'stat').read_bytes().rsplit(b') ', 1)[1].split()[1])
+        except FileNotFoundError:
+            break  # A short-lived fixture sleep can exit during the snapshot.
+PYTEST
+ok "cleanup cgroup contains only fixture descendants, never the unrelated train sentinel" "$?" 0
 holder=$(python3 -c 'import json; print(json.load(open(".git/sid-gate/lease.json"))["holder"][0])')
 kill -KILL "$holder"; kill -KILL -- "-$wp"; wait "$wp" 2>/dev/null || true
 timeout 10 bash -c 'source "$1/sid-gate-lib.sh"; gate_repo; exec 9>"$gate/lock"; gate_lock' bash "$here" > "$T/recovery-out" 2>&1
@@ -627,6 +658,54 @@ ok "mixed rollout never starts a second body" "$(count_gates)" 1
 rm "$T/block-train"
 "$here/sid-gate.sh" work11 > "$T/restarted-out" 2>&1
 ok "fresh library gates after rejecting cached caller" "$?" 0
+# Startup crashes must leave neither an untracked cgroup nor a gate body.
+# Faults bracket real mkdir and lease publication; recovery uses real admission.
+for boundary in publish before-mkdir after-mkdir; do
+  setup_train "startup-$boundary"
+  mkdir -p "$q"
+  cat > "$T/crash-startup.py" <<'PYTEST'
+import os, runpy, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import gate_lease
+worker = str(Path(sys.argv[1], 'gate_worker.py'))
+boundary = sys.argv[2]
+observed = Path(os.environ['T'], 'startup-cgroup')
+mkdir = Path.mkdir
+
+def fail_mkdir(path, *args, **kwargs):
+    if path.name.startswith('sid-gate-'):
+        observed.write_text(str(path))
+        if boundary == 'before-mkdir':
+            os._exit(143)
+        mkdir(path, *args, **kwargs)
+        os._exit(143)
+    return mkdir(path, *args, **kwargs)
+
+def fail_write(path, record):
+    observed.write_text(record['cgroup'])
+    raise OSError('injected lease publication failure')
+
+if boundary == 'publish':
+    gate_lease.write = fail_write
+else:
+    Path.mkdir = fail_mkdir
+sys.argv = [worker, str(os.getpid()), '--lease-v2',
+            'bash', '-c', 'touch "$T/startup-body"']
+runpy.run_path(worker, run_name='__main__')
+PYTEST
+  ( exec 12>.git/sid-gate/lock; flock 12
+    exec env SID_GATE_LOCK_FD=12 python3 "$T/crash-startup.py" "$here" "$boundary"
+  ) > "$T/startup-out" 2>&1
+  ok "startup $boundary fails closed" "$?" 143
+  [ ! -e "$T/startup-body" ]; ok "startup $boundary never executes workload" "$?" 0
+  timeout 10 bash -c 'source "$1/sid-gate-lib.sh"; gate_repo; exec 9>"$gate/lock"; gate_lock' bash "$here" > "$T/startup-recovery-out" 2>&1
+  ok "startup $boundary recovery admits next runner" "$?" 0
+  [ ! -d "$(cat "$T/startup-cgroup")" ]; ok "startup $boundary leaves no cgroup directory" "$?" 0
+  [ ! -f .git/sid-gate/lease.json ]; ok "startup $boundary recovery retires lease" "$?" 0
+  # Also clean the known empty fixture directory when exercising the broken code.
+  rmdir "$(cat "$T/startup-cgroup")" 2>/dev/null || true
+done
 # Repeated cancellation and recovery leave neither checkouts nor registrations.
 setup_train bounded-checkouts
 add_pr 11 a

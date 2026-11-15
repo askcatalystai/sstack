@@ -36,9 +36,11 @@ alone never authorizes a replacement: every admission reconciles its durable
 lease while holding the flock. Unreadable attempt membership fails closed.
 
 The supervisor pins the command leader until all group signals finish. Cleanup
-uses a unique cgroup v2 directory recorded in the lease before launching the
-body. The body attaches before exec; its descendants retain membership across
-`setsid`, reparenting and dumpability changes. Cleanup sends TERM through pidfds,
+uses a unique cgroup v2 directory whose intended path is recorded in the lease
+before creating the directory or launching the body. Recovery also removes a
+recorded empty directory left by a startup crash; a publication failure creates
+no directory. The body attaches before exec; its descendants retain membership
+across `setsid`, reparenting and dumpability changes. Cleanup sends TERM through pidfds,
 then uses `cgroup.kill` after half a second to cover concurrent forks. Admission
 resumes only after `cgroup.events` reports the entire subtree unpopulated. It
 never reads unrelated process environments. OOM death follows the same path
