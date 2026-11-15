@@ -74,7 +74,8 @@ start_runner() {
   unit=sid-train-$(printf '%s' "$common" | sha256sum | cut -c1-16)
   if [ -z "${SID_TRAIN_INLINE+x}" ] && command -v systemd-run >/dev/null; then
     systemctl --user is-active --quiet "$unit" 2>/dev/null && return 0
-    systemd-run --user --collect --unit="$unit" --working-directory="$repo" --setenv=PATH="$PATH" --setenv=HOME="$HOME" "$here/sid-train.sh" >>"$train/runner.log" 2>&1 && return
+    # Four times the default CPU share: the train decides merges, so it wins over agent worktrees when the machine is busy.
+    systemd-run --user --collect --unit="$unit" --working-directory="$repo" --property=CPUWeight=400 --setenv=PATH="$PATH" --setenv=HOME="$HOME" "$here/sid-train.sh" >>"$train/runner.log" 2>&1 && return
     # A responding manager alone is not evidence that a runner exists.
     local unit_state
     unit_state=$(systemctl --user show "$unit" --property=LoadState --property=ActiveState 2>/dev/null) &&
