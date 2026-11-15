@@ -392,6 +392,68 @@ for cancellation in TERM KILL; do
   [ ! -e "$q/active/11" ]; ok "worker $cancellation clears active claim" "$?" 0
   flock -n .git/sid-gate/lock true; ok "worker $cancellation releases gate lock" "$?" 0
 done
+# A dead supervisor/runner must not unlock a surviving gate body.
+for casualty in worker group; do
+  setup_train "killed-$casualty"
+  add_pr 11 a; queue_pr 11; touch "$T/block-train" "$T/cancel-worker"
+  setsid "$here/sid-train.sh" > "$T/worker-out" 2>&1 & rp=$!
+  for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+  [ -f "$T/train-started" ]; ok "$casualty kill reached body" "$?" 0
+  body=$(cat "$T/gate-pid")
+  helper=$(awk '{print $4}' "/proc/$body/stat")
+  if [ "$casualty" = group ]; then kill -KILL -- "-$rp"
+  else kill -KILL "$helper"; fi
+  wait "$rp" 2>/dev/null || true
+  kill -0 "$body"; ok "$casualty kill leaves body alive" "$?" 0
+  for ((j=0; j<5; j++)); do
+    flock -n .git/sid-gate/lock true
+    ok "$casualty kill keeps lock while body lives ($j)" "$?" 1
+  done
+  [ ! -f "$q/result/11" ]; ok "$casualty kill never accepts an unconfirmed gate" "$?" 0
+  kill -TERM -- "-$body"
+  timeout 10 flock .git/sid-gate/lock true
+  ok "$casualty kill releases lock only after body cleanup" "$?" 0
+  [ -f "$T/worker-stopped" ]; ok "$casualty kill allows descendant cleanup" "$?" 0
+  rm -f "$T/block-train" "$T/cancel-worker" "$T/child-ready" "$T/worker-stopped"
+  timeout 20 "$here/sid-train.sh" > "$T/restarted-out" 2>&1
+  ok "$casualty kill restart drains durable queue" "$?" 0
+  ok "$casualty kill restarted request merges" "$(code 11)" 0
+done
+# Inject an unreadable /proc entry after leader exit: keep the lock and the
+# unreaped leader until observation recovers, without ever signalling a reused ID.
+setup_train proc-error
+mkdir -p .git/sid-gate
+cat > "$T/proc-error.py" <<'PYTEST'
+import os, runpy, sys
+from pathlib import Path
+root, worker, owner = sys.argv[1:]
+root = Path(root)
+read = Path.read_text
+killpg = os.killpg
+def read_stat(path, *args, **kwargs):
+    if str(path) == "/proc/1/stat" and (root/"deny-proc").exists():
+        (root/"proc-error-seen").touch()
+        raise PermissionError("injected unreadable /proc")
+    return read(path, *args, **kwargs)
+def send(pgid, sig):
+    # ECHILD here would prove the supervisor had already reaped its leader.
+    os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    (root/"unreaped-signal").touch()
+    return killpg(pgid, sig)
+Path.read_text = read_stat
+os.killpg = send
+sys.argv = [worker, owner, "bash", "-c", "exit 0"]
+runpy.run_path(worker, run_name="__main__")
+PYTEST
+touch "$T/deny-proc"
+( exec 9>.git/sid-gate/lock; flock 9; exec python3 "$T/proc-error.py" "$T" "$here/gate_worker.py" "$$" ) > "$T/proc-out" 2>&1 & wp=$!
+for ((j=0; j<200; j++)); do [ -f "$T/proc-error-seen" ] && break; sleep .05; done
+[ -f "$T/proc-error-seen" ]; ok "unreadable proc scenario reached cleanup" "$?" 0
+flock -n .git/sid-gate/lock true; ok "unknown proc state retains lock" "$?" 1
+kill -0 "$wp"; ok "unknown proc state keeps supervisor alive" "$?" 0
+rm "$T/deny-proc"; wait "$wp"; ok "proc recovery completes cleanup" "$?" 0
+[ -f "$T/unreaped-signal" ]; ok "group signals happen before leader reap" "$?" 0
+flock -n .git/sid-gate/lock true; ok "proc recovery releases lock" "$?" 0
 setup_train endless-drift
 add_pr 11 a; queue_pr 11; touch "$T/drift"; run_train
 ok "main drift retries are bounded" "$(count_gates)" 3; ok "endless drift fails the member" "$(code 11)" 1
