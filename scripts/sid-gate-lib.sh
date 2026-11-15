@@ -28,11 +28,11 @@ gate_repo() {
 run_gate() {
   local log=$1; shift
   ( cd "$verify" && { [ -f .sidstack/gate.sh ] || { echo 'no .sidstack/gate.sh in this repo'; exit 1; }; } &&
-    exec python3 "$gate_worker" "$$" env "$@" bash .sidstack/gate.sh ) >> "$log" 2>&1 &
+    exec env SID_GATE_LOCK_FD=9 python3 "$gate_worker" "$$" env "$@" bash .sidstack/gate.sh ) >> "$log" 2>&1 &
   local worker=$! rc=0
   wait "$worker" || rc=$?
   # A killed supervisor cannot vouch for body shutdown. Stop before tree cleanup;
-  # the surviving body retains our lock descriptors until it is gone.
+  # the surviving body retains the gate lock until it is gone.
   if [ "$rc" -ge 128 ]; then exit "$rc"; fi
   return "$rc"
 }

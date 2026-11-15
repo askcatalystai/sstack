@@ -419,6 +419,36 @@ for casualty in worker group; do
   ok "$casualty kill restart drains durable queue" "$?" 0
   ok "$casualty kill restarted request merges" "$(code 11)" 0
 done
+# A setsid escaper may retain the gate lock (lease follow-up), never the
+# queue/runner locks. Use a nonstandard gate fd to prove the caller contract.
+setup_train setsid-escape
+mkdir -p "$q"
+cat > "$T/escape.py" <<'PYTEST'
+import ctypes, os, signal, sys
+from pathlib import Path
+os.setsid()
+assert ctypes.CDLL(None).prctl(15, b"gate-\xff", 0, 0, 0) == 0
+Path(sys.argv[1], "escaped-pid").write_text(str(os.getpid()))
+signal.pause()
+PYTEST
+cat > "$T/body.sh" <<'BODY'
+python3 "$T/escape.py" "$T" &
+while [ ! -f "$T/escaped-pid" ]; do sleep .05; done
+BODY
+( exec 7>"$q/runner.lock" 8>"$q/queue.lock" 12>.git/sid-gate/lock
+  flock 7; flock 8; flock 12
+  exec env SID_GATE_LOCK_FD=12 python3 "$here/gate_worker.py" "$$" bash "$T/body.sh"
+) > "$T/escape-out" 2>&1 & wp=$!
+for ((j=0; j<200; j++)); do [ -f "$T/escaped-pid" ] && break; sleep .05; done
+[ -f "$T/escaped-pid" ]; ok "setsid descendant starts with non-UTF8 comm" "$?" 0
+wait "$wp"; ok "non-UTF8 proc names do not break cleanup" "$?" 0
+escaped=$(cat "$T/escaped-pid")
+kill -0 "$escaped"; ok "escaped descendant remains running" "$?" 0
+flock -n "$q/runner.lock" true; ok "escaper does not retain runner lock" "$?" 0
+flock -n "$q/queue.lock" true; ok "escaper does not retain queue lock" "$?" 0
+flock -n .git/sid-gate/lock true; ok "escaper retains only caller-selected gate lock" "$?" 1
+kill -KILL -- "-$escaped"
+timeout 10 flock .git/sid-gate/lock true; ok "gate lock releases after escaper exits" "$?" 0
 # Inject an unreadable /proc entry after leader exit: keep the lock and the
 # unreaped leader until observation recovers, without ever signalling a reused ID.
 setup_train proc-error
@@ -428,7 +458,7 @@ import os, runpy, sys
 from pathlib import Path
 root, worker, owner = sys.argv[1:]
 root = Path(root)
-read = Path.read_text
+read = Path.read_bytes
 killpg = os.killpg
 def read_stat(path, *args, **kwargs):
     if str(path) == "/proc/1/stat" and (root/"deny-proc").exists():
@@ -440,13 +470,13 @@ def send(pgid, sig):
     os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
     (root/"unreaped-signal").touch()
     return killpg(pgid, sig)
-Path.read_text = read_stat
+Path.read_bytes = read_stat
 os.killpg = send
 sys.argv = [worker, owner, "bash", "-c", "exit 0"]
 runpy.run_path(worker, run_name="__main__")
 PYTEST
 touch "$T/deny-proc"
-( exec 9>.git/sid-gate/lock; flock 9; exec python3 "$T/proc-error.py" "$T" "$here/gate_worker.py" "$$" ) > "$T/proc-out" 2>&1 & wp=$!
+( exec 9>.git/sid-gate/lock; flock 9; exec env SID_GATE_LOCK_FD=9 python3 "$T/proc-error.py" "$T" "$here/gate_worker.py" "$$" ) > "$T/proc-out" 2>&1 & wp=$!
 for ((j=0; j<200; j++)); do [ -f "$T/proc-error-seen" ] && break; sleep .05; done
 [ -f "$T/proc-error-seen" ]; ok "unreadable proc scenario reached cleanup" "$?" 0
 flock -n .git/sid-gate/lock true; ok "unknown proc state retains lock" "$?" 1

@@ -5,7 +5,7 @@ from pathlib import Path
 
 owner = int(sys.argv[1])
 try:
-    birth = Path(f"/proc/{owner}/stat").read_text().split(") ", 1)[1].split()[19]
+    birth = Path(f"/proc/{owner}/stat").read_bytes().split(b") ", 1)[1].split()[19]
 except FileNotFoundError:
     sys.exit(143)
 stopped = False
@@ -18,24 +18,20 @@ signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
 def alive():
     try:
-        fields = Path(f"/proc/{owner}/stat").read_text().split(") ", 1)[1].split()
-        return fields[0] != "Z" and fields[19] == birth
+        fields = Path(f"/proc/{owner}/stat").read_bytes().split(b") ", 1)[1].split()
+        return fields[0] != b"Z" and fields[19] == birth
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, ValueError, IndexError):
         return True
 
 if not alive():
     sys.exit(143)
-# The body must retain the locks even if this supervisor is OOM/SIGKILLed.
-locks = []
-for fd in (7, 8, 9):
-    try:
-        os.fstat(fd)
-        locks.append(fd)
-    except OSError:
-        pass
-child = subprocess.Popen(sys.argv[2:], start_new_session=True, pass_fds=locks)
+# Require the caller to identify its gate lock. Never hand queue/runner locks
+# to a body whose descendants can escape supervision with setsid.
+gate_lock = int(os.environ["SID_GATE_LOCK_FD"])
+os.fstat(gate_lock)
+child = subprocess.Popen(sys.argv[2:], start_new_session=True, pass_fds=(gate_lock,))
 exit_seen = None
 
 def exited():
@@ -63,11 +59,11 @@ def group_alive():
                 if not entry.name.isdigit():
                     continue
                 try:
-                    fields = Path(entry.path, "stat").read_text().split(") ", 1)[1].split()
-                    if (fields[0] != "Z" and int(fields[2]) == child.pid and
+                    fields = Path(entry.path, "stat").read_bytes().split(b") ", 1)[1].split()
+                    if (fields[0] != b"Z" and int(fields[2]) == child.pid and
                             (exit_seen is None or int(fields[19]) <= exit_seen)):
                         return True
-                except OSError:
+                except (OSError, ValueError, IndexError):
                     unknown = True
     except OSError:
         return True
