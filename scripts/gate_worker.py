@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Hold inherited gate locks until a cancelled worker's process group is gone."""
-import os, signal, subprocess, sys
+import os, signal, subprocess, sys, time
+from pathlib import Path
 
 owner = int(sys.argv[1])
 # Keep inherited lock descriptors here; never pass them to the command.
@@ -36,10 +37,21 @@ try:
     os.killpg(child.pid, signal.SIGTERM)
 except ProcessLookupError:
     pass
-try:
-    child.wait(timeout=3)
-except subprocess.TimeoutExpired:
-    pass
+# The shell can exit before its children finish their TERM handlers (including
+# the test runner's cleanup of detached batches). Give the whole group grace.
+def group_alive():
+    for entry in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = entry.read_text().split(") ", 1)[1].split()
+            if fields[0] != "Z" and int(fields[2]) == child.pid:
+                return True
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    return False
+
+deadline = time.monotonic() + 3
+while group_alive() and time.monotonic() < deadline:
+    time.sleep(.05)
 try:
     os.killpg(child.pid, signal.SIGKILL)
 except ProcessLookupError:

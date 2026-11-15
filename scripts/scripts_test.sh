@@ -164,6 +164,10 @@ if [ -f "$T/drift" ]; then
   git --git-dir="$T/origin.git" update-ref refs/heads/main "$new"
 fi
 if [ -f "$T/block-train" ]; then
+  if [ -f "$T/cancel-worker" ]; then
+    python3 -c 'import os,signal,time; from pathlib import Path; p=Path(os.environ["T"]); signal.signal(signal.SIGTERM, lambda *_: (time.sleep(.2), (p/"worker-stopped").touch(), exit(0))); (p/"child-ready").touch(); signal.pause()' &
+    while [ ! -f "$T/child-ready" ]; do sleep .05; done
+  fi
   echo $$ > "$T/gate-pid"
   touch "$T/train-started"
   while [ ! -f "$T/release-train" ]; do sleep .05; done
@@ -361,7 +365,7 @@ git show origin/main:outside > /dev/null; ok "outside push survives merge" "$?" 
 # Cancel a real worker, including a hard-killed wrapper; recover its durable request on restart.
 for cancellation in TERM KILL; do
   setup_train "worker-$cancellation"
-  add_pr 11 a; touch "$T/block-train"
+  add_pr 11 a; touch "$T/block-train" "$T/cancel-worker"
   "$here/sid-gate.sh" work11 > "$T/plain-out" 2>&1 & gp=$!
   for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
   [ -f "$T/train-started" ]; ok "plain gate $cancellation reached worker" "$?" 0
@@ -372,6 +376,8 @@ for cancellation in TERM KILL; do
   old_worker=$(cat "$T/gate-pid")
   [ ! -e "/proc/$old_worker/stat" ] || [ "$(awk '{print $3}' "/proc/$old_worker/stat")" = Z ]
   ok "plain gate $cancellation stops its worker" "$?" 0
+  [ -f "$T/worker-stopped" ]; ok "plain gate $cancellation lets descendants finish cleanup" "$?" 0
+  rm -f "$T/cancel-worker" "$T/child-ready" "$T/worker-stopped"
   rm -f "$T/train-started"
   queue_pr 11
   "$here/sid-train.sh" > "$T/worker-out" 2>&1 & rp=$!
