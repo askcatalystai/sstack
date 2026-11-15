@@ -6,6 +6,7 @@ cache=$(mktemp -d)
 trap 'rm -rf "$cache"' EXIT
 while IFS= read -r -d '' file; do PYTHONPYCACHEPREFIX=$cache python3 -m py_compile "$file"; done < <(find . -type f -name '*.py' -not -path './.git/*' -print0)
 python3 -I scripts/check_skills.py
+python3 -I scripts/models.py models.md >/dev/null
 if command -v cargo >/dev/null; then
   (cd kanzo && CARGO_TARGET_DIR=$HOME/.cache/sidstack-kanzo cargo test -q --locked)
 else
