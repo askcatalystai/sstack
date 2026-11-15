@@ -4,6 +4,7 @@
 CLOCK_BOOTTIME includes suspend. Boot identity and /proc start ticks prevent PID
 reuse after restart. Unknown process state is fail-closed, never evidence of death.
 """
+import errno
 import json
 import os
 import shutil
@@ -69,7 +70,7 @@ def tagged(token, session=None, since=0):
     return found
 
 
-def send(who, sig):
+def send(who, sig, membership=None):
     # pidfd pins the target across the identity check and signal; no PGID reuse.
     try:
         fd = os.pidfd_open(who[0])
@@ -77,6 +78,10 @@ def send(who, sig):
         return
     try:
         if alive(who):
+            # Recheck membership with the pidfd pinned: a PID recycled between
+            # the cgroup snapshot and identity() must not target an outsider.
+            if membership is not None and str(who[0]) not in membership.read_text().split():
+                return
             signal.pidfd_send_signal(fd, sig)
     finally:
         os.close(fd)
@@ -96,6 +101,82 @@ def cleanup(token, session=None, since=0):
             elif key not in terminated:
                 send(who, signal.SIGTERM)
                 terminated.add(key)
+        time.sleep(.05)
+
+
+def create_cgroup(lease, record):
+    # Use the nearest writable cgroup v2 delegation; no systemd client or
+    # privileged daemon is needed. Publish membership before any workload runs.
+    root = Path('/sys/fs/cgroup')
+    required = 'gate requires a writable cgroup v2 delegation'
+    try:
+        relative = next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines()
+                        if line.startswith('0::'))
+    except (OSError, StopIteration) as error:
+        raise PermissionError(required) from error
+    current = root / relative.lstrip('/')
+    for parent in (current, *current.parents):
+        if parent == root.parent:
+            break
+        group = parent / ('sid-gate-' + record['attempt'])
+        # Publish ownership before mkdir, even for an empty startup cgroup.
+        # A crash after creation or a later write failure is then recoverable.
+        record['cgroup'] = str(group)
+        write(lease, record)
+        try:
+            group.mkdir()
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOENT):
+                continue
+            raise
+        if not os.access(group/'cgroup.kill', os.W_OK):
+            group.rmdir()
+            raise PermissionError('gate requires writable cgroup.kill (Linux 5.14+)')
+        return
+    raise PermissionError(required)
+
+
+def cleanup_record(record):
+    if 'cgroup' not in record:
+        # Leases written before cgroup containment have only the token as
+        # evidence. Preserve their fail-closed behavior rather than guess.
+        cleanup(record['attempt'], since=int(record['supervisor'][1]))
+        return
+    group = Path(record['cgroup']).resolve()
+    if (not group.is_relative_to('/sys/fs/cgroup') or
+            group.name != 'sid-gate-' + record['attempt']):
+        raise ValueError('invalid attempt cgroup')
+    end = now() + .5
+    terminated = set()
+    while group.exists():
+        try:
+            # Include nested cgroups should a workload create any. cgroup.kill
+            # catches concurrent forks at escalation, independently of dumpability.
+            if now() >= end:
+                (group/'cgroup.kill').write_text('1')
+            for procs in group.rglob('cgroup.procs'):
+                try:
+                    pids = procs.read_text().split()
+                except FileNotFoundError:
+                    continue
+                for pid in pids:
+                    who = identity(int(pid))
+                    if who and tuple(who) not in terminated:
+                        send(who, signal.SIGTERM, membership=procs)
+                        terminated.add(tuple(who))
+            if 'populated 0' in (group/'cgroup.events').read_text().splitlines():
+                for child in sorted(group.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+                    if child.is_dir():
+                        child.rmdir()
+                group.rmdir()
+                return
+        except FileNotFoundError:
+            if group.exists():
+                raise
+            return
+        except OSError as error:
+            if error.errno not in (errno.EBUSY, errno.ENOTEMPTY):
+                raise
         time.sleep(.05)
 
 
@@ -163,7 +244,7 @@ def recover(path):
     while record['boot'] == BOOT:
         # Never reclaim a live owner or supervisor, even after expiry.
         if not alive(record['owner']) and not alive(record['supervisor']):
-            cleanup(record['attempt'], since=int(record['supervisor'][1]))
+            cleanup_record(record)
             while now() < record['expires']:
                 time.sleep(.05)
             break
@@ -186,7 +267,7 @@ def hold(path, record, ready):
     # are reclaimed only once the last renewal expires.
     while alive(record['owner']):
         time.sleep(.05)
-    cleanup(record['attempt'], since=int(record['supervisor'][1]))
+    cleanup_record(record)
     while now() < record['expires']:
         time.sleep(.05)
     path.unlink()
@@ -208,6 +289,10 @@ if __name__ == '__main__':
             json.dump(dict(boot=BOOT), f)
     elif action == 'repair':
         repair(path, Path(sys.argv[3]))
+    elif action == 'exec':
+        # Failure to attach exits before exec, so an uncontained body cannot run.
+        (path/'cgroup.procs').write_text(str(os.getpid()))
+        os.execvpe(sys.argv[3], sys.argv[3:], os.environ)
     elif action == 'hold':
         hold(path, json.loads(sys.argv[3]), int(sys.argv[4]))
     else:
