@@ -3,6 +3,7 @@
 # The second stamp line is the Gate-Passed record; logs keep the newest 50 runs.
 # Exit: 0 passed, 1 failed, 3 conflicts with the default branch.
 set -u
+trap 'exit 143' TERM INT
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
 branch=${1:?usage: sid-gate <branch>}

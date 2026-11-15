@@ -7,6 +7,7 @@
 #   SID_RERUN=<file>         run only the tests listed, on the tree checked out, and report the same way.
 #                            A listed test that doesn't exist on this tree counts as passing.
 set -u
+gate_worker=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gate_worker.py
 # merge_tree <args>: git merge-tree with the same settings GitHub uses, whatever the operator's config says.
 # The pinned rename settings are assumed to match GitHub squash merges; a mismatch yields exit 3 or 5, never an ungated landing.
 # Only here: fetch and push still need the global config, which holds the credential helper for private repos.
@@ -27,7 +28,13 @@ gate_repo() {
 run_gate() {
   local log=$1; shift
   ( cd "$verify" && { [ -f .sidstack/gate.sh ] || { echo 'no .sidstack/gate.sh in this repo'; exit 1; }; } &&
-    env "$@" bash .sidstack/gate.sh ) >> "$log" 2>&1
+    exec env SID_GATE_LOCK_FD=9 python3 "$gate_worker" "$$" env "$@" bash .sidstack/gate.sh ) >> "$log" 2>&1 &
+  local worker=$! rc=0
+  wait "$worker" || rc=$?
+  # A killed supervisor cannot vouch for body shutdown. Stop before tree cleanup;
+  # the surviving body retains the gate lock until it is gone.
+  if [ "$rc" -ge 128 ]; then exit "$rc"; fi
+  return "$rc"
 }
 gate_tree() {
   local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main

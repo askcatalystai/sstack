@@ -27,7 +27,7 @@ def check_failures(rollup):
     return bad
 
 
-def problems(pr):
+def problems(pr, required=()):
     found = []
     if pr["state"] != "OPEN":
         found.append(f"PR is {pr['state']}, not open")
@@ -38,6 +38,10 @@ def problems(pr):
     if pr["reviewDecision"] == "CHANGES_REQUESTED":
         found.append("a reviewer requested changes")
     found += [f"check not passing: {bad}" for bad in check_failures(pr["statusCheckRollup"])]
+    for name in required:
+        matches = [c for c in pr["statusCheckRollup"] if (c.get("name") or c.get("context")) == name]
+        if not matches or any((c.get("conclusion") or c.get("state")) != "SUCCESS" for c in matches):
+            found.append(f"required check not successful: {name}")
     head = pr["headRefOid"]
     if head[:7] not in section(pr["body"], "Proof"):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
@@ -47,6 +51,7 @@ def problems(pr):
 
 
 if __name__ == "__main__":
-    bad = problems(json.load(open(sys.argv[1])))
+    required = [line.strip() for line in open(sys.argv[2]) if line.strip() and not line.lstrip().startswith("#")] if len(sys.argv) > 2 else []
+    bad = problems(json.load(open(sys.argv[1])), required)
     if bad:
         sys.exit("\n".join(bad))

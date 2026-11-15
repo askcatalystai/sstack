@@ -164,6 +164,11 @@ if [ -f "$T/drift" ]; then
   git --git-dir="$T/origin.git" update-ref refs/heads/main "$new"
 fi
 if [ -f "$T/block-train" ]; then
+  if [ -f "$T/cancel-worker" ]; then
+    python3 -c 'import os,signal,time; from pathlib import Path; p=Path(os.environ["T"]); signal.signal(signal.SIGTERM, lambda *_: (time.sleep(.2), (p/"worker-stopped").touch(), exit(0))); (p/"child-ready").touch(); signal.pause()' &
+    while [ ! -f "$T/child-ready" ]; do sleep .05; done
+  fi
+  echo $$ > "$T/gate-pid"
   touch "$T/train-started"
   while [ ! -f "$T/release-train" ]; do sleep .05; done
 fi
@@ -326,6 +331,21 @@ run_train; ok "requeued head merges successfully" "$(code 11)" 0
 ok "requeued head gates once" "$(count_gates)" 1
 ok "requeued head merges once" "$(cat "$T/merge-calls")" 11
 ok "merge includes the pushed fix" "$(git show origin/main:a)" fixed
+setup_train required-context
+# The PR predates the policy: its tree has no required-checks file.
+add_pr 11 a
+git checkout -q main; printf 'Harness\n' > .sidstack/required-checks
+git add -A; git commit -qm policy; git push -q origin main
+queue_pr 11; ok "missing default-branch required check refuses enqueue" "$?" 1
+[ ! -f "$q/queue/11.req" ]; ok "missing check leaves no request" "$?" 0
+python3 - "$T/pr-11.json" <<'PYTEST'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d['statusCheckRollup'] = [dict(name='Harness', conclusion='SUCCESS')]
+open(p, 'w').write(json.dumps(d))
+PYTEST
+queue_pr 11; ok "successful required check allows enqueue" "$?" 0
+run_train; ok "required-check policy survives the PR tree without it" "$(code 11)" 0
 setup_train claimed-head
 add_pr 11 a; queue_pr 11; touch "$T/block-train"
 "$here/sid-train.sh" > "$T/runner-out" 2>&1 & rp=$!
@@ -342,6 +362,128 @@ git checkout -q -b outside origin/main; echo outside > outside; git add -A; git 
 git rev-parse HEAD > "$T/drift-once"; touch "$T/drift"; git checkout -q main
 run_train; ok "main drift requires a second gate" "$(count_gates)" 2; ok "regated PR merges" "$(code 11)" 0
 git show origin/main:outside > /dev/null; ok "outside push survives merge" "$?" 0
+# Cancel a real worker, including a hard-killed wrapper; recover its durable request on restart.
+for cancellation in TERM KILL; do
+  setup_train "worker-$cancellation"
+  add_pr 11 a; touch "$T/block-train" "$T/cancel-worker"
+  "$here/sid-gate.sh" work11 > "$T/plain-out" 2>&1 & gp=$!
+  for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+  [ -f "$T/train-started" ]; ok "plain gate $cancellation reached worker" "$?" 0
+  kill -"$cancellation" "$gp"; wait "$gp" 2>/dev/null || true
+  timeout 10 flock .git/sid-gate/lock true
+  ok "plain gate $cancellation releases lock after cleanup" "$?" 0
+  [ ! -f .git/sid-gate/work11.pass ]; ok "cancelled plain gate has no pass" "$?" 0
+  old_worker=$(cat "$T/gate-pid")
+  [ ! -e "/proc/$old_worker/stat" ] || [ "$(awk '{print $3}' "/proc/$old_worker/stat")" = Z ]
+  ok "plain gate $cancellation stops its worker" "$?" 0
+  [ -f "$T/worker-stopped" ]; ok "plain gate $cancellation lets descendants finish cleanup" "$?" 0
+  rm -f "$T/cancel-worker" "$T/child-ready" "$T/worker-stopped"
+  rm -f "$T/train-started"
+  queue_pr 11
+  "$here/sid-train.sh" > "$T/worker-out" 2>&1 & rp=$!
+  for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+  [ -f "$T/train-started" ]; ok "worker $cancellation reached gate" "$?" 0
+  kill -"$cancellation" "$rp"; wait "$rp" 2>/dev/null || true
+  # A new train can acquire both locks only after the old command group stops.
+  rm -f "$T/block-train"
+  timeout 20 "$here/sid-train.sh" > "$T/restarted-out" 2>&1
+  ok "worker $cancellation restart drains request" "$?" 0
+  ok "worker $cancellation durable request merges" "$(code 11)" 0
+  [ ! -e "$q/active/11" ]; ok "worker $cancellation clears active claim" "$?" 0
+  flock -n .git/sid-gate/lock true; ok "worker $cancellation releases gate lock" "$?" 0
+done
+# A dead supervisor/runner must not unlock a surviving gate body.
+for casualty in worker group; do
+  setup_train "killed-$casualty"
+  add_pr 11 a; queue_pr 11; touch "$T/block-train" "$T/cancel-worker"
+  setsid "$here/sid-train.sh" > "$T/worker-out" 2>&1 & rp=$!
+  for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+  [ -f "$T/train-started" ]; ok "$casualty kill reached body" "$?" 0
+  body=$(cat "$T/gate-pid")
+  helper=$(awk '{print $4}' "/proc/$body/stat")
+  if [ "$casualty" = group ]; then kill -KILL -- "-$rp"
+  else kill -KILL "$helper"; fi
+  wait "$rp" 2>/dev/null || true
+  kill -0 "$body"; ok "$casualty kill leaves body alive" "$?" 0
+  for ((j=0; j<5; j++)); do
+    flock -n .git/sid-gate/lock true
+    ok "$casualty kill keeps lock while body lives ($j)" "$?" 1
+  done
+  [ ! -f "$q/result/11" ]; ok "$casualty kill never accepts an unconfirmed gate" "$?" 0
+  kill -TERM -- "-$body"
+  timeout 10 flock .git/sid-gate/lock true
+  ok "$casualty kill releases lock only after body cleanup" "$?" 0
+  [ -f "$T/worker-stopped" ]; ok "$casualty kill allows descendant cleanup" "$?" 0
+  rm -f "$T/block-train" "$T/cancel-worker" "$T/child-ready" "$T/worker-stopped"
+  timeout 20 "$here/sid-train.sh" > "$T/restarted-out" 2>&1
+  ok "$casualty kill restart drains durable queue" "$?" 0
+  ok "$casualty kill restarted request merges" "$(code 11)" 0
+done
+# A setsid escaper may retain the gate lock (lease follow-up), never the
+# queue/runner locks. Use a nonstandard gate fd to prove the caller contract.
+setup_train setsid-escape
+mkdir -p "$q"
+cat > "$T/escape.py" <<'PYTEST'
+import ctypes, os, signal, sys
+from pathlib import Path
+os.setsid()
+assert ctypes.CDLL(None).prctl(15, b"gate-\xff", 0, 0, 0) == 0
+Path(sys.argv[1], "escaped-pid").write_text(str(os.getpid()))
+signal.pause()
+PYTEST
+cat > "$T/body.sh" <<'BODY'
+python3 "$T/escape.py" "$T" &
+while [ ! -f "$T/escaped-pid" ]; do sleep .05; done
+BODY
+( exec 7>"$q/runner.lock" 8>"$q/queue.lock" 12>.git/sid-gate/lock
+  flock 7; flock 8; flock 12
+  exec env SID_GATE_LOCK_FD=12 python3 "$here/gate_worker.py" "$$" bash "$T/body.sh"
+) > "$T/escape-out" 2>&1 & wp=$!
+for ((j=0; j<200; j++)); do [ -f "$T/escaped-pid" ] && break; sleep .05; done
+[ -f "$T/escaped-pid" ]; ok "setsid descendant starts with non-UTF8 comm" "$?" 0
+wait "$wp"; ok "non-UTF8 proc names do not break cleanup" "$?" 0
+escaped=$(cat "$T/escaped-pid")
+kill -0 "$escaped"; ok "escaped descendant remains running" "$?" 0
+flock -n "$q/runner.lock" true; ok "escaper does not retain runner lock" "$?" 0
+flock -n "$q/queue.lock" true; ok "escaper does not retain queue lock" "$?" 0
+flock -n .git/sid-gate/lock true; ok "escaper retains only caller-selected gate lock" "$?" 1
+kill -KILL -- "-$escaped"
+timeout 10 flock .git/sid-gate/lock true; ok "gate lock releases after escaper exits" "$?" 0
+# Inject an unreadable /proc entry after leader exit: keep the lock and the
+# unreaped leader until observation recovers, without ever signalling a reused ID.
+setup_train proc-error
+mkdir -p .git/sid-gate
+cat > "$T/proc-error.py" <<'PYTEST'
+import os, runpy, sys
+from pathlib import Path
+root, worker, owner = sys.argv[1:]
+root = Path(root)
+read = Path.read_bytes
+killpg = os.killpg
+def read_stat(path, *args, **kwargs):
+    if str(path) == "/proc/1/stat" and (root/"deny-proc").exists():
+        (root/"proc-error-seen").touch()
+        raise PermissionError("injected unreadable /proc")
+    return read(path, *args, **kwargs)
+def send(pgid, sig):
+    # ECHILD here would prove the supervisor had already reaped its leader.
+    os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    (root/"unreaped-signal").touch()
+    return killpg(pgid, sig)
+Path.read_bytes = read_stat
+os.killpg = send
+sys.argv = [worker, owner, "bash", "-c", "exit 0"]
+runpy.run_path(worker, run_name="__main__")
+PYTEST
+touch "$T/deny-proc"
+( exec 9>.git/sid-gate/lock; flock 9; exec env SID_GATE_LOCK_FD=9 python3 "$T/proc-error.py" "$T" "$here/gate_worker.py" "$$" ) > "$T/proc-out" 2>&1 & wp=$!
+for ((j=0; j<200; j++)); do [ -f "$T/proc-error-seen" ] && break; sleep .05; done
+[ -f "$T/proc-error-seen" ]; ok "unreadable proc scenario reached cleanup" "$?" 0
+flock -n .git/sid-gate/lock true; ok "unknown proc state retains lock" "$?" 1
+kill -0 "$wp"; ok "unknown proc state keeps supervisor alive" "$?" 0
+rm "$T/deny-proc"; wait "$wp"; ok "proc recovery completes cleanup" "$?" 0
+[ -f "$T/unreaped-signal" ]; ok "group signals happen before leader reap" "$?" 0
+flock -n .git/sid-gate/lock true; ok "proc recovery releases lock" "$?" 0
 setup_train endless-drift
 add_pr 11 a; queue_pr 11; touch "$T/drift"; run_train
 ok "main drift retries are bounded" "$(count_gates)" 3; ok "endless drift fails the member" "$(code 11)" 1

@@ -15,7 +15,14 @@ ready() {
     [ "$(field mergeable)" != UNKNOWN ] && ! python3 -c 'import json,sys;sys.exit(any(not (c.get("conclusion") or c.get("state") not in (None,"PENDING","EXPECTED")) for c in json.load(open(sys.argv[1]))["statusCheckRollup"]) is False)' "$tmp/pr.json" && break
   done
   body=$(field body) && title=$(field title) && head=$(field headRefOid) && branch=$(field headRefName) && base=$(field baseRefName) || exit 1
-  python3 "$here/pr_checks.py" "$tmp/pr.json" || exit 1
+  git -C "$repo" fetch -q origin "$default" || { echo "could not refresh required checks"; exit 1; }
+  if git -C "$repo" cat-file -e "origin/$default:.sidstack/required-checks" 2>/dev/null; then
+    git -C "$repo" show "origin/$default:.sidstack/required-checks" > "$tmp/required-checks" || exit 1
+  else
+    git -C "$repo" rev-parse --verify "origin/$default^{commit}" >/dev/null || exit 1
+    : > "$tmp/required-checks"
+  fi
+  python3 "$here/pr_checks.py" "$tmp/pr.json" "$tmp/required-checks" || exit 1
 }
 # A commit that failed the gate goes back once, with --retry; after a second failure only a new commit does.
 retry_allowed() {
