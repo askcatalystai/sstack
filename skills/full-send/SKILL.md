@@ -72,7 +72,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    the board finds it. Every brief starts "Read ~/.local/share/sidstack/rules.md first.".
    T3 makes the worktree and a `t3/...` branch but doesn't run setup scripts for
    delegates, so the brief starts with the repo's setup command (project
-   instructions name it). The builder reports its `pwd` and branch; it doesn't commit. Before replying it runs what the gate will run for its diff (the repo's changed-tests command, eslint, typecheck), once, and pastes the output with pass counts in `## Proof`: reviewers read it instead of rerunning it, and a PR that fails in the train costs every PR in it a second gate.
+   instructions name it). The builder reports its `pwd` and branch; it doesn't commit. Logic builders, the bug pass and Astra run on the Mac when it's linked (`docs/adapter.md`, "Which machine"): there the builder commits and pushes its branch, because you can't read its worktree from here, and its test runs stay off the machine the merge train uses. Before replying it runs what the gate will run for its diff (the repo's changed-tests command, eslint, typecheck), once, and pastes the output with pass counts in `## Proof`: reviewers read it instead of rerunning it, and a PR that fails in the train costs every PR in it a second gate.
    For a trivial change Claude may do this in a worktree itself.
    **Read the diff when it returns, before any review.** If it's bigger than the brief,
    touches unrelated files or is the wrong approach, scrap it (see "Scrap") and start a

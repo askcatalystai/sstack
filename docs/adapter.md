@@ -15,6 +15,17 @@ sidstack runs in T3 Code first, then plain Claude Code, then Codex. pstack (`~/.
 | `AskQuestion` | `AskUserQuestion` | `AskUserQuestion` |
 | Run skill `/name` | `Skill` if listed, else read `<pstack>/skills/<name>/SKILL.md` and follow it. | Same. |
 
+## Which machine
+
+`models.md` ("Machines") says which roles may run on the Mac. T3's load balancing setting only picks a machine for a new thread the operator starts from the composer; a `delegate_task` runs here unless it names the other machine, so the orchestrator places every delegate itself:
+
+1. Once per session, call `t3_environment_links` and `t3_project_list` with the Mac's `environmentId` to get its project for the same repository. If the Mac isn't reachable or has no such project, run everything here and say so in one line.
+2. A Codex, Cursor or OpenCode delegate that builds, runs tests or reviews goes to the Mac: `target: { environmentId, projectId, providerInstanceId, model, options }`, with `isolation: "worktree"` for a builder. Call `orchestrator_capabilities` with that `environmentId` before the first one. Claude roles stay here.
+3. Spill back when the Mac is full. It has 10 cores: keep at most three delegates that run tests or builds there at once, and send the next ones here. Read-only delegates (reviews, explorers) don't count.
+4. The orchestrator can't read a worktree on the other machine. A builder on the Mac commits its work on its `t3/...` branch and pushes it, and reports the branch and commit; the orchestrator runs `git fetch origin <branch>` here to read the diff and opens the PR. Reviewers on the Mac are briefed with the pushed branch and commit, not a path from this machine.
+5. Only tracked files reach the Mac. Paste into the brief anything the worker needs from an untracked file here (plans under `docs/`, design notes), and never name a `/home/...` path in a brief sent there.
+6. The merge train, its gate, Kanzo and `sid-merge.sh` run only here. A test pass on the Mac is the builder's `## Proof`; the Linux gate is still the check that decides.
+
 ## pstack roles → sidstack roles
 
 | pstack role (`pstack-models`) | sidstack role |
