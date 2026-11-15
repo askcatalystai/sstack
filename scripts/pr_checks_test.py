@@ -25,6 +25,14 @@ class Ready(unittest.TestCase):
             self.assertTrue(checks.problems(pr(statusCheckRollup=[check])), check)
         self.assertEqual(checks.problems(pr(statusCheckRollup=[{"name": "a", "conclusion": "SUCCESS"}, {"context": "b", "state": "SUCCESS"}])), [])
 
+    def test_required_context_needs_success(self):
+        self.assertTrue(checks.problems(pr(), ["Harness"]))
+        for state in ["PENDING", "FAILURE", "CANCELLED", "SKIPPED", "NEUTRAL", "EXPECTED", ""]:
+            for check in [{"name": "Harness", "conclusion": state}, {"context": "Harness", "state": state}]:
+                self.assertTrue(checks.problems(pr(statusCheckRollup=[check]), ["Harness"]), check)
+        for check in [{"name": "Harness", "conclusion": "SUCCESS"}, {"context": "Harness", "state": "SUCCESS"}]:
+            self.assertEqual(checks.problems(pr(statusCheckRollup=[check]), ["Harness"]), [])
+
     def test_missing_fields_fail_rather_than_pass(self):
         healthy = pr()
         for field in ["state", "isDraft", "mergeable", "reviewDecision", "statusCheckRollup", "headRefOid"]:

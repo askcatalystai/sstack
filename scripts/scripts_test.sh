@@ -164,6 +164,7 @@ if [ -f "$T/drift" ]; then
   git --git-dir="$T/origin.git" update-ref refs/heads/main "$new"
 fi
 if [ -f "$T/block-train" ]; then
+  echo $$ > "$T/gate-pid"
   touch "$T/train-started"
   while [ ! -f "$T/release-train" ]; do sleep .05; done
 fi
@@ -326,6 +327,21 @@ run_train; ok "requeued head merges successfully" "$(code 11)" 0
 ok "requeued head gates once" "$(count_gates)" 1
 ok "requeued head merges once" "$(cat "$T/merge-calls")" 11
 ok "merge includes the pushed fix" "$(git show origin/main:a)" fixed
+setup_train required-context
+# The PR predates the policy: its tree has no required-checks file.
+add_pr 11 a
+git checkout -q main; printf 'Harness\n' > .sidstack/required-checks
+git add -A; git commit -qm policy; git push -q origin main
+queue_pr 11; ok "missing default-branch required check refuses enqueue" "$?" 1
+[ ! -f "$q/queue/11.req" ]; ok "missing check leaves no request" "$?" 0
+python3 - "$T/pr-11.json" <<'PYTEST'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d['statusCheckRollup'] = [dict(name='Harness', conclusion='SUCCESS')]
+open(p, 'w').write(json.dumps(d))
+PYTEST
+queue_pr 11; ok "successful required check allows enqueue" "$?" 0
+run_train; ok "required-check policy survives the PR tree without it" "$(code 11)" 0
 setup_train claimed-head
 add_pr 11 a; queue_pr 11; touch "$T/block-train"
 "$here/sid-train.sh" > "$T/runner-out" 2>&1 & rp=$!
@@ -342,6 +358,34 @@ git checkout -q -b outside origin/main; echo outside > outside; git add -A; git 
 git rev-parse HEAD > "$T/drift-once"; touch "$T/drift"; git checkout -q main
 run_train; ok "main drift requires a second gate" "$(count_gates)" 2; ok "regated PR merges" "$(code 11)" 0
 git show origin/main:outside > /dev/null; ok "outside push survives merge" "$?" 0
+# Cancel a real worker, including a hard-killed wrapper; recover its durable request on restart.
+for cancellation in TERM KILL; do
+  setup_train "worker-$cancellation"
+  add_pr 11 a; touch "$T/block-train"
+  "$here/sid-gate.sh" work11 > "$T/plain-out" 2>&1 & gp=$!
+  for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+  [ -f "$T/train-started" ]; ok "plain gate $cancellation reached worker" "$?" 0
+  kill -"$cancellation" "$gp"; wait "$gp" 2>/dev/null || true
+  timeout 10 flock .git/sid-gate/lock true
+  ok "plain gate $cancellation releases lock after cleanup" "$?" 0
+  [ ! -f .git/sid-gate/work11.pass ]; ok "cancelled plain gate has no pass" "$?" 0
+  old_worker=$(cat "$T/gate-pid")
+  [ ! -e "/proc/$old_worker/stat" ] || [ "$(awk '{print $3}' "/proc/$old_worker/stat")" = Z ]
+  ok "plain gate $cancellation stops its worker" "$?" 0
+  rm -f "$T/train-started"
+  queue_pr 11
+  "$here/sid-train.sh" > "$T/worker-out" 2>&1 & rp=$!
+  for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+  [ -f "$T/train-started" ]; ok "worker $cancellation reached gate" "$?" 0
+  kill -"$cancellation" "$rp"; wait "$rp" 2>/dev/null || true
+  # A new train can acquire both locks only after the old command group stops.
+  rm -f "$T/block-train"
+  timeout 20 "$here/sid-train.sh" > "$T/restarted-out" 2>&1
+  ok "worker $cancellation restart drains request" "$?" 0
+  ok "worker $cancellation durable request merges" "$(code 11)" 0
+  [ ! -e "$q/active/11" ]; ok "worker $cancellation clears active claim" "$?" 0
+  flock -n .git/sid-gate/lock true; ok "worker $cancellation releases gate lock" "$?" 0
+done
 setup_train endless-drift
 add_pr 11 a; queue_pr 11; touch "$T/drift"; run_train
 ok "main drift retries are bounded" "$(count_gates)" 3; ok "endless drift fails the member" "$(code 11)" 1
