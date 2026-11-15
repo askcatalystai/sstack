@@ -3,6 +3,7 @@
 set -u
 # Do not inherit the harness service identity; systemd cases opt in with fakes.
 unset INVOCATION_ID
+export SID_GATE_LEASE_SECONDS=1
 here=$(cd "$(dirname "$0")" && pwd); t=$(mktemp -d); trap 'rm -rf "$t"' EXIT; fail=0
 ok() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (want $3, got $2)"; fail=1; fi; }
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -393,7 +394,7 @@ for cancellation in TERM KILL; do
   flock -n .git/sid-gate/lock true; ok "worker $cancellation releases gate lock" "$?" 0
 done
 # A dead supervisor/runner must not unlock a surviving gate body.
-for casualty in worker group; do
+for casualty in worker group holder all; do
   setup_train "killed-$casualty"
   add_pr 11 a; queue_pr 11; touch "$T/block-train" "$T/cancel-worker"
   setsid "$here/sid-train.sh" > "$T/worker-out" 2>&1 & rp=$!
@@ -401,17 +402,22 @@ for casualty in worker group; do
   [ -f "$T/train-started" ]; ok "$casualty kill reached body" "$?" 0
   body=$(cat "$T/gate-pid")
   helper=$(awk '{print $4}' "/proc/$body/stat")
+  holder=$(python3 -c 'import json; print(json.load(open(".git/sid-gate/lease.json"))["holder"][0])')
   if [ "$casualty" = group ]; then kill -KILL -- "-$rp"
+  elif [ "$casualty" = all ]; then kill -KILL "$holder"; kill -KILL -- "-$rp"
+  elif [ "$casualty" = holder ]; then kill -KILL "$holder"
   else kill -KILL "$helper"; fi
   wait "$rp" 2>/dev/null || true
-  kill -0 "$body"; ok "$casualty kill leaves body alive" "$?" 0
-  for ((j=0; j<5; j++)); do
+  if [ "$casualty" != holder ]; then
+    kill -0 "$body"; ok "$casualty kill leaves body alive" "$?" 0
+  fi
+  if [ "$casualty" != holder ] && [ "$casualty" != all ]; then
     flock -n .git/sid-gate/lock true
-    ok "$casualty kill keeps lock while body lives ($j)" "$?" 1
-  done
+    ok "$casualty kill keeps lock while body lives" "$?" 1
+  fi
   [ ! -f "$q/result/11" ]; ok "$casualty kill never accepts an unconfirmed gate" "$?" 0
-  kill -TERM -- "-$body"
-  timeout 10 flock .git/sid-gate/lock true
+  # No manual process cleanup: the lease holder or next runner must reclaim it.
+  timeout 10 bash -c 'source "$1/sid-gate-lib.sh"; gate_repo; exec 9>"$gate/lock"; gate_lock' bash "$here"
   ok "$casualty kill releases lock only after body cleanup" "$?" 0
   [ -f "$T/worker-stopped" ]; ok "$casualty kill allows descendant cleanup" "$?" 0
   rm -f "$T/block-train" "$T/cancel-worker" "$T/child-ready" "$T/worker-stopped"
@@ -419,8 +425,8 @@ for casualty in worker group; do
   ok "$casualty kill restart drains durable queue" "$?" 0
   ok "$casualty kill restarted request merges" "$(code 11)" 0
 done
-# A setsid escaper may retain the gate lock (lease follow-up), never the
-# queue/runner locks. Use a nonstandard gate fd to prove the caller contract.
+# A setsid escaper is reclaimed and cannot inherit any lock. Use a
+# nonstandard gate fd to prove the caller contract.
 setup_train setsid-escape
 mkdir -p "$q"
 cat > "$T/escape.py" <<'PYTEST'
@@ -428,6 +434,16 @@ import ctypes, os, signal, sys
 from pathlib import Path
 os.setsid()
 assert ctypes.CDLL(None).prctl(15, b"gate-\xff", 0, 0, 0) == 0
+Path(sys.argv[1], "escaped-lock-env").write_text(os.environ.get('SID_GATE_LOCK_FD', ''))
+locks = []
+for fd in Path('/proc/self/fd').iterdir():
+    try:
+        target = os.readlink(fd)
+        if target.endswith(('/lock', '/runner.lock', '/queue.lock')):
+            locks.append(target)
+    except FileNotFoundError:
+        pass
+Path(sys.argv[1], "escaped-locks").write_text('\n'.join(locks))
 Path(sys.argv[1], "escaped-pid").write_text(str(os.getpid()))
 signal.pause()
 PYTEST
@@ -437,18 +453,27 @@ while [ ! -f "$T/escaped-pid" ]; do sleep .05; done
 BODY
 ( exec 7>"$q/runner.lock" 8>"$q/queue.lock" 12>.git/sid-gate/lock
   flock 7; flock 8; flock 12
-  exec env SID_GATE_LOCK_FD=12 python3 "$here/gate_worker.py" "$$" bash "$T/body.sh"
+  exec env SID_GATE_LOCK_FD=12 python3 "$here/gate_worker.py" "$$" --lease-v2 bash "$T/body.sh"
 ) > "$T/escape-out" 2>&1 & wp=$!
 for ((j=0; j<200; j++)); do [ -f "$T/escaped-pid" ] && break; sleep .05; done
 [ -f "$T/escaped-pid" ]; ok "setsid descendant starts with non-UTF8 comm" "$?" 0
+[ ! -s "$T/escaped-lock-env" ]; ok "body environment does not advertise the closed gate fd" "$?" 0
+[ ! -s "$T/escaped-locks" ]; ok "body and setsid descendant inherit no gate, runner or queue locks" "$?" 0
 wait "$wp"; ok "non-UTF8 proc names do not break cleanup" "$?" 0
 escaped=$(cat "$T/escaped-pid")
-kill -0 "$escaped"; ok "escaped descendant remains running" "$?" 0
+[ ! -e "/proc/$escaped/stat" ] || [ "$(awk '{print $3}' "/proc/$escaped/stat")" = Z ]
+ok "setsid descendant is stopped without operator cleanup" "$?" 0
 flock -n "$q/runner.lock" true; ok "escaper does not retain runner lock" "$?" 0
 flock -n "$q/queue.lock" true; ok "escaper does not retain queue lock" "$?" 0
-flock -n .git/sid-gate/lock true; ok "escaper retains only caller-selected gate lock" "$?" 1
-kill -KILL -- "-$escaped"
+flock -n .git/sid-gate/lock true; ok "escaper cannot retain gate lock" "$?" 0
 timeout 10 flock .git/sid-gate/lock true; ok "gate lock releases after escaper exits" "$?" 0
+# An open but unrelated lock must never authorize lease writes or a body.
+( exec 12>"$T/unrelated-lock"; flock 12
+  exec env SID_GATE_LOCK_FD=12 python3 "$here/gate_worker.py" "$$" --lease-v2 bash -c 'touch "$T/wrong-fd-body"'
+) > "$T/wrong-fd-out" 2>&1
+ok "worker refuses an open fd for the wrong lock inode" "$?" 143
+[ ! -e "$T/wrong-fd-body" ]; ok "wrong fd never starts a body" "$?" 0
+[ ! -e "$T/lease.json" ]; ok "wrong fd never creates lease state beside an unrelated file" "$?" 0
 # Inject an unreadable /proc entry after leader exit: keep the lock and the
 # unreaped leader until observation recovers, without ever signalling a reused ID.
 setup_train proc-error
@@ -458,6 +483,7 @@ import os, runpy, sys
 from pathlib import Path
 root, worker, owner = sys.argv[1:]
 root = Path(root)
+sys.path.insert(0, str(Path(worker).parent))
 read = Path.read_bytes
 killpg = os.killpg
 def read_stat(path, *args, **kwargs):
@@ -472,7 +498,7 @@ def send(pgid, sig):
     return killpg(pgid, sig)
 Path.read_bytes = read_stat
 os.killpg = send
-sys.argv = [worker, owner, "bash", "-c", "exit 0"]
+sys.argv = [worker, owner, "--lease-v2", "bash", "-c", "exit 0"]
 runpy.run_path(worker, run_name="__main__")
 PYTEST
 touch "$T/deny-proc"
@@ -484,6 +510,132 @@ kill -0 "$wp"; ok "unknown proc state keeps supervisor alive" "$?" 0
 rm "$T/deny-proc"; wait "$wp"; ok "proc recovery completes cleanup" "$?" 0
 [ -f "$T/unreaped-signal" ]; ok "group signals happen before leader reap" "$?" 0
 flock -n .git/sid-gate/lock true; ok "proc recovery releases lock" "$?" 0
+# Simulated reused PID/start identity must not signal the unrelated live process.
+setup_train reused-identity
+mkdir -p .git/sid-gate
+add_pr 11 a
+sleep 60 & unrelated=$!
+python3 - "$unrelated" <<'PYTEST'
+import json, sys, time
+from pathlib import Path
+who = [int(sys.argv[1]), "999999999999", Path('/proc/sys/kernel/random/boot_id').read_text().strip()]
+Path('.git/sid-gate/lease.json').write_text(json.dumps(dict(owner=who, supervisor=who,
+    boot=who[2], expires=time.clock_gettime(time.CLOCK_BOOTTIME)+.2, attempt='retired-attempt')))
+PYTEST
+timeout 10 "$here/sid-gate.sh" work11 > "$T/out" 2>&1
+ok "restart rejects reused PID identity and gates safely" "$?" 0
+kill -0 "$unrelated"; ok "stale PID and PGID cannot kill unrelated process" "$?" 0
+kill "$unrelated"; wait "$unrelated" 2>/dev/null || true
+# A stale writer remains confined to the abandoned attempt's index and files.
+setup_train fenced-tree
+add_pr 11 a; touch "$T/block-train"
+"$here/sid-gate.sh" work11 > "$T/out" 2>&1 & gp=$!
+for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+body=$(cat "$T/gate-pid")
+old_verify=$(readlink "/proc/$body/cwd")
+kill -KILL "$gp"; wait "$gp" 2>/dev/null || true
+rm "$T/block-train"
+# Mutate the abandoned index before recovery; it must not reach the next gate.
+echo stale > "$old_verify/stale"; git -C "$old_verify" add stale
+timeout 10 "$here/sid-gate.sh" work11 > "$T/restarted-out" 2>&1
+ok "new verification completes while abandoned cwd is being changed" "$?" 0
+[ -f .git/sid-gate/work11.pass ]; ok "fenced replacement records only confirmed pass" "$?" 0
+[ ! -d "$old_verify" ]; ok "recovery reclaims the abandoned mutable tree" "$?" 0
+ok "replacement hashes the expected tree despite stale index writes" "$(tail -n 1 "$T/gated-trees")" "$(git rev-parse 'work11^{tree}')"
+# Cached pre-lease shell functions load the newly installed worker. They must
+# recover the inherited lease and refuse the old shared-checkout protocol.
+setup_train mixed-version
+add_pr 11 a; touch "$T/block-train"
+# Frozen pre-lease library from sstack #19, with only its worker path relocated.
+cp "$here/fixtures/gate-lib-pre-lease.sh" "$T/old-lib.sh"
+cat > "$T/old-waiter.sh" <<'OLD'
+source "$T/old-lib.sh"
+gate_worker=$1/gate_worker.py
+gate_repo
+exec 9>"$gate/lock"
+flock 9
+touch "$T/old-acquired"
+gate_tree "$(git rev-parse origin/main)" "$(git rev-parse 'work11^{tree}')" "$T/old-log" old
+OLD
+setsid "$here/sid-gate.sh" work11 > "$T/first-out" 2>&1 & gp=$!
+for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+body=$(cat "$T/gate-pid"); helper=$(awk '{print $4}' "/proc/$body/stat")
+holder=$(python3 -c 'import json; print(json.load(open(".git/sid-gate/lease.json"))["holder"][0])')
+bash "$T/old-waiter.sh" "$here" > "$T/old-out" 2>&1 & old=$!
+kill -KILL "$holder"; kill -KILL -- "-$gp"; wait "$gp" 2>/dev/null || true
+wait "$old"; ok "cached old library fails closed with new worker" "$?" 143
+[ -f "$T/old-acquired" ]; ok "real old waiter acquired the released inherited flock" "$?" 0
+[ ! -e "/proc/$body/stat" ] || [ "$(awk '{print $3}' "/proc/$body/stat")" = Z ]
+ok "old waiter reconciles the abandoned workload before refusing" "$?" 0
+ok "mixed rollout never starts a second body" "$(count_gates)" 1
+[ ! -f .git/sid-gate/work11.pass ]; ok "mixed rollout never records an unconfirmed pass" "$?" 0
+rm "$T/block-train"
+"$here/sid-gate.sh" work11 > "$T/restarted-out" 2>&1
+ok "fresh library gates after rejecting cached caller" "$?" 0
+# Repeated cancellation and recovery leave neither checkouts nor registrations.
+setup_train bounded-checkouts
+add_pr 11 a
+for cycle in 1 2 3; do
+  touch "$T/block-train"; rm -f "$T/train-started"
+  "$here/sid-gate.sh" work11 > "$T/out" 2>&1 & gp=$!
+  for ((j=0; j<200; j++)); do [ -f "$T/train-started" ] && break; sleep .05; done
+  [ -f "$T/train-started" ]; ok "crash cycle $cycle reaches its registered checkout" "$?" 0
+  body=$(cat "$T/gate-pid"); old_verify=$(readlink "/proc/$body/cwd")
+  kill -KILL "$gp"; wait "$gp" 2>/dev/null || true
+  rm "$T/block-train"
+  "$here/sid-gate.sh" work11 > "$T/recovered-out" 2>&1
+  ok "crash cycle $cycle recovers" "$?" 0
+  [ ! -d "$old_verify" ]; ok "crash cycle $cycle reclaims checkout data" "$?" 0
+  ok "crash cycle $cycle keeps worktree registrations bounded" "$(git worktree list --porcelain | rg -c '^worktree ')" 1
+  ok "crash cycle $cycle retires ownership manifests" "$(find .git/sid-gate/attempts -name '*.json' | wc -l)" 0
+done
+# Setup can fail before a body exists: its checkout still must be reclaimed.
+( source "$here/sid-gate-lib.sh"; gate_repo; exec 9>"$gate/lock"; gate_lock
+  gate_tree "$(git rev-parse origin/main)" missing-tree "$T/setup-out" invalid ) > "$T/setup-error" 2>&1
+ok "invalid setup fails" "$?" 1
+ok "setup failure leaves no registered attempt checkout" "$(git worktree list --porcelain | rg -c '^worktree ')" 1
+# A reboot fixture injects only the boot ID read, keeping the real processes,
+# flock, manifests, Git worktrees and repair entry point intact.
+"$here/sid-gate-recover.sh" --pause > "$T/pause-out"
+printf '{broken' > .git/sid-gate/lease.json
+"$here/sid-gate-recover.sh" --after-reboot > "$T/repair-out" 2>&1
+ok "corrupt-state repair refuses same-boot workload assumptions" "$?" 1
+"$here/sid-gate.sh" work11 > "$T/paused-out" 2>&1
+ok "paused admission rejects new gates" "$?" 1
+[ "$(cat .git/sid-gate/lease.json)" = '{broken' ]; ok "failed repair preserves corrupt evidence" "$?" 0
+# Create an abandoned registered checkout as if the host stopped during setup.
+python3 - "$here" <<'PYTEST'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import gate_lease as lease
+# Prepare without parsing the deliberately corrupt admission state.
+manifest = Path('.git/sid-gate/attempts/' + 'a'*32 + '.json')
+checkout = str(Path.cwd()) + '-wt/verify-' + 'a'*32
+lease.write(manifest, dict(owner=lease.identity(__import__('os').getpid()), checkout=checkout))
+lease.subprocess.run(['git', 'worktree', 'add', '-q', '--detach', checkout, 'HEAD'], check=True)
+PYTEST
+cat > "$T/reboot.py" <<'PYTEST'
+import runpy, sys
+from pathlib import Path
+read = Path.read_text
+def boot(path, *args, **kwargs):
+    if str(path) == '/proc/sys/kernel/random/boot_id':
+        return 'fixture-next-boot'
+    return read(path, *args, **kwargs)
+Path.read_text = boot
+sys.argv = [sys.argv[1], *sys.argv[2:]]
+runpy.run_path(sys.argv[0], run_name='__main__')
+PYTEST
+repo_dir=$(pwd); gate_dir="$repo_dir/.git/sid-gate"
+( exec 9>.git/sid-gate/lock; flock 9
+  python3 "$T/reboot.py" "$here/gate_lease.py" repair "$gate_dir" "$repo_dir" ) > "$T/reboot-out" 2>&1
+ok "post-reboot repair quarantines corrupt state and reclaims checkout" "$?" 0
+ok "reboot recovery leaves only the main checkout" "$(git worktree list --porcelain | rg -c '^worktree ')" 1
+ok "corrupt state is quarantined once" "$(find .git/sid-gate -name 'lease.corrupt-*' | wc -l)" 1
+[ ! -e .git/sid-gate/admission-paused ]; ok "successful repair resumes admission" "$?" 0
+"$here/sid-gate.sh" work11 > "$T/repaired-gate" 2>&1
+ok "fresh gate runs after corrupt-state repair" "$?" 0
 setup_train endless-drift
 add_pr 11 a; queue_pr 11; touch "$T/drift"; run_train
 ok "main drift retries are bounded" "$(count_gates)" 3; ok "endless drift fails the member" "$(code 11)" 1

@@ -28,7 +28,7 @@ exec 9>"$gate/lock"
 if [ "$wait_gate" = true ]; then
   # Do not hold queue.lock while waiting: the train needs it to finish its batch.
   flock -u 8
-  flock 9
+  gate_lock
   git fetch -q origin "$default" || exit 1
   main=$(git rev-parse "origin/$default")
 else
@@ -41,7 +41,7 @@ else
     exit 0
   fi
   if grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
-  flock -n 9 || exit 0
+  gate_lock -n || exit 0
 fi
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$gate/health.pid"
 child=
