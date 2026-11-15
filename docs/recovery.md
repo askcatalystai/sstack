@@ -33,14 +33,29 @@ start ticks, boot ID, a random attempt ID and a CLOCK_BOOTTIME expiry in
 (`SID_GATE_LEASE_SECONDS`, 0.5–60 seconds). Recovery requires both recorded
 identities to be gone and the last renewal to have expired. Killing the holder
 alone never authorizes a replacement: every admission reconciles its durable
-lease while holding the flock. Unreadable candidate process state fails closed.
+lease while holding the flock. Unreadable attempt membership fails closed.
 
 The supervisor pins the command leader until all group signals finish. Cleanup
-also finds session members and inherited attempt tokens in `/proc`, including
-`setsid` descendants, and signals individual identities with pidfds. TERM is
-sent once, with a half-second grace before KILL. OOM death follows the same path
+uses a unique cgroup v2 directory recorded in the lease before launching the
+body. The body attaches before exec; its descendants retain membership across
+`setsid`, reparenting and dumpability changes. Cleanup sends TERM through pidfds,
+then uses `cgroup.kill` after half a second to cover concurrent forks. Admission
+resumes only after `cgroup.events` reports the entire subtree unpopulated. It
+never reads unrelated process environments. OOM death follows the same path
 as SIGKILL. Recovery can take the lease interval plus process scan/scheduling
 time; unobservable or unkillable processes retain fail-closed admission.
+
+Gate execution now requires Linux cgroup v2 with a writable delegation (normally
+provided by the user systemd manager). The nearest writable ancestor of the
+runner's cgroup hosts `sid-gate-<attempt>`; cleanup removes the directory after
+it drains. Without delegation, startup fails before executing the gate body.
+No controller limits or systemd units are changed.
+
+Leases created before this change lack a cgroup. Their recovery retains the
+original token scan and fails closed if a same-user environment is unreadable:
+retroactive ancestry cannot identify an orphaned non-dumpable `setsid` process.
+Drain those attempts before updating, or use pause → reboot → repair below if
+an old attempt is already wedged. Never discard its lease to force admission.
 
 Each `gate_tree` uses a fresh `verify-<uuid>` worktree and index. An abandoned
 attempt's directory is never reused, so even an external service retaining its

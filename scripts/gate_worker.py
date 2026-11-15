@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Supervise a gate body; a detached sibling holds its renewable lease."""
 import json, os, signal, subprocess, sys, time, traceback, uuid
-from gate_lease import BOOT, BOUND, now, identity, write, cleanup, recover, reclaim
+from gate_lease import BOOT, BOUND, now, identity, write, cleanup_record, create_cgroup, recover, reclaim
 from pathlib import Path
 
 def unconfirmed(kind, value, tb):
@@ -58,7 +58,7 @@ if sys.argv[2:3] != ['--lease-v2']:
 reclaim(lease.parent, common.parent)
 attempt = uuid.uuid4().hex
 record = dict(owner=identity(owner), supervisor=identity(os.getpid()), boot=BOOT,
-              attempt=attempt, expires=now() + BOUND)
+              attempt=attempt, expires=now() + BOUND, cgroup=create_cgroup(attempt))
 write(lease, record)
 ready, notify = os.pipe()
 holder = subprocess.Popen([sys.executable, str(Path(__file__).with_name("gate_lease.py")),
@@ -71,7 +71,9 @@ os.close(ready)
 os.close(gate_lock)
 body_env = {**os.environ, "SID_GATE_ATTEMPT": attempt}
 body_env.pop('SID_GATE_LOCK_FD', None)
-child = subprocess.Popen(sys.argv[3:], start_new_session=True, env=body_env)
+child = subprocess.Popen([sys.executable, str(Path(__file__).with_name('gate_lease.py')),
+                          'exec', record['cgroup'], *sys.argv[3:]],
+                         start_new_session=True, env=body_env)
 exit_seen = None
 
 def exited():
@@ -120,7 +122,7 @@ except ProcessLookupError:
 # Unknown /proc state must never release our locks. Keep the leader unreaped too.
 while group_alive():
     time.sleep(.05)
-cleanup(attempt, session=child.pid, since=int(record["supervisor"][1]))
+cleanup_record(record)
 child.wait()
 if holder.poll() is not None or stopped or not alive():
     sys.exit(143)

@@ -425,6 +425,61 @@ for casualty in worker group holder all; do
   ok "$casualty kill restart drains durable queue" "$?" 0
   ok "$casualty kill restarted request merges" "$(code 11)" 0
 done
+# Recovery must ignore unrelated non-dumpable processes and drain even an
+# orphaned setsid descendant whose environment is unreadable.
+setup_train nondumpable-recovery
+mkdir -p "$q"
+cat > "$T/nondump.py" <<'PYTEST'
+import ctypes, os, signal, sys
+from pathlib import Path
+os.setsid()
+assert ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) == 0
+if len(sys.argv) > 2:
+    signal.signal(signal.SIGTERM, lambda *_: Path(sys.argv[2]).touch())
+else:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(sys.argv[1]).write_text(str(os.getpid()))
+while True:
+    signal.pause()
+PYTEST
+cat > "$T/body.sh" <<'BODY'
+echo $$ > "$T/body-pid"
+python3 "$T/nondump.py" "$T/descendant-pid" &
+while :; do sleep 1; done
+BODY
+setsid bash -c '
+  exec 12>.git/sid-gate/lock; flock 12
+  exec env SID_GATE_LOCK_FD=12 python3 "$1/gate_worker.py" "$$" --lease-v2 bash "$T/body.sh"
+' bash "$here" > "$T/nondump-out" 2>&1 & wp=$!
+for ((j=0; j<200; j++)); do
+  [ -f "$T/descendant-pid" ] && break
+  sleep .05
+done
+[ -f "$T/descendant-pid" ]; ok "non-dumpable real descendant started" "$?" 0
+python3 "$T/nondump.py" "$T/unrelated-pid" "$T/unrelated-signaled" & unrelated=$!
+for ((j=0; j<200; j++)); do [ -f "$T/unrelated-pid" ] && break; sleep .05; done
+descendant=$(cat "$T/descendant-pid")
+python3 - "$descendant" "$unrelated" <<'PYTEST'
+import sys
+from pathlib import Path
+for pid in sys.argv[1:]:
+    try:
+        Path('/proc', pid, 'environ').read_bytes()
+    except PermissionError:
+        continue
+    raise AssertionError('fixture environment is readable')
+PYTEST
+ok "both same-uid non-dumpable environments deny access" "$?" 0
+holder=$(python3 -c 'import json; print(json.load(open(".git/sid-gate/lease.json"))["holder"][0])')
+kill -KILL "$holder"; kill -KILL -- "-$wp"; wait "$wp" 2>/dev/null || true
+timeout 10 bash -c 'source "$1/sid-gate-lib.sh"; gate_repo; exec 9>"$gate/lock"; gate_lock' bash "$here" > "$T/recovery-out" 2>&1
+ok "non-dumpable unrelated process does not break crash recovery" "$?" 0
+[ ! -e "/proc/$descendant/stat" ] || [ "$(awk '{print $3}' "/proc/$descendant/stat")" = Z ]
+ok "crash recovery kills orphaned non-dumpable setsid descendant" "$?" 0
+[ ! -e "$T/unrelated-signaled" ] && kill -0 "$unrelated"; ok "crash recovery never signals unrelated non-dumpable process" "$?" 0
+kill -KILL "$unrelated" "$descendant" 2>/dev/null || true
+wait "$unrelated" 2>/dev/null || true
+kill -KILL -- "-$(cat "$T/body-pid")" 2>/dev/null || true
 # A setsid escaper is reclaimed and cannot inherit any lock. Use a
 # nonstandard gate fd to prove the caller contract.
 setup_train setsid-escape

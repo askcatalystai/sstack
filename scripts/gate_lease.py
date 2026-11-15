@@ -99,6 +99,61 @@ def cleanup(token, session=None, since=0):
         time.sleep(.05)
 
 
+def create_cgroup(attempt):
+    # Use the nearest writable cgroup v2 delegation; no systemd client or
+    # privileged daemon is needed. Publish membership before any workload runs.
+    root = Path('/sys/fs/cgroup')
+    relative = next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines()
+                    if line.startswith('0::'))
+    current = root / relative.lstrip('/')
+    for parent in (current, *current.parents):
+        if parent == root.parent:
+            break
+        group = parent / ('sid-gate-' + attempt)
+        try:
+            group.mkdir()
+        except PermissionError:
+            continue
+        return str(group)
+    raise PermissionError('gate requires a writable cgroup v2 delegation')
+
+
+def cleanup_record(record):
+    if 'cgroup' not in record:
+        # Leases written before cgroup containment have only the token as
+        # evidence. Preserve their fail-closed behavior rather than guess.
+        cleanup(record['attempt'], since=int(record['supervisor'][1]))
+        return
+    group = Path(record['cgroup']).resolve()
+    if (not group.is_relative_to('/sys/fs/cgroup') or
+            group.name != 'sid-gate-' + record['attempt']):
+        raise ValueError('invalid attempt cgroup')
+    end = now() + .5
+    terminated = set()
+    while group.exists():
+        # Include nested cgroups should a workload create any. cgroup.kill
+        # catches concurrent forks at escalation, independently of dumpability.
+        if now() >= end:
+            (group/'cgroup.kill').write_text('1')
+        for procs in group.rglob('cgroup.procs'):
+            try:
+                pids = procs.read_text().split()
+            except FileNotFoundError:
+                continue
+            for pid in pids:
+                who = identity(int(pid))
+                if who and tuple(who) not in terminated:
+                    send(who, signal.SIGTERM)
+                    terminated.add(tuple(who))
+        if 'populated 0' in (group/'cgroup.events').read_text().splitlines():
+            for child in sorted(group.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+                if child.is_dir():
+                    child.rmdir()
+            group.rmdir()
+            return
+        time.sleep(.05)
+
+
 def checkout_record(manifest, repo):
     record = json.loads(manifest.read_text())
     expected = Path(str(repo) + '-wt') / ('verify-' + manifest.stem)
@@ -163,7 +218,7 @@ def recover(path):
     while record['boot'] == BOOT:
         # Never reclaim a live owner or supervisor, even after expiry.
         if not alive(record['owner']) and not alive(record['supervisor']):
-            cleanup(record['attempt'], since=int(record['supervisor'][1]))
+            cleanup_record(record)
             while now() < record['expires']:
                 time.sleep(.05)
             break
@@ -186,7 +241,7 @@ def hold(path, record, ready):
     # are reclaimed only once the last renewal expires.
     while alive(record['owner']):
         time.sleep(.05)
-    cleanup(record['attempt'], since=int(record['supervisor'][1]))
+    cleanup_record(record)
     while now() < record['expires']:
         time.sleep(.05)
     path.unlink()
@@ -208,6 +263,10 @@ if __name__ == '__main__':
             json.dump(dict(boot=BOOT), f)
     elif action == 'repair':
         repair(path, Path(sys.argv[3]))
+    elif action == 'exec':
+        # Failure to attach exits before exec, so an uncontained body cannot run.
+        (path/'cgroup.procs').write_text(str(os.getpid()))
+        os.execvpe(sys.argv[3], sys.argv[3:], os.environ)
     elif action == 'hold':
         hold(path, json.loads(sys.argv[3]), int(sys.argv[4]))
     else:
