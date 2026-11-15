@@ -24,15 +24,21 @@ gate_repo() {
   verify=$repo-wt/verify; gate=$common/sid-gate; train=$gate/train
   mkdir -p "$gate/logs" "$gate/health" "$train/queue" "$train/result" "$train/active" "$train/failed"
 }
+# Every flock acquisition must reconcile a lease left by a killed holder.
+gate_lock() {
+  flock "$@" 9 || return $?
+  [ ! -e "$gate/admission-paused" ] || { echo 'gate admission paused'; exit 1; }
+  python3 "${gate_worker%/*}/gate_lease.py" recover "$gate/lease.json" "$repo" || exit 1
+}
 # run_gate <log> [VAR=value ...]: one run of the repo's gate in the verify worktree, appended to the log.
 run_gate() {
   local log=$1; shift
-  ( cd "$verify" && { [ -f .sidstack/gate.sh ] || { echo 'no .sidstack/gate.sh in this repo'; exit 1; }; } &&
-    exec env SID_GATE_LOCK_FD=9 python3 "$gate_worker" "$$" env "$@" bash .sidstack/gate.sh ) >> "$log" 2>&1 &
+  ( exec 7>&- 8>&-; cd "$verify" && { [ -f .sidstack/gate.sh ] || { echo 'no .sidstack/gate.sh in this repo'; exit 1; }; } &&
+    exec env SID_GATE_LOCK_FD=9 python3 "$gate_worker" "$$" --lease-v2 env "$@" bash .sidstack/gate.sh ) >> "$log" 2>&1 &
   local worker=$! rc=0
   wait "$worker" || rc=$?
   # A killed supervisor cannot vouch for body shutdown. Stop before tree cleanup;
-  # the surviving body retains the gate lock until it is gone.
+  # the lease holder retains the gate lock until cleanup and expiry.
   if [ "$rc" -ge 128 ]; then exit "$rc"; fi
   return "$rc"
 }
@@ -41,10 +47,16 @@ gate_tree() {
   lane=full; digest=; flaky=0; known=0; new_failures=
   echo "== gate: $description" > "$log" || return 1
   rm -f "$failed" "$again" "$base"
-  [ -d "$verify" ] || git -C "$repo" worktree add -q --detach "$verify" "$main" || return 1
+  # Never reuse an abandoned attempt's checkout, even if its workload escaped
+  # supervision. Git's common object store is shared; mutable indexes are not.
+  verify=$(python3 "${gate_worker%/*}/gate_lease.py" prepare "$gate" "$repo" "$$" "$main") || return 1
+  local manifest=$gate/attempts/${verify##*/verify-}.json
   # HEAD stays at main so the repo gate sees every member in its diff.
   git -C "$verify" checkout -q --detach -f "$main" && git -C "$verify" clean -qfd &&
-    git -C "$verify" read-tree -u --reset "$tree" || return 1
+    git -C "$verify" read-tree -u --reset "$tree" || {
+      python3 "${gate_worker%/*}/gate_lease.py" remove "$manifest" "$repo"
+      return 1
+    }
   run_gate "$log" SID_FAILURES_OUT="$failed"; rc=$?
   if [ "$rc" != 0 ] && [ -s "$failed" ]; then
     # Only tests failed. Run just those again: what passes now was flaky, and what also fails on main isn't this tree's fault.
@@ -67,6 +79,7 @@ gate_tree() {
   fi
   git -C "$verify" checkout -q --detach -f "$main"
   git -C "$verify" clean -qfd
+  python3 "${gate_worker%/*}/gate_lease.py" remove "$manifest" "$repo" || return 1
   lane=$(sed -n 's/^gate: lane \([^[:space:]]*\)[[:space:]]*$/\1/p' "$log" | tail -n 1); lane=${lane:-full}
   digest=$(sha256sum "$log" | cut -d' ' -f1)
   # Keep failed logs too: split trains and health results refer to them.

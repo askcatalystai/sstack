@@ -17,7 +17,7 @@ exec 8>"$train/queue.lock"
 if [ -f "$gate/health.pid" ] && read -r pid birth < "$gate/health.pid"; then
   if [ "$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)" = "$birth" ]; then kill -TERM "$pid" 2>/dev/null; fi
 fi
-exec 9>"$gate/lock"; flock 9
+exec 9>"$gate/lock"; gate_lock
 # Claims only protect cancellation; a dead runner's queue is safe to rebuild from scratch.
 rm -f "$train/active/"*
 gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
@@ -99,7 +99,7 @@ start_health() {
   health_pid=$!
   flock -u 9
   wait "$health_pid"
-  flock 9
+  gate_lock
 }
 # The train's gate covers main when the landed tree is the gated one; record that so health doesn't run it again.
 stamp_main() {

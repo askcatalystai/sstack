@@ -8,7 +8,7 @@ here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
 branch=${1:?usage: sid-gate <branch>}
 gate_repo || exit 1
-exec 9>"$gate/lock"; flock 9
+exec 9>"$gate/lock"; gate_lock
 # Clear first so a failed or killed rerun cannot leave a usable pass.
 stamp=$gate/${branch//\//_}.pass; rm -f "$stamp"
 git -C "$repo" fetch -q origin "$default" "$branch" || { echo "cannot fetch $branch; push it first"; exit 1; }
