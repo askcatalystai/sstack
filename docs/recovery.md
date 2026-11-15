@@ -45,8 +45,8 @@ never reads unrelated process environments. OOM death follows the same path
 as SIGKILL. Recovery can take the lease interval plus process scan/scheduling
 time; unobservable or unkillable processes retain fail-closed admission.
 
-Gate execution now requires Linux cgroup v2 with a writable delegation (normally
-provided by the user systemd manager). The nearest writable ancestor of the
+Gate execution now requires Linux 5.14+ cgroup v2 with writable `cgroup.kill`
+and a writable delegation (normally provided by the user systemd manager). The nearest writable ancestor of the
 runner's cgroup hosts `sid-gate-<attempt>`; cleanup removes the directory after
 it drains. Without delegation, startup fails before executing the gate body.
 No controller limits or systemd units are changed.
@@ -65,9 +65,9 @@ owner PID/start ticks/boot and exact path. Admission recovers the lease first,
 then removes dead owners' tracked checkouts and Git registrations. Setup failures
 remove their own checkout immediately. After reboot, old boot identities are
 not live owners, so ordinary admission reclaims those attempts too. A daemon
-which deliberately removes the attempt token and creates a new session cannot
-be identified by this process scan, but cannot inherit admission locks or share
-the replacement's mutable index and checkout. This is process containment and
+which deliberately migrates out of its attempt cgroup (or, for legacy leases,
+removes the token and creates a new session) can escape cleanup, but cannot
+inherit admission locks or share the replacement's mutable index and checkout. This is process containment and
 checkout fencing, not a sandbox against deliberately hostile same-user code.
 
 

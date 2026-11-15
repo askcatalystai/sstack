@@ -4,6 +4,7 @@
 CLOCK_BOOTTIME includes suspend. Boot identity and /proc start ticks prevent PID
 reuse after restart. Unknown process state is fail-closed, never evidence of death.
 """
+import errno
 import json
 import os
 import shutil
@@ -69,7 +70,7 @@ def tagged(token, session=None, since=0):
     return found
 
 
-def send(who, sig):
+def send(who, sig, membership=None):
     # pidfd pins the target across the identity check and signal; no PGID reuse.
     try:
         fd = os.pidfd_open(who[0])
@@ -77,6 +78,10 @@ def send(who, sig):
         return
     try:
         if alive(who):
+            # Recheck membership with the pidfd pinned: a PID recycled between
+            # the cgroup snapshot and identity() must not target an outsider.
+            if membership is not None and str(who[0]) not in membership.read_text().split():
+                return
             signal.pidfd_send_signal(fd, sig)
     finally:
         os.close(fd)
@@ -112,8 +117,13 @@ def create_cgroup(attempt):
         group = parent / ('sid-gate-' + attempt)
         try:
             group.mkdir()
-        except PermissionError:
-            continue
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+                continue
+            raise
+        if not os.access(group/'cgroup.kill', os.W_OK):
+            group.rmdir()
+            raise PermissionError('gate requires writable cgroup.kill (Linux 5.14+)')
         return str(group)
     raise PermissionError('gate requires a writable cgroup v2 delegation')
 
@@ -131,26 +141,34 @@ def cleanup_record(record):
     end = now() + .5
     terminated = set()
     while group.exists():
-        # Include nested cgroups should a workload create any. cgroup.kill
-        # catches concurrent forks at escalation, independently of dumpability.
-        if now() >= end:
-            (group/'cgroup.kill').write_text('1')
-        for procs in group.rglob('cgroup.procs'):
-            try:
-                pids = procs.read_text().split()
-            except FileNotFoundError:
-                continue
-            for pid in pids:
-                who = identity(int(pid))
-                if who and tuple(who) not in terminated:
-                    send(who, signal.SIGTERM)
-                    terminated.add(tuple(who))
-        if 'populated 0' in (group/'cgroup.events').read_text().splitlines():
-            for child in sorted(group.rglob('*'), key=lambda p: len(p.parts), reverse=True):
-                if child.is_dir():
-                    child.rmdir()
-            group.rmdir()
+        try:
+            # Include nested cgroups should a workload create any. cgroup.kill
+            # catches concurrent forks at escalation, independently of dumpability.
+            if now() >= end:
+                (group/'cgroup.kill').write_text('1')
+            for procs in group.rglob('cgroup.procs'):
+                try:
+                    pids = procs.read_text().split()
+                except FileNotFoundError:
+                    continue
+                for pid in pids:
+                    who = identity(int(pid))
+                    if who and tuple(who) not in terminated:
+                        send(who, signal.SIGTERM, membership=procs)
+                        terminated.add(tuple(who))
+            if 'populated 0' in (group/'cgroup.events').read_text().splitlines():
+                for child in sorted(group.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+                    if child.is_dir():
+                        child.rmdir()
+                group.rmdir()
+                return
+        except FileNotFoundError:
+            if group.exists():
+                raise
             return
+        except OSError as error:
+            if error.errno not in (errno.EBUSY, errno.ENOTEMPTY):
+                raise
         time.sleep(.05)
 
 
