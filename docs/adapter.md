@@ -17,14 +17,15 @@ sidstack runs in T3 Code first, then plain Claude Code, then Codex. pstack (`~/.
 
 ## Which machine
 
-`models.md` ("Machines") says which roles may run on the Mac. T3's load balancing setting only picks a machine for a new thread the operator starts from the composer; a `delegate_task` runs here unless it names the other machine, so the orchestrator places every delegate itself:
+Sol builders run on the Mac; everything else runs here (`models.md`, "Machines"). T3's load balancing setting only picks a machine for a new thread the operator starts from the composer; a `delegate_task` runs here unless it names the other machine, so the orchestrator places every builder itself, whichever thread it is:
 
-1. Once per session, call `t3_environment_links` and `t3_project_list` with the Mac's `environmentId` to get its project for the same repository. If the Mac isn't reachable or has no such project, run everything here and say so in one line.
-2. A Codex, Cursor or OpenCode delegate that builds, runs tests or reviews goes to the Mac: `target: { environmentId, projectId, providerInstanceId, model, options }`, with `isolation: "worktree"` for a builder. Call `orchestrator_capabilities` with that `environmentId` before the first one. Claude roles stay here.
-3. Spill back when the Mac is full. It has 10 cores: keep at most three delegates that run tests or builds there at once, and send the next ones here. Read-only delegates (reviews, explorers) don't count.
-4. The orchestrator can't read a worktree on the other machine. A builder on the Mac commits its work on its `t3/...` branch and pushes it, and reports the branch and commit; the orchestrator runs `git fetch origin <branch>` here to read the diff and opens the PR. Reviewers on the Mac are briefed with the pushed branch and commit, not a path from this machine.
-5. Only tracked files reach the Mac. Paste into the brief anything the worker needs from an untracked file here (plans under `docs/`, design notes), and never name a `/home/...` path in a brief sent there.
-6. The merge train, its gate, Kanzo and `sid-merge.sh` run only here. A test pass on the Mac is the builder's `## Proof`; the Linux gate is still the check that decides.
+1. Once per session, call `t3_environment_links` and `t3_project_list` with the Mac's `environmentId` to get its project for the same repository, and `orchestrator_capabilities` with that `environmentId`. If the Mac isn't reachable or has no such project, run builders here and say so in one line.
+2. Every implementer delegate (Sol writing logic, and Sol's fix pass) goes to the Mac: `target: { environmentId, projectId, providerInstanceId, model, options }` with `isolation: "worktree"`. The UI builder, the bug pass, reviewers, panels, explorers and screenshots stay here.
+3. The Mac has 10 cores: keep at most three builders there at once and start the next ones here.
+4. The brief's first commands are the repo's setup, then `git fetch origin && git merge-base --is-ancestor origin/main HEAD`; if that fails the builder runs `git merge --ff-only origin/main` before touching a file, so its branch starts from what is pushed.
+5. You can't read a worktree on the other machine. A builder on the Mac commits its work on its `t3/...` branch and pushes it, and reports the branch, the commit and its worktree path. Here, `git fetch origin <branch>` and `git worktree add` give you the diff to read and give the bug pass and Astra a path to review. A fix goes to a new builder on the Mac, briefed with the Mac worktree path and the branch.
+6. Only tracked files reach the Mac. Paste into the brief anything the builder needs from an untracked file here (plans under `docs/`, design notes), and never name a `/home/...` path in a brief sent there.
+7. A test pass on the Mac is the builder's `## Proof`; the merge train's gate, here on Linux, is still the check that decides.
 
 ## pstack roles → sidstack roles
 

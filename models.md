@@ -44,7 +44,7 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 
 ## Machines
 
-Two machines are linked in T3 (`t3_environment_links` lists them with their `environmentId`). A role runs where its provider is signed in and where there is room; `docs/adapter.md` ("Which machine") has the rules.
+Two machines are linked in T3 (`t3_environment_links` lists them with their `environmentId`). `docs/adapter.md` ("Which machine") has the rules.
 
-- orx (Linux, 16 cores): the orchestrator, every Claude role, the merge train and its gate, Kanzo.
-- sid's Mac mini (M4, 10 cores, 24 GB): Codex, Cursor and OpenCode roles (implementer, bug pass, reviewer, risky review, workers), with their builds and test runs. Claude isn't signed in there, so no Claude role runs on it (user 2026-11-15: "use that machine for codex work and test suites").
+- orx (Linux, 16 cores): the orchestrator, every Claude role, the bug pass, reviewers, panels and workers, the merge train and its gate, Kanzo.
+- sid's Mac mini (M4, 10 cores, 24 GB): the implementer (Sol builders) only, each in a new worktree, with its builds and test runs (user 2026-11-15: "lets use mac for only sol workers since they usually start in a new worktee"). Claude isn't signed in there.
