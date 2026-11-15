@@ -19,13 +19,6 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - risky review: opencode / opencode-go/deepseek-v4.1-flash / low; cursor / composer-2.5 / fastMode=false (one extra review on risky PRs: auth, payments, data, migrations, `commerce/`, the merge scripts, or a PR that skipped a review step. Pick a family that hasn't reviewed the PR yet. A finding blocks the merge only when every model that reviewed the PR calls it risky; otherwise the orchestrator decides and writes why in `## Review`. Replaces the Codex GitHub bot: no `@codex review`; user 2026-11-13)
 - judgment and prose: claudeAgent / claude-opus-5-5 / medium
 
-## Machines
-
-Two machines are linked in T3 (`t3_environment_links` lists them with their `environmentId`). A role runs where its provider is signed in and where there is room; `docs/adapter.md` ("Which machine") has the rules.
-
-- orx (Linux, 16 cores): the orchestrator, every Claude role, the merge train and its gate, Kanzo.
-- sid's Mac mini (M4, 10 cores, 24 GB): Codex, Cursor and OpenCode roles (implementer, bug pass, reviewer, risky review, workers), with their builds and test runs. Claude isn't signed in there, so no Claude role runs on it (user 2026-11-15: "use that machine for codex work and test suites").
-
 ## Panels (one subagent per entry)
 
 - council: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; codex / gpt-6-astra / medium; codex / gpt-6.1-terra / high; cursor / composer-2.5 / fastMode=false; opencode / opencode-go/muse-spark-1.3-contributor / high; opencode / opencode-go/deepseek-v4.1-flash / high (seven seats, user 2026-11-01; every seat plans the whole brief, no per-seat categories; the orchestrator synthesises and leads UI and UX itself)
@@ -48,3 +41,10 @@ Two machines are linked in T3 (`t3_environment_links` lists them with their `env
 - Council briefs must require reading the installed Mastra docs where relevant, with citations: replies without them were thin (2026-11-01). Terra at `ultra` and Muse at `xhigh` both work when asked for maximum effort.
 - Cursor on the Plus plan accepts Composer 2.5 only with fast mode off. T3's Cursor SDK path defaults to fast when no option is sent and fails with "Model unavailable on Plus … with fixed settings"; always pass `options: { fastMode: "false" }` (2026-11-01).
 - DeepSeek was removed from PR reviews on 2026-10-31 (user); it stays on the council and explorers.
+
+## Machines
+
+Two machines are linked in T3 (`t3_environment_links` lists them with their `environmentId`). A role runs where its provider is signed in and where there is room; `docs/adapter.md` ("Which machine") has the rules.
+
+- orx (Linux, 16 cores): the orchestrator, every Claude role, the merge train and its gate, Kanzo.
+- sid's Mac mini (M4, 10 cores, 24 GB): Codex, Cursor and OpenCode roles (implementer, bug pass, reviewer, risky review, workers), with their builds and test runs. Claude isn't signed in there, so no Claude role runs on it (user 2026-11-15: "use that machine for codex work and test suites").
