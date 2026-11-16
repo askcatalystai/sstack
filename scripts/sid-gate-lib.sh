@@ -69,18 +69,18 @@ gate_tree() {
         echo "== gate: running them on ${main:0:8} alone" >> "$log"
         git -C "$verify" checkout -q --detach -f "$main" && git -C "$verify" clean -qfd &&
           run_gate "$log" SID_RERUN="$again" SID_FAILURES_OUT="$base"
-        new_failures=$(comm -23 <(sort -u "$again") <(sort -u "$base" 2>/dev/null))
       fi
       if [ "$tree" = "$main" ] || [ "$(git rev-parse "$tree^{tree}")" = "$(git rev-parse "$main^{tree}")" ]; then cp "$again" "$base"; fi
       if [ -s "$base" ]; then
-        known=$(sort -u "$base" | wc -l)
+        new_failures=$(python3 "${gate_worker%/*}/gate_failures.py" new "$again" "$base") || new_failures=$(sort -u "$again")
+        known=$(python3 "${gate_worker%/*}/gate_failures.py" known "$again" "$base") || known=0
         python3 "${gate_worker%/*}/train_health.py" "$gate/health" "$repo" "$main" "$log" "$base"
       fi
       # A PR never receives a pass while any of its tests still fail.
       rc=1
     fi
     flaky=$(python3 "${gate_worker%/*}/gate_counts.py" "$log" "$failed" "$again")
-    echo "== gate: $flaky flaky tests, $known failing on main" >> "$log"
+    echo "== gate: $flaky flaky tests, $known known cases failing on main" >> "$log"
   fi
   if [ "$rc" = 0 ] && [ -f "$gate/health/main-red" ]; then
     if python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests"; then

@@ -5,6 +5,13 @@ identity per line) and `SID_RERUN` (the identities to rerun). A missing test may
 count as passing only during baseline diagnosis, when a PR adds a test absent
 from main.
 
+Baseline comparison only counts an exact `file::case` match as known on main.
+A whole-file failure never counts as a known case. It remains new when main
+also reports that file, or when the PR supplies no explicit failing cases.
+A redundant file marker may be omitted from new failures only when main reports
+per-case failures for that file and the PR supplies a nonempty failing case set
+that is a subset of them. The file marker itself never increments known cases.
+
 For red-main fix verification sstack also sets `SID_EXECUTION_RECEIPTS_OUT` to a
 fresh absolute path. The **test runner** must write JSONL execution receipts there
 from its completed test results, not from the selection/request list or a zero

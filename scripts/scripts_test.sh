@@ -160,17 +160,19 @@ setup_train() {
   cat > .sidstack/gate.sh <<'G'
 # Tests are files named test-*: "fail" always fails, "flaky" fails on its first run only.
 run_tests() {
-  local name bad=0
-  for name in "$@"; do
+  local name identity bad=0
+  for identity in "$@"; do
+    name=${identity%%::*}
     [ -f "$name" ] || continue
     local status=passed executed=1 skipped=0
     case "$(cat "$name")" in
       fail) echo "$name" >> "$SID_FAILURES_OUT"; bad=1; status=failed;;
+      casefail) echo "$name::old-case" >> "$SID_FAILURES_OUT"; bad=1; status=failed;;
       skip) status=skipped; executed=0; skipped=1;;
       flaky) [ -f "$T/ran-$name" ] || { touch "$T/ran-$name"; echo "$name" >> "$SID_FAILURES_OUT"; bad=1; };;
     esac
     if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ] && [ ! -f "$T/no-receipts" ]; then
-      printf '{"identity":"%s","status":"%s","executed":%s,"skipped":%s}\n' "$name" "$status" "$executed" "$skipped" >> "$SID_EXECUTION_RECEIPTS_OUT"
+      printf '{"identity":"%s","status":"%s","executed":%s,"skipped":%s}\n' "$identity" "$status" "$executed" "$skipped" >> "$SID_EXECUTION_RECEIPTS_OUT"
     fi
   done
   return "$bad"
@@ -947,7 +949,7 @@ ok "a test that passes when run again doesn't fail the PR" "$(code 11)" 0
 grep -q 'tests passed over: 1 flaky$' "$T/message-11"; ok "and the squash says a flaky test was passed over" "$?" 0
 ok "running failed tests again is not another gate" "$(count_gates)" 1
 setup_train known-failure
-echo fail > test-old; git add -A; git commit -qm red; git push -q origin main
+echo casefail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 a; queue_pr 11; run_train
 ok "main-red test blocks the unrelated PR" "$(code 11)" 4
 [ -f "$health/main-red" ]; ok "main-red tests are durable" "$?" 0
@@ -979,11 +981,45 @@ queue_pr 12; ok "named main fix may queue" "$?" 0
 run_train; ok "named fix passes and lands" "$(code 12)" 0
 [ ! -f "$health/main-red" ]; ok "green landed main clears red" "$?" 0
 setup_train new-failure
-echo fail > test-old; git add -A; git commit -qm red; git push -q origin main
+echo casefail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 test-new fail; queue_pr 11; run_train
 ok "a test the PR breaks fails it, even on a red main" "$(code 11)" 1
 grep -q '^test-new$' "$q/result/11"; ok "the result names the test the PR broke" "$?" 0
-grep -q '^test-old$' "$q/result/11"; ok "and leaves out main's own failure" "$?" 1
+grep -q '^test-old::old-case$' "$q/result/11"; ok "and leaves out main's own failure" "$?" 1
+# Coarse reports cannot let a new case ride on a different red case in the same file.
+for protocol in whole-file mixed-subset whole-vs-cases; do
+  setup_train "failure-identity-$protocol"
+  cat > .sidstack/gate.sh <<'G'
+  if [ -z "${SID_RERUN:-}" ]; then echo gate >> "$T/gates"; fi
+  # Model external runner results from actual old/new failing case sentinels.
+  failed=0
+  if grep -q '^old fails$' test-shared; then
+    if grep -q '^coarse$' test-shared; then echo test-shared >> "$SID_FAILURES_OUT"
+    else echo test-shared::old-case >> "$SID_FAILURES_OUT"; fi
+    failed=1
+  fi
+  if grep -q '^new fails$' test-shared; then echo test-shared >> "$SID_FAILURES_OUT"; failed=1; fi
+  if grep -q '^redundant file$' test-shared; then echo test-shared >> "$SID_FAILURES_OUT"; fi
+  exit "$failed"
+G
+  printf 'old fails\n' > test-shared
+  [ "$protocol" != whole-file ] || echo coarse >> test-shared
+  git add -A; git commit -qm 'main has old red case'; git push -q origin main
+  case "$protocol" in
+    whole-file) value=$'old fails\nnew fails\ncoarse'; expected=1;;
+    mixed-subset) value=$'old fails\nredundant file'; expected=4;;
+    whole-vs-cases) value='new fails'; expected=1;;
+  esac
+  add_pr 11 test-shared "$value"; queue_pr 11; run_train
+  ok "$protocol failure comparison stays conservative" "$(code 11)" "$expected"
+  [ ! -f "$T/merge-calls" ]; ok "$protocol never lands failing PR" "$?" 0
+  if [ "$expected" = 1 ]; then
+    grep -qx test-shared "$q/result/11"; ok "$protocol coarse failure remains new" "$?" 0
+    grep -q '0 known cases failing on main' .git/sid-gate/logs/train-*.log; ok "$protocol whole-file report never counts as known" "$?" 0
+  else
+    grep -q '1 known cases failing on main' .git/sid-gate/logs/train-*.log; ok "explicit subset counts only its matching case" "$?" 0
+  fi
+done
 setup_train new-test-file
 add_pr 11 test-new fail; queue_pr 11; run_train
 ok "a failing test the PR adds can't pass as missing on main" "$(code 11)" 1
