@@ -18,13 +18,13 @@ fixture_repo() {
 }
 git init -q --bare -b main "$t/origin.git"; git clone -q "$t/origin.git" "$t/repo" 2>/dev/null; cd "$t/repo" || exit 1
 fixture_repo
-git checkout -q -b main; mkdir .sidstack; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm one; git push -q origin main; git remote set-head origin main
+git checkout -q -b main; mkdir .sidstack; printf ': > "$SID_FAILURE_IDENTITIES_OUT"\nexit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm one; git push -q origin main; git remote set-head origin main
 git checkout -q -b work; echo x > x; git add -A; git commit -qm two; git push -q origin work; head=$(git rev-parse HEAD); stamp=.git/sid-gate/work.pass
 "$here/sid-gate.sh" work >/dev/null; ok "a passing gate records the head" "$?" 0; [ -f "$stamp" ]; ok "pass exists" "$?" 0; [ -f .git/sid-gate/work.log ]; ok "plain gate retains its latest log path" "$?" 0
 "$here/sid-gate.sh" missing-branch >/dev/null 2>&1; ok "a failed fetch fails" "$?" 1
-git checkout -q main; printf 'exit 1\n' > .sidstack/gate.sh; git add -A; git commit -qm bad; git push -q origin main; git checkout -q work
+git checkout -q main; printf ': > "$SID_FAILURE_IDENTITIES_OUT"\nexit 1\n' > .sidstack/gate.sh; git add -A; git commit -qm bad; git push -q origin main; git checkout -q work
 "$here/sid-gate.sh" work >/dev/null; ok "a failing gate fails" "$?" 1; [ ! -f "$stamp" ]; ok "a failing rerun clears the old pass" "$?" 0
-git checkout -q main; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm good; git push -q origin main; git checkout -q work
+git checkout -q main; printf ': > "$SID_FAILURE_IDENTITIES_OUT"\nexit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm good; git push -q origin main; git checkout -q work
 "$here/sid-gate.sh" work >/dev/null; origin_url=$(git remote get-url origin); git remote set-url origin "$t/gone.git"
 "$here/sid-gate.sh" work >/dev/null 2>&1; ok "a gate that can't reach origin fails" "$?" 1; [ ! -f "$stamp" ]; ok "and clears the old pass too" "$?" 0; git remote set-url origin "$origin_url"
 mkdir "$t/bin"
@@ -136,11 +136,11 @@ merge() {
 }
 merges() { [ -f "$t/merge-calls" ] && wc -l < "$t/merge-calls" | tr -d ' ' || echo 0; }
 pr '[]'; pr '[]'; touch "$t/api-down"; merge; ok "an API failure stops the merge" "$?" 1; grep -q "could not read" "$t/out"; ok "and says why" "$?" 0; rm "$t/api-down"
-rm -f "$stamp"; pr '[]'; git checkout -q main; printf 'cat "$T/after-gate" > "$T/pr.json"\n' > .sidstack/gate.sh; git add -A; git commit -qm flip; git push -q origin main; git checkout -q work
+rm -f "$stamp"; pr '[]'; git checkout -q main; printf ': > "$SID_FAILURE_IDENTITIES_OUT"\ncat "$T/after-gate" > "$T/pr.json"\n' > .sidstack/gate.sh; git add -A; git commit -qm flip; git push -q origin main; git checkout -q work
 pr '[{"name":"ci","conclusion":"FAILURE"}]'; cp "$t/pr.json" "$t/after-gate"; pr '[]'; merge; ok "CI going red during the gate stops the merge" "$?" 1; ok "no merge happened" "$(merges)" 0
-git checkout -q main; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm ok; git push -q origin main; git checkout -q work; rm -f "$stamp"; pr '[]'; merge --check; ok "a clean PR is ready without a gate" "$?" 0; ok "--check never merges" "$(merges)" 0
+git checkout -q main; printf ': > "$SID_FAILURE_IDENTITIES_OUT"\nexit 0\n' > .sidstack/gate.sh; git add -A; git commit -qm ok; git push -q origin main; git checkout -q work; rm -f "$stamp"; pr '[]'; merge --check; ok "a clean PR is ready without a gate" "$?" 0; ok "--check never merges" "$(merges)" 0
 "$here/sid-gate.sh" work >/dev/null; hash=$(sed -n 2p "$stamp" | sed 's/.*sha256 //'); [ -n "$hash" ] && [ "$(cut -d' ' -f1 < <(sha256sum ".git/sid-gate/logs/$head.$(git rev-parse origin/main).log"))" = "$hash" ]; ok "the kept log matches the recorded hash" "$?" 0
-git checkout -q main; printf 'touch "$T/gate-ran"\n' > .sidstack/gate.sh; git add -A; git commit -qm count; git push -q origin main; git checkout -q work; "$here/sid-gate.sh" work >/dev/null; rm -f "$t/gate-ran"; sed -i 2d "$stamp"; pr '[]'; merge --check; ok "--check ignores gate stamps" "$?" 0; [ -f "$t/gate-ran" ]; ok "--check did not run the gate" "$?" 1
+git checkout -q main; printf ': > "$SID_FAILURE_IDENTITIES_OUT"\ntouch "$T/gate-ran"\n' > .sidstack/gate.sh; git add -A; git commit -qm count; git push -q origin main; git checkout -q work; "$here/sid-gate.sh" work >/dev/null; rm -f "$t/gate-ran"; sed -i 2d "$stamp"; pr '[]'; merge --check; ok "--check ignores gate stamps" "$?" 0; [ -f "$t/gate-ran" ]; ok "--check did not run the gate" "$?" 1
 pr '[]'
 git push -q origin "$head~1:refs/heads/parent"; pr '[]'; sed -i 's/"baseRefName":"main"/"baseRefName":"parent"/' "$t/pr.json"
 merge --check; ok "a stacked PR reports blocked readiness" "$?" 1; grep -q "blocked dependency" "$t/out"; ok "and says it is stacked" "$?" 0
@@ -158,23 +158,66 @@ setup_train() {
   git init -q --bare -b main "$T/origin.git"; git clone -q "$T/origin.git" "$T/repo" 2>/dev/null
   cd "$T/repo" || exit 1; fixture_repo; mkdir .sidstack
   cat > .sidstack/gate.sh <<'G'
-# Tests are files named test-*: "fail" always fails, "flaky" fails on its first run only.
+# Retry receipts can be coarse while comparison identities are per-case.
+[ -f "$T/no-identities" ] || : > "$SID_FAILURE_IDENTITIES_OUT"
+comparison_failure() {
+  [ ! -f "$SID_FAILURE_IDENTITIES_OUT" ] || printf '%s\n' "$1" >> "$SID_FAILURE_IDENTITIES_OUT"
+}
 run_tests() {
-  local name identity bad=0
+  local name identity case_name bad=0
+  local native_rows=${SID_EXECUTION_RECEIPTS_OUT:-$T/unused}.rows
+  [ -z "${SID_EXECUTION_RECEIPTS_OUT:-}" ] || : > "$native_rows"
   for identity in "$@"; do
     name=${identity%%::*}
     [ -f "$name" ] || continue
     local status=passed executed=1 skipped=0
     case "$(cat "$name")" in
-      fail) echo "$name" >> "$SID_FAILURES_OUT"; bad=1; status=failed;;
-      casefail) echo "$name::old-case" >> "$SID_FAILURES_OUT"; bad=1; status=failed;;
+      fail) echo "$name" >> "$SID_FAILURES_OUT"; comparison_failure "$name"; bad=1; status=failed;;
+      casefail) echo "$name" >> "$SID_FAILURES_OUT"; comparison_failure "$name::old%20case"; bad=1; status=failed;;
       skip) status=skipped; executed=0; skipped=1;;
-      flaky) [ -f "$T/ran-$name" ] || { touch "$T/ran-$name"; echo "$name" >> "$SID_FAILURES_OUT"; bad=1; };;
+      flaky) [ -f "$T/ran-$name" ] || { touch "$T/ran-$name"; echo "$name" >> "$SID_FAILURES_OUT"; comparison_failure "$name::flaky-case"; bad=1; };;
     esac
+    if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ]; then
+      case_name='old case'; [ "$(cat "$name")" != wrongcase ] || case_name='different case'
+      printf '{"file":"%s/%s","name":"%s","state":"%s"}\n' "$PWD" "$name" "$case_name" "$status" >> "$native_rows"
+    fi
     if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ] && [ ! -f "$T/no-receipts" ]; then
       printf '{"identity":"%s","status":"%s","executed":%s,"skipped":%s}\n' "$identity" "$status" "$executed" "$skipped" >> "$SID_EXECUTION_RECEIPTS_OUT"
     fi
   done
+  if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ] && [ -f "$T/native-evidence" ]; then
+    python3 - "$native_rows" <<'E'
+import json,os,sys,tempfile
+from pathlib import Path
+p=Path(tempfile.mkdtemp(prefix='evidence-',dir=os.environ['T']))
+rows=[json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+engine_file=Path(os.environ['T'])/'evidence-engine'
+engine=engine_file.read_text().strip() if engine_file.exists() else 'browser'
+files=sorted({row['file'] for row in rows}); args=list(files)
+requests=Path(os.environ['SID_RERUN']).read_text().splitlines()
+if engine!='bun' and any('::' in request for request in requests): args+=['--test-name-pattern','requested case']
+attempt=dict(ok=True,code=0,signal=None,cwd=os.getcwd(),args=args)
+if engine=='browser':
+ records=[dict(file=row['file'],state=row['state'],errors=[],suiteErrors=False,tests=[dict(name=row['name'],state=row['state'])]) for row in rows]
+ browser=p/'browser.jsonl'; browser.write_text(''.join(json.dumps(row)+'\n' for row in records)); attempt['browserReport']=str(browser)
+else:
+ lines=[]
+ if engine=='node':
+  attempt['args']=['--test',*args]
+  # Grouped Node output is opaque: only the whole-file summary proves it clean.
+  lines=['✔ passing suite (1ms)', '  ﹣ child case']
+  skipped=sum(row['state']=='skipped' for row in rows)
+  lines += [f'ℹ tests {len(rows)}','ℹ fail 0','ℹ cancelled 0',f'ℹ skipped {skipped}','ℹ todo 0']
+ else:
+  for row in rows:
+   lines += [str(Path(row['file']).relative_to(Path.cwd()))+':', f"({'pass' if row['state']=='passed' else 'skip'}) {row['name']} [1ms]"]
+  lines += [' 0 fail',f" {sum(row['state']=='skipped' for row in rows)} skip"]
+ log=p/'attempt.log'; log.write_text('\n'.join(lines)+'\n'); attempt['logFile']=str(log)
+report=dict(wallTimeMs=1,failures=[],failureIdentities=[],attempts=[attempt])
+(p/'report.json').write_text(json.dumps(report))
+print('Batch evidence: '+str(p))
+E
+  fi
   return "$bad"
 }
 if [ -n "${SID_RERUN:-}" ]; then
@@ -805,9 +848,9 @@ setup_train health-red
 touch "$T/always-fail"; sha=$(git rev-parse origin/main); rm "$health/$sha"; "$here/sid-health.sh" > "$T/out"
 ok "failing health exits 1" "$?" 1; ok "failing full health recorded" "$(head -n 1 "$health/$sha")" 'fail full'
 before=$(count_gates); "$here/sid-health.sh" > "$T/out"; ok "known full failure skips" "$(count_gates)" "$before"
-add_pr 11 bad; queue_pr 11; run_train; ok "known red main makes single failure exit 4" "$(code 11)" 4
-grep -Fq "main is red at ${sha:0:8}, see $(sed -n 2p "$health/$sha")" "$q/result/11"; ok "red result names health log" "$?" 0
-queue_pr 11; ok "a red main doesn't use up the commit's retry" "$?" 0
+add_pr 11 bad; queue_pr 11; run_train; ok "empty failure identities never earn main-red forgiveness" "$(code 11)" 1
+grep -q "candidate identity evidence" "$q/result/11"; ok "infrastructure result explains missing comparison proof" "$?" 0
+queue_pr 11; ok "unproven infrastructure failure requires an explicit retry" "$?" 1
 setup_train health-priority
 add_pr 11 a; queue_pr 11; "$here/sid-health.sh" > "$T/out"; ok "health skips queued work" "$(count_gates)" 0
 "$here/sid-merge.sh" --cancel 11 >/dev/null
@@ -954,70 +997,132 @@ add_pr 11 a; queue_pr 11; run_train
 ok "main-red test blocks the unrelated PR" "$(code 11)" 4
 [ -f "$health/main-red" ]; ok "main-red tests are durable" "$?" 0
 queue_pr 11; ok "red main refuses unrelated admission" "$?" 4
-for outcome in delete skip no-receipts; do
-  case "$outcome" in delete) n=13;; skip) n=14;; no-receipts) n=15;; esac
+for outcome in delete skip no-receipts native-skip wrong-case; do
+  case "$outcome" in delete) n=13;; skip) n=14;; no-receipts) n=15;; native-skip) n=16;; wrong-case) n=17;; esac
   add_pr "$n" other
   git checkout -q work$n
   if [ "$outcome" = delete ]; then git rm -q test-old
-  else echo skip > test-old; [ "$outcome" != no-receipts ] || echo fixed > test-old; fi
+  else echo skip > test-old; [ "$outcome" != no-receipts ] || echo fixed > test-old;
+    [ "$outcome" != wrong-case ] || echo wrongcase > test-old; fi
   git add -A; git commit -qm "claimed fix $outcome"; git push -q origin work$n; record_pr "$n"; git checkout -q main
   python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
 import json,sys
 p=sys.argv[1]; d=json.load(open(p)); d['body'] += json.load(open(sys.argv[2]))['card']+' fix main\n'; json.dump(d,open(p,'w'))
 P
-  [ "$outcome" != no-receipts ] || touch "$T/no-receipts"
+  case "$outcome" in no-receipts) touch "$T/no-receipts";; native-skip|wrong-case) touch "$T/no-receipts" "$T/native-evidence";; esac
   queue_pr "$n"; run_train
   ok "$outcome cannot clear red main" "$(code "$n")" 4
   [ -f "$health/main-red" ]; ok "$outcome retains the red block" "$?" 0
   [ ! -f "$T/merge-calls" ]; ok "$outcome fix never lands" "$?" 0
-  rm -f "$T/no-receipts"
+  rm -f "$T/no-receipts" "$T/native-evidence"
 done
 add_pr 12 test-old fixed
 python3 - "$T/pr-12.json" "$health/main-red" <<'P'
 import json,sys
 p=sys.argv[1]; d=json.load(open(p)); red=json.load(open(sys.argv[2])); d['body'] += red['card']+' fix main\n'; json.dump(d,open(p,'w'))
 P
+touch "$T/no-receipts" "$T/native-evidence"
 queue_pr 12; ok "named main fix may queue" "$?" 0
-run_train; ok "named fix passes and lands" "$(code 12)" 0
+run_train; ok "named fix passes with native #1010 execution evidence" "$(code 12)" 0
 [ ! -f "$health/main-red" ]; ok "green landed main clears red" "$?" 0
+for engine in browser node bun; do
+  setup_train "opaque-red-evidence-$engine"
+  echo "$engine" > "$T/evidence-engine"
+  echo fail > test-old.test.ts; git add -A; git commit -qm red; git push -q origin main
+  add_pr 11 a; queue_pr 11; run_train
+  [ -f "$health/main-red" ]; ok "$engine opaque baseline still records main-red" "$?" 0
+  if [ "$engine" != node ]; then
+    python3 - "$health/main-red" <<'P'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]); r=json.loads(p.read_text()); r['tests'].append('test-old.test.ts::old%20case'); p.write_text(json.dumps(r))
+P
+  fi
+  for value in skip fixed; do
+    if [ "$value" = skip ]; then n=12; else n=13; fi
+    add_pr "$n" test-old.test.ts "$value"
+    python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d['body'] += json.load(open(sys.argv[2]))['card']+' fix main\n'; json.dump(d,open(p,'w'))
+P
+    touch "$T/no-receipts" "$T/native-evidence"
+    queue_pr "$n"; run_train
+    if [ "$value" = skip ]; then expected=4; else expected=0; fi
+    ok "$engine opaque $value requires clean native whole-file evidence" "$(code "$n")" "$expected"
+  done
+  [ ! -f "$health/main-red" ]; ok "$engine clean whole-file execution clears opaque main-red" "$?" 0
+done
 setup_train new-failure
 echo casefail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 test-new fail; queue_pr 11; run_train
 ok "a test the PR breaks fails it, even on a red main" "$(code 11)" 1
 grep -q '^test-new$' "$q/result/11"; ok "the result names the test the PR broke" "$?" 0
-grep -q '^test-old::old-case$' "$q/result/11"; ok "and leaves out main's own failure" "$?" 1
-# Coarse reports cannot let a new case ride on a different red case in the same file.
-for protocol in whole-file mixed-subset whole-vs-cases; do
+grep -q '^test-old::old%20case$' "$q/result/11"; ok "and leaves out main's own failure" "$?" 1
+# #1010 keeps retry receipts separate from exact comparison identities.
+for protocol in opaque opaque-package different-case same-case mixed-opaque missing-sidecar missing-main missing-retry empty-sidecar infrastructure infrastructure-populated unsupported-green; do
   setup_train "failure-identity-$protocol"
   cat > .sidstack/gate.sh <<'G'
   if [ -z "${SID_RERUN:-}" ]; then echo gate >> "$T/gates"; fi
-  # Model external runner results from actual old/new failing case sentinels.
-  failed=0
-  if grep -q '^old fails$' test-shared; then
-    if grep -q '^coarse$' test-shared; then echo test-shared >> "$SID_FAILURES_OUT"
-    else echo test-shared::old-case >> "$SID_FAILURES_OUT"; fi
-    failed=1
+  value=$(cat test-shared)
+  stage=${SID_FAILURE_IDENTITIES_OUT##*.log.}; stage=${stage%.identities}
+  if [ ! -f "$T/no-identities" ] && ! { [ -f "$T/no-main-identities" ] && [ "$stage" = main ]; } &&
+      ! { [ -f "$T/no-retry-identities" ] && [ "$stage" = retry ]; }; then
+    : > "$SID_FAILURE_IDENTITIES_OUT"
   fi
-  if grep -q '^new fails$' test-shared; then echo test-shared >> "$SID_FAILURES_OUT"; failed=1; fi
-  if grep -q '^redundant file$' test-shared; then echo test-shared >> "$SID_FAILURES_OUT"; fi
-  exit "$failed"
+  [ ! -f "$T/unsupported-green" ] || exit 0
+  # All retry receipts deliberately remain whole-file, even for safe known identities.
+  echo test-shared >> "$SID_FAILURES_OUT"
+  if [ -f "$T/infra-populated" ] && [ "$stage" = candidate ]; then
+    echo test-shared::old%20case >> "$SID_FAILURE_IDENTITIES_OUT"; exit 124
+  fi
+  if [ -f "$T/infra-main" ] && [ "$stage" = main ]; then
+    : > "$SID_FAILURE_IDENTITIES_OUT"; exit 124
+  fi
+  if [ -f "$SID_FAILURE_IDENTITIES_OUT" ] && [ ! -f "$T/empty-identities" ]; then
+    case "$value" in
+      opaque) echo test-shared >> "$SID_FAILURE_IDENTITIES_OUT";;
+      package) echo package:fixture >> "$SID_FAILURE_IDENTITIES_OUT";;
+      old) echo 'test-shared::old%20case' >> "$SID_FAILURE_IDENTITIES_OUT";;
+      new) echo 'test-shared::new%20case' >> "$SID_FAILURE_IDENTITIES_OUT";;
+      mixed) printf 'test-shared::old%%20case\ntest-shared\n' >> "$SID_FAILURE_IDENTITIES_OUT";;
+    esac
+  fi
+  exit 1
 G
-  printf 'old fails\n' > test-shared
-  [ "$protocol" != whole-file ] || echo coarse >> test-shared
-  git add -A; git commit -qm 'main has old red case'; git push -q origin main
+  baseline=old; candidate=old; expected=1
   case "$protocol" in
-    whole-file) value=$'old fails\nnew fails\ncoarse'; expected=1;;
-    mixed-subset) value=$'old fails\nredundant file'; expected=4;;
-    whole-vs-cases) value='new fails'; expected=1;;
+    opaque) baseline=opaque; candidate=opaque;;
+    opaque-package) baseline=package; candidate=package;;
+    different-case) candidate=new;;
+    same-case) expected=4;;
+    mixed-opaque) candidate=mixed;;
+    missing-sidecar) touch "$T/no-identities";;
+    missing-main) touch "$T/no-main-identities";;
+    missing-retry) touch "$T/no-retry-identities";;
+    empty-sidecar) touch "$T/empty-identities";;
+    infrastructure) touch "$T/infra-main";;
+    infrastructure-populated) touch "$T/infra-populated";;
+    unsupported-green) touch "$T/no-identities" "$T/unsupported-green";;
   esac
-  add_pr 11 test-shared "$value"; queue_pr 11; run_train
-  ok "$protocol failure comparison stays conservative" "$(code 11)" "$expected"
-  [ ! -f "$T/merge-calls" ]; ok "$protocol never lands failing PR" "$?" 0
-  if [ "$expected" = 1 ]; then
-    grep -qx test-shared "$q/result/11"; ok "$protocol coarse failure remains new" "$?" 0
-    grep -q '0 known cases failing on main' .git/sid-gate/logs/train-*.log; ok "$protocol whole-file report never counts as known" "$?" 0
-  else
-    grep -q '1 known cases failing on main' .git/sid-gate/logs/train-*.log; ok "explicit subset counts only its matching case" "$?" 0
+  printf '%s\n' "$baseline" > test-shared
+  git add -A; git commit -qm 'main has old red case'; git push -q origin main
+  add_pr 11 test-shared "$candidate"; queue_pr 11; run_train
+  ok "$protocol comparison follows #1010 identities" "$(code 11)" "$expected"
+  [ ! -f "$T/merge-calls" ]; ok "$protocol never lands unverified PR" "$?" 0
+  if [ "$protocol" = same-case ]; then
+    grep -q '1 known cases failing on main' .git/sid-gate/logs/train-*.log; ok "exact case is known despite whole-file retry receipts" "$?" 0
+    python3 - "$health/main-red" <<'P'
+import json,sys
+assert json.load(open(sys.argv[1]))['tests']==['test-shared::old%20case']
+P
+    ok "main-red records comparison identity rather than retry filename" "$?" 0
+  elif [ "$protocol" = opaque ] || [ "$protocol" = mixed-opaque ]; then
+    grep -qx test-shared "$q/result/11"; ok "$protocol component stays new even beside a known case" "$?" 0
+  elif [ "$protocol" = opaque-package ]; then
+    grep -qx package:fixture "$q/result/11"; ok "opaque package comparison never earns forgiveness" "$?" 0
+  elif [ "$protocol" = different-case ]; then
+    grep -qx 'test-shared::new%20case' "$q/result/11"; ok "different case in same file remains new" "$?" 0
+    [ "$(cat .git/sid-gate/logs/train-*.log.retry.identities)" != "$(cat .git/sid-gate/logs/train-*.log.main.identities)" ]; ok "retry and main sidecars stay distinct" "$?" 0
   fi
 done
 setup_train new-test-file
@@ -1811,4 +1916,11 @@ P
   ok "$race race leaves new PR work open" "$?" 0
   git cat-file -e origin/main:unlanded 2>/dev/null; ok "$race race never lands new ungated work" "$?" 128
 done
+# Recovered named cases are counted even when another case still fails.
+setup_train partially-flaky
+echo casefail > test-old; git add -A; git commit -qm red; git push -q origin main
+add_pr 11 test-transient flaky; queue_pr 11; run_train
+ok "persistent known case still blocks partially flaky candidate" "$(code 11)" 4
+grep -q '1 flaky tests, 1 known cases failing on main' .git/sid-gate/logs/train-*.log
+ok "partial recovery counts named cases rather than retry files" "$?" 0
 exit $fail

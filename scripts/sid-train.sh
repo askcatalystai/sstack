@@ -185,7 +185,7 @@ PY
     if ! gate_tree "$main" "$tree" "$log" "train $id: $default ${main:0:8} + $members"; then
         pr=${candidates[0]}; rc=1
         if [ -n "$new_failures" ]; then
-          message=$(printf 'gate FAILED: %s\nfailures not confirmed as the same cases on %s:\n%s\n' "$log" "$default" "$new_failures")
+          message=$(printf 'gate FAILED: %s\nfailures not confirmed as the same cases on %s:\n%s\n\nRecent gate output:\n' "$log" "$default" "$new_failures"; tail -n 25 "$log")
         else
           message=$(printf 'gate FAILED: %s\n' "$log"; tail -n 25 "$log")
           if grep -Eq '^(fail |main red$)' "$gate/health/$main" 2>/dev/null; then

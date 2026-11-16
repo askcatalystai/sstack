@@ -1,41 +1,72 @@
-# Gate reruns and red-main fix verification
+# Gate retry receipts, comparison identities and main-red execution evidence
 
-Ordinary gates and baseline diagnosis retain `SID_FAILURES_OUT` (one failing
-identity per line) and `SID_RERUN` (the identities to rerun). A missing test may
-count as passing only during baseline diagnosis, when a PR adds a test absent
-from main.
+This implements openec PR #1010's `sstack #28 contract` at head
+`644b25f208e1de1068dd52768670e4b168570dfa`.
 
-Baseline comparison only counts an exact `file::case` match as known on main.
-A whole-file failure never counts as a known case. It remains new when main
-also reports that file, or when the PR supplies no explicit failing cases.
-A redundant file marker may be omitted from new failures only when main reports
-per-case failures for that file and the PR supplies a nonempty failing case set
-that is a subset of them. The file marker itself never increments known cases.
+## Independent outputs for each invocation
 
-For red-main fix verification sstack also sets `SID_EXECUTION_RECEIPTS_OUT` to a
-fresh absolute path. The **test runner** must write JSONL execution receipts there
-from its completed test results, not from the selection/request list or a zero
-process exit. Each requested identity needs exactly one receipt:
+- `SID_FAILURES_OUT` is forwarded as `TEST_BATCHES_FAILURES_OUT`. These are
+  **retry receipts**, not comparison identities: safe Node/Vitest case selections,
+  whole files for Bun/opaque failures, or `package:name` commands.
+- `SID_FAILURE_IDENTITIES_OUT` is forwarded as
+  `TEST_BATCHES_FAILURE_IDENTITIES_OUT`. It contains comparison identities, one
+  per line, also available as `report.json.failureIdentities`.
 
-```json
-{"identity":"tests/example.test.ts::suite > test", "status":"passed", "executed":1, "skipped":0}
+Sstack supplies fresh, distinct identity paths and logs for candidate, retry,
+main-only and red-fix invocations. The gate/runner must initialize the sidecar,
+including on success, and clear both output files on infrastructure timeouts.
+Sstack does not create an empty sidecar on the consumer's behalf. Missing outputs,
+nonzero exits with empty identities, and infrastructure exits fail closed. A zero
+exit with nonempty failure identities is also invalid.
+
+## Comparison and forgiveness
+
+A known case has the exact form `relative/file::encodeURIComponent(caseName)`.
+Sstack compares these encoded strings exactly; it never interprets names as
+regular expressions. Bare file paths and `package:name` are opaque. Grouped Node
+failures and suite/hook failures must retain their opaque component.
+
+```
+known = candidate known cases intersect main known cases
+new   = all opaque candidate identities + (candidate known cases - main known cases)
 ```
 
-`identity` must exactly match the requested identity. `executed` counts tests that
-actually ran and passed; it must be a positive integer. `skipped` must be zero.
-Missing, skipped, pending, failed, filtered-out, or zero-test results cannot be
-reported as passed. Missing receipts, duplicate receipts and invalid evidence
-fail verification in sstack even when `gate.sh` exits zero. Do not synthesize
-receipts for missing files or unmatched test names.
+The candidate here is the still-failing retry. Opaque identities always stay new,
+even if main emits the same string, or the same file also has a matching case.
+The former file-marker subset exception is removed. There is no fallback to retry
+receipt intersections, filenames or human-readable log parsing. Recovery counts
+only known case identities that disappeared on a successful retry, never files.
 
-For legacy file identities, the runner may aggregate the file's completed test
-results into one receipt only when at least one test executed, every executed
-test passed, and none was skipped. Per-test identities use their actual result.
+## Main-red verification
 
-Openec PR #1010 needs this runner integration: forward the environment variable
-unchanged through `.sidstack/gate.sh` to the runner; write receipts using its
-Node/Bun/Vitest result evidence after reruns finish; support both legacy file
-identities and the new per-test identities from tests#599. Its current silent
-missing-file success remains valid for baseline diagnosis, but is insufficient
-for red-main verification. Until receipts are supplied, red-main fixes fail
-closed in sstack. Existing ordinary green gates require no consumer change.
+Main-red records the comparison identities, not retry receipts. Each recorded
+known case must actually execute and pass. A recorded opaque file must run clean
+as a whole file, with positive executed-test evidence and no failures or skips.
+Failure sidecars alone cannot establish that missing/skipped tests ran. When a
+file has both opaque and known recorded identities, its whole-file request
+overrides narrower case selectors; the resulting evidence must still prove every
+recorded known case passed. Filtered execution never proves an opaque file clean.
+
+Sstack verifies the current invocation's durable runner evidence advertised by
+`Batch evidence: ...`: completed `report.json`, clean attempts, Vitest's structured
+`browserReport`, or Node/Bun execution results in the attempt logs. Paths must
+belong to the active verification checkout. Encoded case names are decoded only
+for matching actual executed results. Missing cases, missing files, skipped cases,
+empty selections, opaque unhandled errors and incomplete evidence fail closed.
+For opaque Node files, a clean unfiltered whole-file summary with positive test
+count can establish execution even when individual suite names are opaque.
+
+Consumers may alternatively emit explicit JSONL execution receipts through
+`SID_EXECUTION_RECEIPTS_OUT`. Each recorded identity needs exactly one receipt:
+
+```json
+{"identity":"relative/file::encoded%20case","status":"passed","executed":1,"skipped":0}
+```
+
+These must derive from actual completed results, not from the request list. Opaque
+files require a whole-file aggregate with a positive executed count and no skips.
+Opaque package commands without auditable execution evidence remain blocked.
+
+The existing #1010 Node/Bun/Vitest evidence is supported without requiring a new
+execution-output variable in that consumer. Its failure-identity sidecar is
+mandatory; silent missing-file success cannot clear main-red.

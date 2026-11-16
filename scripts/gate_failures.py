@@ -1,40 +1,49 @@
 #!/usr/bin/env python3
-"""Compare failure identities without allowing a red case to cover an entire file."""
+"""Comparison identities are independent of the runner's retry receipts."""
 import sys
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 
-def compare(pr, main):
-    def cases(entries):
-        result = {}
-        for entry in entries:
-            file, separator, case = entry.partition('::')
-            if separator and file and case:
-                result.setdefault(file, set()).add(case)
-        return result
-    pr_cases, main_cases = cases(pr), cases(main)
-    known = {entry for entry in pr & main if '::' in entry and all(entry.split('::', 1))}
-    new = pr - known
-    for entry in list(new):
-        if '::' in entry:
-            continue
-        # A coarse marker may be redundant beside explicit case evidence, but
-        # an unknown (empty) PR case set never proves that its failures are covered.
-        if (entry not in main and pr_cases.get(entry) and
-                pr_cases[entry] <= main_cases.get(entry, set())):
-            new.remove(entry)
-    return new, known
+def known_case(entry):
+    file, separator, case = entry.partition('::')
+    return bool(separator and file and case and not file.startswith(('/', 'package:')) and
+                quote(unquote(case, errors='strict'), safe="-_.!~*'()") == case)
+
+
+def identities(path, failed=False):
+    rows = {line for line in Path(path).read_text().splitlines() if line.strip()}
+    if failed and not rows:
+        raise ValueError('nonzero gate with empty failure identities: '+str(path))
+    return rows
+
+
+def compare(candidate, main):
+    known = {entry for entry in candidate & main if known_case(entry)}
+    return candidate - known, known
 
 
 if __name__ == '__main__':
-    mode, pr_path, main_path = sys.argv[1:]
-    pr = {line for line in Path(pr_path).read_text().splitlines() if line.strip()}
-    main = {line for line in Path(main_path).read_text().splitlines() if line.strip()}
-    new, known = compare(pr, main)
-    if mode == 'new':
-        for entry in sorted(new):
-            print(entry)
-    elif mode == 'known':
-        print(len(known))
-    else:
-        sys.exit('expected new or known')
+    try:
+        mode, *args = sys.argv[1:]
+        if mode == 'check':
+            rc = int(args[1])
+            if rc not in (0, 1):
+                raise ValueError('infrastructure exit cannot provide comparison proof')
+            rows = identities(args[0], rc != 0)
+            if rc == 0 and rows:
+                raise ValueError('successful invocation reported failures')
+        elif mode in ('new', 'known'):
+            new, known = compare(identities(args[0], True), identities(args[1]))
+            if mode == 'known':
+                print(len(known))
+            else:
+                for entry in sorted(new):
+                    print(entry)
+        elif mode == 'flaky':
+            before, after = identities(args[0], True), identities(args[1])
+            print(sum(known_case(entry) for entry in before - after))
+        else:
+            raise ValueError('unknown comparison operation')
+    except (OSError, ValueError, IndexError) as error:
+        sys.exit(str(error))
