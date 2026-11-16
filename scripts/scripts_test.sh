@@ -181,41 +181,34 @@ run_tests() {
       case_name='old case'; [ "$(cat "$name")" != wrongcase ] || case_name='different case'
       printf '{"file":"%s/%s","name":"%s","state":"%s"}\n' "$PWD" "$name" "$case_name" "$status" >> "$native_rows"
     fi
-    if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ] && [ ! -f "$T/no-receipts" ]; then
-      printf '{"identity":"%s","status":"%s","executed":%s,"skipped":%s}\n' "$identity" "$status" "$executed" "$skipped" >> "$SID_EXECUTION_RECEIPTS_OUT"
-    fi
   done
-  if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ] && [ -f "$T/native-evidence" ]; then
+  if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ] && [ ! -f "$T/no-receipts" ]; then
     python3 - "$native_rows" <<'E'
-import json,os,sys,tempfile
+import json,os,sys
 from pathlib import Path
-p=Path(tempfile.mkdtemp(prefix='evidence-',dir=os.environ['T']))
+from urllib.parse import quote
 rows=[json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
-engine_file=Path(os.environ['T'])/'evidence-engine'
-engine=engine_file.read_text().strip() if engine_file.exists() else 'browser'
-files=sorted({row['file'] for row in rows}); args=list(files)
-requests=Path(os.environ['SID_RERUN']).read_text().splitlines()
-if engine!='bun' and any('::' in request for request in requests): args+=['--test-name-pattern','requested case']
-attempt=dict(ok=True,code=0,signal=None,cwd=os.getcwd(),args=args)
-if engine=='browser':
- records=[dict(file=row['file'],state=row['state'],errors=[],suiteErrors=False,tests=[dict(name=row['name'],state=row['state'])]) for row in rows]
- browser=p/'browser.jsonl'; browser.write_text(''.join(json.dumps(row)+'\n' for row in records)); attempt['browserReport']=str(browser)
-else:
- lines=[]
- if engine=='node':
-  attempt['args']=['--test',*args]
-  # Grouped Node output is opaque: only the whole-file summary proves it clean.
-  lines=['✔ passing suite (1ms)', '  ﹣ child case']
-  skipped=sum(row['state']=='skipped' for row in rows)
-  lines += [f'ℹ tests {len(rows)}','ℹ fail 0','ℹ cancelled 0',f'ℹ skipped {skipped}','ℹ todo 0']
- else:
-  for row in rows:
-   lines += [str(Path(row['file']).relative_to(Path.cwd()))+':', f"({'pass' if row['state']=='passed' else 'skip'}) {row['name']} [1ms]"]
-  lines += [' 0 fail',f" {sum(row['state']=='skipped' for row in rows)} skip"]
- log=p/'attempt.log'; log.write_text('\n'.join(lines)+'\n'); attempt['logFile']=str(log)
-report=dict(wallTimeMs=1,failures=[],failureIdentities=[],attempts=[attempt])
-(p/'report.json').write_text(json.dumps(report))
-print('Batch evidence: '+str(p))
+requested=set(Path(os.environ['SID_RERUN']).read_text().splitlines())
+receipts=[]
+for row in rows:
+ file=str(Path(row['file']).relative_to(Path.cwd()))
+ identity=file+'::'+quote(row['name'],safe="-_.!~*'()")
+ receipts.append(dict(identity=identity,scope='case',status=row['state'],executed=int(row['state']!='skipped'),skipped=int(row['state']=='skipped')))
+for file in sorted({str(Path(row['file']).relative_to(Path.cwd())) for row in rows} & requested):
+ tests=[r for r in rows if str(Path(r['file']).relative_to(Path.cwd()))==file]
+ passed=all(r['state']=='passed' for r in tests)
+ receipts.append(dict(identity=file,scope='file',status='passed' if passed else 'skipped',executed=sum(r['state']!='skipped' for r in tests),skipped=sum(r['state']=='skipped' for r in tests)))
+mode=Path(os.environ['T'])/'bad-receipt'
+mode=mode.read_text().strip() if mode.exists() else ''
+if mode=='zero':
+ for row in receipts: row['executed']=0
+elif mode=='scope':
+ for row in receipts: row['scope']='file' if row['scope']=='case' else 'case'
+elif mode=='duplicate': receipts += receipts[:1]
+elif mode=='incomplete':
+ for row in receipts: row['status']='incomplete'
+output=Path(os.environ['SID_EXECUTION_RECEIPTS_OUT'])
+output.write_text('not-json\n' if mode=='malformed' else ''.join(json.dumps(row)+'\n' for row in receipts))
 E
   fi
   return "$bad"
@@ -997,61 +990,56 @@ add_pr 11 a; queue_pr 11; run_train
 ok "main-red test blocks the unrelated PR" "$(code 11)" 4
 [ -f "$health/main-red" ]; ok "main-red tests are durable" "$?" 0
 queue_pr 11; ok "red main refuses unrelated admission" "$?" 4
-for outcome in delete skip no-receipts native-skip wrong-case; do
-  case "$outcome" in delete) n=13;; skip) n=14;; no-receipts) n=15;; native-skip) n=16;; wrong-case) n=17;; esac
+for outcome in delete skip no-receipts wrong-case zero scope duplicate malformed incomplete; do
+  case "$outcome" in delete) n=13;; skip) n=14;; no-receipts) n=15;; wrong-case) n=16;; zero) n=17;; scope) n=18;; duplicate) n=19;; malformed) n=20;; incomplete) n=21;; esac
   add_pr "$n" other
   git checkout -q work$n
   if [ "$outcome" = delete ]; then git rm -q test-old
-  else echo skip > test-old; [ "$outcome" != no-receipts ] || echo fixed > test-old;
-    [ "$outcome" != wrong-case ] || echo wrongcase > test-old; fi
+  elif [ "$outcome" = skip ]; then echo skip > test-old
+  elif [ "$outcome" = wrong-case ]; then echo wrongcase > test-old
+  else echo fixed > test-old; fi
   git add -A; git commit -qm "claimed fix $outcome"; git push -q origin work$n; record_pr "$n"; git checkout -q main
   python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
 import json,sys
 p=sys.argv[1]; d=json.load(open(p)); d['body'] += json.load(open(sys.argv[2]))['card']+' fix main\n'; json.dump(d,open(p,'w'))
 P
-  case "$outcome" in no-receipts) touch "$T/no-receipts";; native-skip|wrong-case) touch "$T/no-receipts" "$T/native-evidence";; esac
+  case "$outcome" in no-receipts) touch "$T/no-receipts";; zero|scope|duplicate|malformed|incomplete) echo "$outcome" > "$T/bad-receipt";; esac
   queue_pr "$n"; run_train
   ok "$outcome cannot clear red main" "$(code "$n")" 4
   [ -f "$health/main-red" ]; ok "$outcome retains the red block" "$?" 0
   [ ! -f "$T/merge-calls" ]; ok "$outcome fix never lands" "$?" 0
-  rm -f "$T/no-receipts" "$T/native-evidence"
+  rm -f "$T/no-receipts" "$T/bad-receipt"
 done
 add_pr 12 test-old fixed
 python3 - "$T/pr-12.json" "$health/main-red" <<'P'
 import json,sys
 p=sys.argv[1]; d=json.load(open(p)); red=json.load(open(sys.argv[2])); d['body'] += red['card']+' fix main\n'; json.dump(d,open(p,'w'))
 P
-touch "$T/no-receipts" "$T/native-evidence"
 queue_pr 12; ok "named main fix may queue" "$?" 0
-run_train; ok "named fix passes with native #1010 execution evidence" "$(code 12)" 0
+run_train; ok "named fix passes with unified encoded-case execution receipt" "$(code 12)" 0
 [ ! -f "$health/main-red" ]; ok "green landed main clears red" "$?" 0
-for engine in browser node bun; do
-  setup_train "opaque-red-evidence-$engine"
-  echo "$engine" > "$T/evidence-engine"
-  echo fail > test-old.test.ts; git add -A; git commit -qm red; git push -q origin main
-  add_pr 11 a; queue_pr 11; run_train
-  [ -f "$health/main-red" ]; ok "$engine opaque baseline still records main-red" "$?" 0
-  if [ "$engine" != node ]; then
-    python3 - "$health/main-red" <<'P'
+setup_train opaque-red-receipts
+echo fail > test-old.test.ts; git add -A; git commit -qm red; git push -q origin main
+add_pr 11 a; queue_pr 11; run_train
+[ -f "$health/main-red" ]; ok "opaque baseline still records main-red" "$?" 0
+python3 - "$health/main-red" <<'P'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1]); r=json.loads(p.read_text()); r['tests'].append('test-old.test.ts::old%20case'); p.write_text(json.dumps(r))
 P
-  fi
-  for value in skip fixed; do
-    if [ "$value" = skip ]; then n=12; else n=13; fi
-    add_pr "$n" test-old.test.ts "$value"
-    python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
+for value in skip scope fixed; do
+  case "$value" in skip) n=12; content=skip;; scope) n=13; content=fixed; echo scope > "$T/bad-receipt";; fixed) n=14; content=fixed;; esac
+  add_pr "$n" test-old.test.ts "$content"
+  python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
 import json,sys
 p=sys.argv[1]; d=json.load(open(p)); d['body'] += json.load(open(sys.argv[2]))['card']+' fix main\n'; json.dump(d,open(p,'w'))
 P
-    touch "$T/no-receipts" "$T/native-evidence"
-    queue_pr "$n"; run_train
-    if [ "$value" = skip ]; then expected=4; else expected=0; fi
-    ok "$engine opaque $value requires clean native whole-file evidence" "$(code "$n")" "$expected"
-  done
-  [ ! -f "$health/main-red" ]; ok "$engine clean whole-file execution clears opaque main-red" "$?" 0
+  queue_pr "$n"; run_train
+  if [ "$value" = fixed ]; then expected=0; else expected=4; fi
+  ok "opaque $value requires a clean whole-file execution receipt" "$(code "$n")" "$expected"
+  rm -f "$T/bad-receipt"
 done
+[ ! -f "$health/main-red" ]; ok "whole-file and case receipts together clear mixed main-red" "$?" 0
 setup_train new-failure
 echo casefail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 test-new fail; queue_pr 11; run_train

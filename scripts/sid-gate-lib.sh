@@ -2,7 +2,7 @@
 # Shared gate mechanics; source this, then gate_repo and gate_tree <main> <tree> <log> <description>.
 # gate_tree returns 0 passed or 1 failed, leaving lane, digest, flaky, known and new_failures for its caller.
 #
-# Optional test rerun protocol: recover flakes, diagnose main red, and verify its fix.
+# Gate protocol: retry receipts, comparison identities and main-red execution receipts.
 #   SID_FAILURES_OUT=<file> retry receipts only; never use these for comparison.
 #   SID_FAILURE_IDENTITIES_OUT=<file> exact encoded cases or opaque identities, one per line.
 #   SID_RERUN=<file>         run only the tests listed, on the tree checked out, and report the same way.
@@ -49,9 +49,9 @@ run_gate() {
 gate_attempt() {
   local log=$1 tag=$2 rc; shift 2
   local part=$log.$tag.log
-  rm -f "$log.$tag.identities"
+  rm -f "$log.$tag.identities" "$log.$tag.executions.jsonl"
   : > "$part"
-  run_gate "$part" SID_FAILURE_IDENTITIES_OUT="$log.$tag.identities" "$@"; rc=$?
+  run_gate "$part" SID_FAILURE_IDENTITIES_OUT="$log.$tag.identities" SID_EXECUTION_RECEIPTS_OUT= "$@"; rc=$?
   cat "$part" >> "$log"
   return "$rc"
 }
@@ -59,7 +59,7 @@ gate_tree() {
   local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main
   lane=full; digest=; flaky=0; known=0; new_failures=
   echo "== gate: $description" > "$log" || return 1
-  rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again" "$log.executed" "$log.main.identities"
+  rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again" "$log.red-fix.executions.jsonl" "$log.main.identities"
   # Never reuse an abandoned attempt's checkout, even if its workload escaped
   # supervision. Git's common object store is shared; mutable indexes are not.
   verify=$(python3 "${gate_worker%/*}/gate_lease.py" prepare "$gate" "$repo" "$$" "$main") || return 1
@@ -112,11 +112,11 @@ gate_tree() {
   fi
   if [ "$rc" = 0 ] && [ -f "$gate/health/main-red" ]; then
     if python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests"; then
-      gate_attempt "$log" red-fix SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again" SID_EXECUTION_RECEIPTS_OUT="$log.executed"; rc=$?
+      gate_attempt "$log" red-fix SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again" SID_EXECUTION_RECEIPTS_OUT="$log.red-fix.executions.jsonl"; rc=$?
       [ ! -s "$log.red-again" ] || rc=1
       python3 "${gate_worker%/*}/gate_failures.py" check "$log.red-fix.identities" "$rc" >> "$log" 2>&1 || rc=1
       [ ! -s "$log.red-fix.identities" ] || rc=1
-      python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests" "$log.executed" "$log.red-fix.log" "$verify" >> "$log" 2>&1 || rc=1
+      python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests" "$log.red-fix.executions.jsonl" >> "$log" 2>&1 || rc=1
     else
       rc=1
     fi
