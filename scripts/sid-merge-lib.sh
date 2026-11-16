@@ -53,3 +53,15 @@ disarm_auto() {
     fi
   fi
 }
+
+# Admission and the final pre-merge read both enforce dependencies, even for old requests.
+dependencies_ready() {
+  python3 "$here/train_policy.py" dependencies "$tmp/pr.json" "$gh" "$default"
+}
+retarget_children() {
+  python3 "$here/train_policy.py" retarget "$1" "$gh" "$default"
+}
+main_ready() {
+  [ -f "$gate/health/main-red" ] || return 0
+  python3 "$here/train_policy.py" admission "$tmp/pr.json" "$gate/health/main-red"
+}

@@ -2,7 +2,7 @@
 # Shared gate mechanics; source this, then gate_repo and gate_tree <main> <tree> <log> <description>.
 # gate_tree returns 0 passed or 1 failed, leaving lane, digest, flaky, known and new_failures for its caller.
 #
-# What a repo's .sidstack/gate.sh may do so only new test failures fail a PR (optional; without it any failure fails):
+# Optional test rerun protocol: recover flakes, diagnose main red, and verify its fix.
 #   SID_FAILURES_OUT=<file>  write the tests that failed, one per line. Leave it non-empty only when every other check passed.
 #   SID_RERUN=<file>         run only the tests listed, on the tree checked out, and report the same way.
 #                            A listed test that doesn't exist on this tree counts as passing.
@@ -46,7 +46,7 @@ gate_tree() {
   local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main
   lane=full; digest=; flaky=0; known=0; new_failures=
   echo "== gate: $description" > "$log" || return 1
-  rm -f "$failed" "$again" "$base"
+  rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again"
   # Never reuse an abandoned attempt's checkout, even if its workload escaped
   # supervision. Git's common object store is shared; mutable indexes are not.
   verify=$(python3 "${gate_worker%/*}/gate_lease.py" prepare "$gate" "$repo" "$$" "$main") || return 1
@@ -59,7 +59,7 @@ gate_tree() {
     }
   run_gate "$log" SID_FAILURES_OUT="$failed"; rc=$?
   if [ "$rc" != 0 ] && [ -s "$failed" ]; then
-    # Only tests failed. Run just those again: what passes now was flaky, and what also fails on main isn't this tree's fault.
+    # Recover transient failures, then diagnose persistent failures against main.
     echo "== gate: running the $(wc -l < "$failed") failed tests again" >> "$log"
     run_gate "$log" SID_RERUN="$failed" SID_FAILURES_OUT="$again"; rc=$?
     if [ "$rc" != 0 ] && [ -s "$again" ]; then
@@ -70,11 +70,23 @@ gate_tree() {
           run_gate "$log" SID_RERUN="$again" SID_FAILURES_OUT="$base"
         new_failures=$(comm -23 <(sort -u "$again") <(sort -u "$base" 2>/dev/null))
       fi
-      if [ -z "$new_failures" ]; then rc=0; known=$(sort -u "$again" | wc -l); fi
+      if [ "$tree" = "$main" ] || [ "$(git rev-parse "$tree^{tree}")" = "$(git rev-parse "$main^{tree}")" ]; then cp "$again" "$base"; fi
+      if [ -s "$base" ]; then
+        known=$(sort -u "$base" | wc -l)
+        python3 "${gate_worker%/*}/train_health.py" "$gate/health" "$repo" "$main" "$log" "$base"
+      fi
+      # A PR never receives a pass while any of its tests still fail.
+      rc=1
     fi
-    if [ "$rc" = 0 ]; then
-      flaky=$(( $(sort -u "$failed" | wc -l) - known ))
-      echo "== gate: passed; $flaky flaky, $known already failing on ${main:0:8}" >> "$log"
+    flaky=$(python3 "${gate_worker%/*}/gate_counts.py" "$log" "$failed" "$again")
+    echo "== gate: $flaky flaky tests, $known failing on main" >> "$log"
+  fi
+  if [ "$rc" = 0 ] && [ -f "$gate/health/main-red" ]; then
+    if python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["tests"]))' "$gate/health/main-red" > "$log.red-tests" && [ -s "$log.red-tests" ]; then
+      run_gate "$log" SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again"; rc=$?
+      [ ! -s "$log.red-again" ] || rc=1
+    else
+      rc=1
     fi
   fi
   git -C "$verify" checkout -q --detach -f "$main"
@@ -82,7 +94,7 @@ gate_tree() {
   python3 "${gate_worker%/*}/gate_lease.py" remove "$manifest" "$repo" || return 1
   lane=$(sed -n 's/^gate: lane \([^[:space:]]*\)[[:space:]]*$/\1/p' "$log" | tail -n 1); lane=${lane:-full}
   digest=$(sha256sum "$log" | cut -d' ' -f1)
-  # Keep failed logs too: split trains and health results refer to them.
+  # Keep failed logs too: train and health results refer to them.
   ls -1t "$gate/logs" | tail -n +101 | while IFS= read -r old; do rm -f "$gate/logs/$old"; done
   [ "$rc" = 0 ]
 }

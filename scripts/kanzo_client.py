@@ -2,7 +2,7 @@
 import json, os, re, subprocess, sys, urllib.request
 from pathlib import Path
 KANZO = os.path.expanduser("~/.local/bin/kanzo")
-URL = "http://127.0.0.1:4242/mcp"
+URL = os.environ.get("SID_KANZO_URL", "http://127.0.0.1:4242/mcp")
 STATE = Path(os.path.expanduser("~/.local/state/sidstack/cards.json"))
 ELAPSED = re.compile(r"^(<1m|\d+m|\d+h( \d+m)?|\d+d( \d+h)?|stale)$")
 ACTIVE = ("doing", "review", "deployment")

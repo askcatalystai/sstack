@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sid-train: drain this repo's queue, gating combined trees and splitting failures oldest half first.
+# sid-train: drain this repo's queue, gating and landing one PR at a time on current main.
 # Shares sid-gate's lock: trains and health must never build side by side.
 # Exit: 0 drained, 1 runner/setup failure. Per-PR codes live in train/result/<pr>;
 # 5 means merged onto an ungated tree (main moved or GitHub landed an unexpected tree).
@@ -68,6 +68,8 @@ validate() (
   local pr=$1 queued_head=$2
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   ready
+  dependencies_ready || exit 1
+  main_ready || exit 4
   [ "$head" = "$queued_head" ] || { echo "#$pr head changed since queueing; run sid-merge again"; exit 1; }
   [ "$base" = "$default" ] || { echo "#$pr's base just changed to $base; run sid-merge again"; exit 1; }
   cp "$tmp/pr.json" "$train/active/$pr.json"
@@ -109,6 +111,7 @@ stamp_main() {
   [ "$(git rev-parse "$newmain^{tree}")" = "$gated_tree" ] || return 0
   printf 'pass %s\n%s\n' "$lane" "$log" > "$gate/health/$newmain.tmp"
   mv "$gate/health/$newmain.tmp" "$gate/health/$newmain"
+  rm -f "$gate/health/main-red"
 }
 # One more failure of this commit on the record; sid-merge reads it before queueing the commit again.
 note_failure() {
@@ -121,7 +124,8 @@ note_failure() {
   printf '%s %s %s\n' "$head" "$((failures+1))" "$log" > "$train/failed/$pr"
 }
 run_train() {
-  # Recursive halves get their own ids, logs, and main snapshots.
+  [ "$#" = 1 ] || { echo "serial train requires exactly one PR"; return 1; }
+  # Only a single member is admitted: every landed prefix has its own verdict.
   local -a candidates=("$@") accepted=() remaining=()
   local -A trees=()
   local pr head branch out tree combined synthetic rc record oid expected parent member_tree trailers message title body mode_error noted
@@ -152,7 +156,8 @@ run_train() {
         fi
         if [ "$rc" = 0 ]; then
           result_for "$pr" 0 "merged #$pr: $oid (found already merged)"
-          cleanup_branch "$branch"
+          if retarget_children "$branch"; then cleanup_branch "$branch"
+          else echo "kept $branch: could not retarget its children"; fi
         elif [ "$rc" = 5 ]; then
           result_for "$pr" 5 "merged #$pr as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})"
           start_health
@@ -168,6 +173,10 @@ p = json.load(open(sys.argv[1]))
 sys.exit(not (p['state'] == 'OPEN' and not p['isDraft'] and p['headRefOid'] == sys.argv[2] and p['baseRefName'] == sys.argv[3]))
 PY
       then result_for "$pr" 1 "#$pr head, state, draft or base changed since queueing; run sid-merge again"; continue; fi
+      validate "$pr" "$head" > "$train/active/$pr.check" 2>&1; rc=$?
+      if [ "$rc" != 0 ]; then
+        result_for "$pr" "$rc" "$(cat "$train/active/$pr.check")"; continue
+      fi
       branch=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["headRefName"])' "$train/active/$pr.json")
       git fetch -q origin "$branch" || { result_for "$pr" 1 "cannot fetch $branch"; continue; }
       [ "$(git rev-parse "origin/$branch")" = "$head" ] || { result_for "$pr" 1 "#$pr head changed since queueing; run sid-merge again"; continue; }
@@ -192,23 +201,17 @@ PY
     lane=$SID_LANE; state gating "${candidates[@]}"
     log=$gate/logs/train-$id.$main.log
     if ! gate_tree "$main" "$tree" "$log" "train $id: $default ${main:0:8} + $members"; then
-      if [ "${#candidates[@]}" -gt 1 ]; then
-        history split
-        run_train "${candidates[@]:0:$((${#candidates[@]}/2))}"
-        run_train "${candidates[@]:$((${#candidates[@]}/2))}"
-      else
         pr=${candidates[0]}; rc=1
         if [ -n "$new_failures" ]; then
           message=$(printf 'gate FAILED: %s\nthese tests fail with #%s and pass on %s (run twice here, once on %s):\n%s\n' "$log" "$pr" "$default" "$default" "$new_failures")
         else
           message=$(printf 'gate FAILED: %s\n' "$log"; tail -n 25 "$log")
-          if grep -q '^fail ' "$gate/health/$main" 2>/dev/null; then
+          if grep -Eq '^(fail |main red$)' "$gate/health/$main" 2>/dev/null; then
             rc=4; message="main is red at ${main:0:8}, see $(sed -n 2p "$gate/health/$main")"
           fi
         fi
         [ "$rc" = 4 ] || note_failure "$pr"
         result_for "$pr" "$rc" "$message"; history failed
-      fi
       return
     fi
     state merging "${candidates[@]}"
@@ -216,7 +219,6 @@ PY
     record="Gate-Passed: train $id, $default ${main:0:8} + $(printf '#%s ' "${candidates[@]}" | sed 's/ $//'), lane $lane, log sha256 $digest"
     noted=
     [ "$flaky" = 0 ] || noted="$flaky flaky"
-    [ "$known" = 0 ] || noted="${noted:+$noted, }$known already failing on $default"
     [ -z "$noted" ] || record="$record, tests passed over: $noted"
     for pr in "${candidates[@]}"; do
       if [ "$needs_rebuild" = true ]; then remaining+=("$pr"); continue; fi
@@ -283,7 +285,8 @@ PY
       fi
       result_for "$pr" 0 "merged #$pr: $oid" "$record"
       merged=$((merged+1)); expected=$oid
-      cleanup_branch "$branch"
+      if retarget_children "$branch"; then cleanup_branch "$branch"
+      else echo "kept $branch: could not retarget its children"; fi
     done
     # A main with failing tests of its own isn't healthy, so leave that one for the health check.
     if [ "$merged" != 0 ] && [ "$unsafe" = false ] && [ "$known" = 0 ]; then stamp_main "$tree"; fi
@@ -306,6 +309,10 @@ PY
   if [ "${#batch[@]}" = 0 ]; then flock -u 8; break; fi
   for pr in "${batch[@]}"; do touch "$train/active/$pr"; done
   flock -u 8
-  run_train "${batch[@]}" || exit 1
+  batch_rc=0
+  for member in "${batch[@]}"; do
+    run_train "$member" || batch_rc=1
+  done
+  [ "$batch_rc" = 0 ] || exit 1
   flock 8; rm -f "$train/active/"*; flock -u 8
 done

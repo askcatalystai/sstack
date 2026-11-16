@@ -3,6 +3,7 @@
 set -u
 # Do not inherit the harness service identity; systemd cases opt in with fakes.
 unset INVOCATION_ID
+export SID_KANZO_URL=http://127.0.0.1:1/mcp
 # Git routing inherited from a caller must never redirect fixture gates/locks.
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 export SID_GATE_LEASE_SECONDS=1
@@ -54,6 +55,13 @@ elif args[:2] == ['pr', 'view']:
     if (p/'retargeted').exists() and 'baseRefName' in fields and 'mergeable' not in fields:
         d['baseRefName'] = 'parent'
     print(json.dumps(d))
+elif args[:2] == ['pr', 'list']:
+    rows = [json.loads(f.read_text()) | {'number': int(f.stem.split('-')[1])} for f in p.glob('pr-*.json')]
+    if '--base' in args: rows = [d for d in rows if d['baseRefName'] == args[args.index('--base')+1] and d['state'] == 'OPEN']
+    if '--head' in args: rows = [d for d in rows if d['headRefName'] == args[args.index('--head')+1]]
+    print(json.dumps(rows))
+elif args[:2] == ['pr', 'edit']:
+    d = json.loads(data(args[2]).read_text()); d['baseRefName'] = args[args.index('--base')+1]; data(args[2]).write_text(json.dumps(d))
 elif args[:2] == ['pr', 'merge']:
     pr = args[2]; d = json.loads(data(pr).read_text()); d.setdefault('autoMergeRequest', None)
     if '--disable-auto' in args:
@@ -125,8 +133,8 @@ git checkout -q main; printf 'exit 0\n' > .sidstack/gate.sh; git add -A; git com
 git checkout -q main; printf 'touch "$T/gate-ran"\n' > .sidstack/gate.sh; git add -A; git commit -qm count; git push -q origin main; git checkout -q work; "$here/sid-gate.sh" work >/dev/null; rm -f "$t/gate-ran"; sed -i 2d "$stamp"; pr '[]'; merge --check; ok "--check ignores gate stamps" "$?" 0; [ -f "$t/gate-ran" ]; ok "--check did not run the gate" "$?" 1
 pr '[]'
 git push -q origin "$head~1:refs/heads/parent"; pr '[]'; sed -i 's/"baseRefName":"main"/"baseRefName":"parent"/' "$t/pr.json"
-merge --check; ok "a stacked PR passes --check" "$?" 0; grep -q "ready, but stacked on parent" "$t/out"; ok "and says it is stacked" "$?" 0
-merge; ok "a stacked PR doesn't merge" "$?" 1; grep -q "land that first" "$t/out"; ok "and says what to do" "$?" 0; ok "no merge happened" "$(merges)" 0
+merge --check; ok "a stacked PR reports blocked readiness" "$?" 1; grep -q "blocked dependency" "$t/out"; ok "and says it is stacked" "$?" 0
+merge; ok "a stacked PR doesn't merge" "$?" 1; grep -q "must land on main first" "$t/out"; ok "and says what to do" "$?" 0; ok "no merge happened" "$(merges)" 0
 pr '[]'
 touch "$t/retargeted"; merge; ok "a retarget just before merging stops it" "$?" 1; grep -q "base changed" "$t/out"; ok "for that reason" "$?" 0; ok "no merge happened" "$(merges)" 0; rm "$t/retargeted"
 cp "$t/pr.json" "$t/clean.json"; sed -i 's/"mergeable":"MERGEABLE"/"mergeable":"UNKNOWN"/' "$t/pr.json"; ( sleep 2; cp "$t/clean.json" "$t/pr.json" ) &
@@ -252,24 +260,28 @@ ok "train rejects conflict hidden by global merge driver" "$(code 11)" 3
 setup_train batch
 add_pr 11 a; add_pr 12 b; echo fast > "$T/reported-lane"; git worktree add -q "$T/worker" work11
 "$here/sid-mode.sh" set lane full --note 'operator full test'; queue_pr 11; queue_pr 12; run_train
-ok "two members gate once" "$(count_gates)" 1
-ok "gate sees union as a diff against HEAD" "$(cat "$T/gate-diffs")" 'a b '
+ok "each member has its own gate" "$(count_gates)" 2
+ok "each gate sees its own diff against current main" "$(tr '\n' '|' < "$T/gate-diffs")" 'a |b |'
 
 ok "first member merged" "$(code 11)" 0; ok "second member merged" "$(code 12)" 0
+for n in 11 12; do
+  tree=$(git rev-parse "$(cat "$T/merge-oid-$n")^{tree}")
+  grep -qx "$tree" "$T/gated-trees"; ok "landed prefix #$n was gated" "$?" 0
+done
 ok "merges follow queue order" "$(tr '\n' ' ' < "$T/merge-calls")" '11 12 '
 for n in 11 12; do
-  grep -Eq '^Gate-Passed: train [0-9]+, main [a-f0-9]{8} \+ #11 #12, lane fast, log sha256 [a-f0-9]{64}$' "$T/message-$n"
+  grep -Eq "^Gate-Passed: train [0-9]+, main [a-f0-9]{8} \+ #${n}, lane fast, log sha256 [a-f0-9]{64}$" "$T/message-$n"
   ok "#$n squash carries both members and the reported lane" "$?" 0
   grep -q '^Agent: writer' "$T/message-$n"; ok "#$n preserves branch trailers" "$?" 0
 done
 [ ! -d "$T/worker" ]; ok "merged member worktree is removed" "$?" 0
 git show-ref --verify --quiet refs/heads/work11; ok "merged member local branch is removed" "$?" 1
 git ls-remote --exit-code origin refs/heads/work11 >/dev/null; ok "merged member remote branch is removed" "$?" 2
-ok "mode SID_LANE reaches gate" "$(cat "$T/lane-input")" full
+ok "mode SID_LANE reaches each gate" "$(sort -u "$T/lane-input")" full
 sha=$(git rev-parse origin/main); ok "matching merged tree records health" "$(head -n 1 "$health/$sha")" 'pass fast'
 log=$(sed -n 2p "$health/$sha"); digest=$(sha256sum "$log" | cut -d' ' -f1)
-grep -q "log sha256 $digest$" "$T/message-11"; ok "train trailer authenticates kept gate log" "$?" 0
-"$here/sid-health.sh" > "$T/health-out"; ok "fast health is checked in full" "$(count_gates)" 2
+grep -q "log sha256 $digest$" "$T/message-12"; ok "train trailer authenticates kept gate log" "$?" 0
+"$here/sid-health.sh" > "$T/health-out"; ok "fast health is checked in full" "$(count_gates)" 3
 # The gate reports what it actually ran; stop overriding the health lane here.
 rm "$T/reported-lane"; "$here/sid-health.sh" > "$T/health-out"; ok "health with no lane reports full" "$(head -n 1 "$health/$sha")" 'pass full'
 before=$(count_gates); "$here/sid-health.sh" > "$T/health-out"; ok "full passing health skips" "$(count_gates)" "$before"
@@ -278,10 +290,10 @@ import json, sys
 s = json.load(open(sys.argv[1])); sys.exit(not (s['phase'] == 'idle' and s['members'] == [] and len(s['main']) == 40))
 PY
 ok "drained runner publishes idle" "$?" 0
-ok "batch history records a merged train" "$(cut -f6 "$q/history.tsv")" merged
+ok "batch history records a merged train" "$(sort -u "$q/history.tsv" | cut -f6 | sort -u)" merged
 setup_train split
 add_pr 11 good; add_pr 12 bad; queue_pr 11; queue_pr 12; run_train
-ok "failed pair splits into two single gates" "$(count_gates)" 3
+ok "failure cannot bypass a prefix gate" "$(count_gates)" 2
 ok "passing half merges" "$(code 11)" 0; ok "bad half fails" "$(code 12)" 1
 ok "bad member never merged" "$(cat "$T/merge-calls")" 11
 grep -q failure-sentinel "$q/result/12"; ok "failure includes log tail" "$?" 0
@@ -811,7 +823,7 @@ setup_train retries
 add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
 # Refuse the second merge twice to model GitHub's delayed mergeability after the first squash.
 echo 2 > "$T/refuse-count-12"; run_train
-ok "temporary merge refusals do not regate" "$(count_gates)" 1
+ok "temporary merge refusals do not add gates beyond one per PR" "$(count_gates)" 2
 ok "second member merges after refused attempts" "$(code 12)" 0
 setup_train refused-exhausted
 add_pr 11 a; queue_pr 11; echo 4 > "$T/refuse-count-11"; run_train
@@ -839,9 +851,9 @@ add_pr 11 a
 git checkout -q -b work12 work11; git rm -q a; echo b > b; git add -A; git commit -qm 'drop a, add b'; git push -q origin work12
 record_pr 12; git checkout -q main
 queue_pr 11; queue_pr 12; run_train
-ok "compatible dependent squashes share one gate" "$(count_gates)" 1
+ok "compatible dependent squashes each get a gate" "$(count_gates)" 2
 ok "both compatible dependent members merge" "$(code 11) $(code 12)" '0 0'
-ok "dependent final squash matches the gated tree" "$(git rev-parse 'origin/main^{tree}')" "$(cat "$T/gated-trees")"
+ok "dependent final squash matches the gated tree" "$(git rev-parse 'origin/main^{tree}')" "$(tail -n 1 "$T/gated-trees")"
 # A successful CLI exit can mean queued, or an unconfirmed completion.
 for outcome in queued state head commit fetch api; do
   setup_train "unconfirmed-$outcome"
@@ -905,7 +917,7 @@ ok "checked prefix still reports success before later drift" "$(code 11)" 0
 ok "second-member parent drift reports exit 5" "$(code 12)" 5
 sha=$(cat "$T/merge-oid-12")
 grep -q "/health-$sha.log$" "$health/$sha"; ok "stopped train preserves actual health evidence" "$?" 0
-ok "second-member drift checks main without another train" "$(count_gates)" 2
+ok "second-member drift checks main after both gates" "$(count_gates)" 3
 setup_train recovered-unsafe-merge
 add_pr 11 a; queue_pr 11; touch "$T/same-tree-drift-11" "$T/crash-after-merge"
 run_train; run_train
@@ -914,18 +926,62 @@ sha=$(cat "$T/merge-oid-11")
 grep -q "/health-$sha.log$" "$health/$sha"; ok "unsafe recovered merge starts full health" "$?" 0
 ok "unsafe recovery never merges twice" "$(cat "$T/merge-calls")" 11
 # Only failures the change causes fail it: failed tests run again, then on main alone.
+# Legacy requests cannot bypass declared dependencies after a failed parent.
+for kind in stacked declared; do
+  setup_train "dependency-$kind"
+  add_pr 11 bad; add_pr 12 b
+  python3 - "$T/pr-12.json" "$kind" <<'P'
+import json,sys
+p,kind=sys.argv[1:]; d=json.load(open(p))
+if kind == 'stacked': d['baseRefName']='work11'
+else: d['body'] += 'Depends-on: #11\n'
+json.dump(d,open(p,'w'))
+P
+  queue_pr 12; ok "$kind blocks admission without parent" "$?" 1
+  grep -q 'blocked dependency' "$T/out"; ok "$kind explains blocked dependency" "$?" 0
+  queue_pr 11
+  # Simulate a request queued by the old batching train, then drain its failed split.
+  python3 - "$q/queue/12.req" "$T/pr-12.json" <<'P'
+import json,sys,time
+json.dump(dict(head=json.load(open(sys.argv[2]))['headRefOid'], queued=time.time_ns()),open(sys.argv[1],'w'))
+P
+  run_train
+  ok "$kind failed parent never permits child gate across split" "$(count_gates)" 1
+  [ ! -f "$T/merge-calls" ]; ok "$kind neither dependency nor dependent lands" "$?" 0
+  # Repair parent, land it, and observe retarget + fresh child gate.
+  git checkout -q work11; git rm -q bad; echo fixed > fixed; git add -A; git commit -qm repair; git push -q origin work11; record_pr 11; git checkout -q main
+  queue_pr 11; run_train
+  queue_pr 12; ok "$kind child admits after parent lands" "$?" 0
+  run_train; ok "$kind child gets fresh gate and lands" "$(code 12)" 0
+  ok "$kind parent and child each gated after repair" "$(count_gates)" 3
+done
+# Legacy batch file lists must count the named test, not 273 selected files.
+printf '✖ one flaky test (1.2ms)\n✖ one flaky test (1.2ms)\n== gate: running the 273 failed tests again\n' > "$T/count-log"
+seq 273 > "$T/count-failed"; : > "$T/count-again"
+ok "old batch output counts one flaky test" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 1
+printf 'no named log output\n' > "$T/count-log"
+printf 'file.ts::test one\nfile.ts::test two\nfile.ts::test one\n' > "$T/count-failed"
+printf 'file.ts::test two\n' > "$T/count-again"
+ok "per-test protocol counts recovered unique tests" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 1
 setup_train flaky
 add_pr 11 test-a flaky; queue_pr 11; run_train
 ok "a test that passes when run again doesn't fail the PR" "$(code 11)" 0
-grep -q 'tests passed over: .*flaky' "$T/message-11"; ok "and the squash says a flaky test was passed over" "$?" 0
+grep -q 'tests passed over: 1 flaky$' "$T/message-11"; ok "and the squash says a flaky test was passed over" "$?" 0
 ok "running failed tests again is not another gate" "$(count_gates)" 1
 setup_train known-failure
 echo fail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 a; queue_pr 11; run_train
-ok "a test already failing on main doesn't fail the PR" "$(code 11)" 0
-grep -q 'tests passed over: .*already failing' "$T/message-11"; ok "and the squash says so" "$?" 0
-[ ! -f "$health/$(git rev-parse origin/main)" ]; ok "and that main isn't recorded as healthy" "$?" 0
-"$here/sid-health.sh" > "$T/out" 2>&1; ok "main's own failing test still makes health red" "$?" 1
+ok "main-red test blocks the unrelated PR" "$(code 11)" 4
+[ -f "$health/main-red" ]; ok "main-red tests are durable" "$?" 0
+queue_pr 11; ok "red main refuses unrelated admission" "$?" 4
+add_pr 12 test-old fixed
+python3 - "$T/pr-12.json" "$health/main-red" <<'P'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); red=json.load(open(sys.argv[2])); d['body'] += red['card']+' fix main\n'; json.dump(d,open(p,'w'))
+P
+queue_pr 12; ok "named main fix may queue" "$?" 0
+run_train; ok "named fix passes and lands" "$(code 12)" 0
+[ ! -f "$health/main-red" ]; ok "green landed main clears red" "$?" 0
 setup_train new-failure
 echo fail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 test-new fail; queue_pr 11; run_train
@@ -1665,4 +1721,30 @@ result = unittest.TextTestRunner(verbosity=2).run(suite)
 sys.exit(not result.wasSuccessful())
 PY
 ok "MCP reaper fixture cases (no host process signals)" "$?" 0
+# A reused health log cannot inherit a previous targeted rerun's failure list.
+setup_train stale-red-health
+sha=$(git rev-parse origin/main)
+mkdir -p "$health" .git/sid-gate/logs
+printf '{"card":"process#600","tests":["test-old"]}\n' > "$health/main-red"
+printf 'test-old\n' > ".git/sid-gate/logs/health-$sha.log.red-again"
+printf 'fail full\nold-log\n' > "$health/$sha"
+"$here/sid-health.sh" > "$T/out" 2>&1
+ok "periodic health revisits red main and clears stale rerun failures" "$?" 0
+[ ! -f "$health/main-red" ]; ok "fresh green health clears main-red marker" "$?" 0
+printf '✖ apps/foo.test.ts\n== gate: running the 273 failed tests again\n' > "$T/count-log"
+printf 'apps/foo.test.ts\n' > "$T/count-failed"; : > "$T/count-again"
+ok "file-level log labels never count as flaky tests" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 0
+printf '✖ test one (1ms)\nFAIL unit foo.test.ts > test one\n== gate: running the 273 failed tests again\n' > "$T/count-log"
+ok "test detail and summary count once" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 1
+printf '{broken' > "$health/main-red"
+"$here/sid-health.sh" > "$T/out" 2>&1
+ok "corrupt main-red evidence fails health closed" "$?" 1
+[ -f "$health/main-red" ]; ok "corrupt evidence never clears the main-red block" "$?" 0
+rm "$health/main-red"
+add_pr 11 a
+python3 - "$T/pr-11.json" <<'P'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d['body'] += 'Depends-on: #12, #13\n'; json.dump(d,open(p,'w'))
+P
+queue_pr 11; ok "malformed dependency declaration blocks admission" "$?" 1
 exit $fail

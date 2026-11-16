@@ -40,7 +40,7 @@ else
     fi
     exit 0
   fi
-  if grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
+  if [ ! -f "$gate/health/main-red" ] && grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
   gate_lock -n || exit 0
 fi
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$gate/health.pid"
@@ -61,5 +61,6 @@ lane=$(sed -n 's/^gate: lane \([^[:space:]]*\)[[:space:]]*$/\1/p' "$log" | tail 
 status=pass; [ "$rc" = 0 ] || status=fail
 printf '%s %s\n%s\n' "$status" "$lane" "$log" > "$gate/health/$main.tmp"
 mv "$gate/health/$main.tmp" "$gate/health/$main"
+[ "$rc" != 0 ] || rm -f "$gate/health/main-red"
 echo "health: $repo ${main:0:8} $status $lane, $log"
 [ "$rc" = 0 ]
