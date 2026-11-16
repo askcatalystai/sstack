@@ -5,7 +5,8 @@
 # Optional test rerun protocol: recover flakes, diagnose main red, and verify its fix.
 #   SID_FAILURES_OUT=<file>  write the tests that failed, one per line. Leave it non-empty only when every other check passed.
 #   SID_RERUN=<file>         run only the tests listed, on the tree checked out, and report the same way.
-#                            A listed test that doesn't exist on this tree counts as passing.
+#                            Absent identities may pass only for baseline diagnosis.
+#   SID_EXECUTION_RECEIPTS_OUT=<file> runner JSONL evidence, required when verifying main-red fixes; see docs/gate-contract.md.
 set -u
 gate_worker=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gate_worker.py
 # merge_tree <args>: git merge-tree with the same settings GitHub uses, whatever the operator's config says.
@@ -46,7 +47,7 @@ gate_tree() {
   local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main
   lane=full; digest=; flaky=0; known=0; new_failures=
   echo "== gate: $description" > "$log" || return 1
-  rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again"
+  rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again" "$log.executed"
   # Never reuse an abandoned attempt's checkout, even if its workload escaped
   # supervision. Git's common object store is shared; mutable indexes are not.
   verify=$(python3 "${gate_worker%/*}/gate_lease.py" prepare "$gate" "$repo" "$$" "$main") || return 1
@@ -82,9 +83,10 @@ gate_tree() {
     echo "== gate: $flaky flaky tests, $known failing on main" >> "$log"
   fi
   if [ "$rc" = 0 ] && [ -f "$gate/health/main-red" ]; then
-    if python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["tests"]))' "$gate/health/main-red" > "$log.red-tests" && [ -s "$log.red-tests" ]; then
-      run_gate "$log" SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again"; rc=$?
+    if python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests"; then
+      run_gate "$log" SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again" SID_EXECUTION_RECEIPTS_OUT="$log.executed"; rc=$?
       [ ! -s "$log.red-again" ] || rc=1
+      python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests" "$log.executed" >> "$log" 2>&1 || rc=1
     else
       rc=1
     fi

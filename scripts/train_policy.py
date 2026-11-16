@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from pr_checks import section
+from train_landing import landed
 
 
 def gh(repo, *args):
@@ -14,7 +15,9 @@ def gh(repo, *args):
 
 
 def on_main(repo, pr, default):
-    if pr['state'] != 'MERGED' or pr['baseRefName'] != default:
+    if pr['state'] != 'MERGED':
+        return bool(landed('.', pr['number'], pr['headRefOid'], default))
+    if pr['baseRefName'] != default:
         return False
     oid = (pr.get('mergeCommit') or {}).get('oid')
     if not oid:
@@ -39,20 +42,38 @@ def main():
                 subprocess.run(['gh', 'pr', 'edit', str(child['number']), '--repo', repo, '--base', default], check=True)
         return
     pr = json.loads(Path(path).read_text())
-    dependencies = set()
-    for line in pr['body'].splitlines():
-        if re.match(r'^\s*Depends-on\b', line, re.I):
-            match = re.fullmatch(r'Depends-on:[ \t]*#(\d+)[ \t]*', line, re.I)
-            if not match:
-                sys.exit('blocked dependency: use one Depends-on: #N line per dependency')
-            dependencies.add(match[1])
+    def dependencies(node):
+        found = set()
+        for line in node['body'].splitlines():
+            if re.match(r'^\s*Depends-on\b', line, re.I):
+                match = re.fullmatch(r'Depends-on:[ \t]*#(\d+)[ \t]*', line, re.I)
+                if not match:
+                    sys.exit('blocked dependency: use one Depends-on: #N line per dependency')
+                found.add(int(match[1]))
+        return sorted(found)
+    root = int(pr['number'])
+    nodes = {root: pr}
+    done = set()
+    def visit(number, trail):
+        if number in trail:
+            cycle = trail[trail.index(number):] + [number]
+            sys.exit('blocked dependency cycle: ' + ' -> '.join(f'#{n}' for n in cycle))
+        if number in done:
+            return
+        if number not in nodes:
+            nodes[number] = gh(repo, 'view', str(number), '--json', 'number,state,baseRefName,mergeCommit,headRefOid,body')
+        node = nodes[number]
+        for dep in dependencies(node):
+            visit(dep, trail + [number])
+        done.add(number)
+    visit(root, [])
     if pr['baseRefName'] != default:
-        parents = gh(repo, 'list', '--state', 'all', '--head', pr['baseRefName'], '--json', 'number,state,baseRefName,mergeCommit')
+        parents = gh(repo, 'list', '--state', 'all', '--head', pr['baseRefName'], '--json', 'number,state,baseRefName,mergeCommit,headRefOid')
         if len(parents) != 1 or not on_main(repo, parents[0], default):
             sys.exit(f"blocked dependency: base {pr['baseRefName']} must land on {default} first")
         sys.exit(f"blocked dependency: parent landed; retarget this PR to {default} for a fresh gate")
-    for number in sorted(dependencies, key=int):
-        parent = gh(repo, 'view', number, '--json', 'state,baseRefName,mergeCommit')
+    for number in dependencies(pr):
+        parent = nodes[number]
         if not on_main(repo, parent, default):
             sys.exit(f'blocked dependency: #{number} must land on {default} first')
 

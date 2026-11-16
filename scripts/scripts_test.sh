@@ -46,7 +46,7 @@ if args[:2] == ['repo', 'view']:
     print('o/r')
 elif args[:2] == ['pr', 'view']:
     if (p/'api-down').exists(): sys.exit(1)
-    pr = args[2]; d = json.loads(data(pr).read_text()); d.setdefault('autoMergeRequest', None)
+    pr = args[2]; d = json.loads(data(pr).read_text()); d.setdefault('autoMergeRequest', None); d.setdefault('number', int(pr))
     fields = args[args.index('--json')+1]
     if fields == 'autoMergeRequest' and (p/'auto-read-down').exists(): sys.exit(1)
     if fields == 'mergeCommit':
@@ -62,56 +62,66 @@ elif args[:2] == ['pr', 'list']:
     print(json.dumps(rows))
 elif args[:2] == ['pr', 'edit']:
     d = json.loads(data(args[2]).read_text()); d['baseRefName'] = args[args.index('--base')+1]; data(args[2]).write_text(json.dumps(d))
-elif args[:2] == ['pr', 'merge']:
-    pr = args[2]; d = json.loads(data(pr).read_text()); d.setdefault('autoMergeRequest', None)
-    if '--disable-auto' in args:
-        if (p/'disable-fails').exists(): sys.exit(1)
-        d['autoMergeRequest'] = None; data(pr).write_text(json.dumps(d))
-        (p/f'auto-disabled-{pr}').touch(); sys.exit(0)
-    if d['headRefOid'] != args[args.index('--match-head-commit')+1]: sys.exit(1)
-    if (p/'refuse-merge').exists():
-        if (p/'arm-on-refuse').exists():
-            d['autoMergeRequest'] = dict(enabledAt='now'); data(pr).write_text(json.dumps(d))
-        sys.exit(1)
-    if (p/f'queue-only-{pr}').exists():
-        d['autoMergeRequest'] = dict(enabledAt='now'); data(pr).write_text(json.dumps(d)); sys.exit(0)
-    drift = p/f'drift-on-merge-{pr}'
-    if drift.exists():
-        subprocess.run(['git', '--git-dir='+str(p/'origin.git'), 'update-ref', 'refs/heads/main', drift.read_text().strip()], check=True)
-        drift.unlink()
-    flip = p/f'red-on-refuse-{pr}'
-    if flip.exists():
-        flip.unlink(); d['statusCheckRollup'] = [dict(name='ci', conclusion='FAILURE')]
-        data(pr).write_text(json.dumps(d)); sys.exit(1)
-    refused = p/f'refuse-count-{pr}'
-    if refused.exists() and int(refused.read_text()):
-        refused.write_text(str(int(refused.read_text())-1)); sys.exit(1)
-    main = git('rev-parse', 'refs/remotes/origin/main')
-    # The server uses its live base, not a caller's stale tracking ref.
-    main = git('ls-remote', 'origin', 'refs/heads/main').split()[0]
-    if (p/f'same-tree-drift-{pr}').exists():
-        main = git('commit-tree', main+'^{tree}', '-p', main, '-m', 'outside empty push')
-        subprocess.run(['git', 'push', '-q', 'origin', main+':refs/heads/main'], check=True)
-    # Model server settings, independent of the client's hostile config.
-    tree = subprocess.check_output(['git', '-c', 'merge.renames=true', '-c', 'merge.directoryRenames=conflict', '-c', 'merge.renameLimit=0', 'merge-tree', '--write-tree', main, d['headRefOid']], env=dict(os.environ, GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_SYSTEM='/dev/null'), text=True).splitlines()[0]
-    if (p/f'wrong-tree-{pr}').exists(): tree = git('rev-parse', main+'^{tree}')
-    subject = args[args.index('--subject')+1]; body = args[args.index('--body')+1]
-    oid = git('commit-tree', tree, '-p', main, '-m', subject+'\n\n'+body)
-    subprocess.run(['git', 'push', '-q', 'origin', oid+':refs/heads/main'], check=True)
-    (p/f'merge-oid-{pr}').write_text(oid)
-    with (p/'merge-calls').open('a') as f: f.write(pr+'\n')
-    with (p/'merge-args').open('a') as f: f.write(' '.join(args)+'\n')
-    (p/f'message-{pr}').write_text(subject+'\n\n'+body)
-    d['state'] = 'MERGED'; d['mergeCommit'] = dict(oid=oid)
-    if (p/f'unconfirmed-{pr}').exists():
-        d.update(json.loads((p/f'unconfirmed-{pr}').read_text()))
+elif args[:2] == ['pr', 'close']:
+    pr=args[2]
+    if (p/'close-fails').exists(): sys.exit(1)
+    d=json.loads(data(pr).read_text()); d['state']='CLOSED'
+    if (p/'advance-close').exists():
+        oid=(p/'advance-close').read_text().strip(); (p/'advance-close').unlink()
+        subprocess.run([os.environ['SID_TEST_REAL_GIT'],'push','-q','origin',oid+':refs/heads/'+d['headRefName']],check=True)
+        d['headRefOid']=oid
     data(pr).write_text(json.dumps(d))
-    if (p/'crash-after-merge').exists():
-        (p/'crash-after-merge').unlink()
-        os.kill(os.getppid(), signal.SIGKILL)
+    (p/f'close-comment-{pr}').write_text(args[args.index('--comment')+1])
+elif args[:2] == ['pr', 'reopen']:
+    d=json.loads(data(args[2]).read_text()); d['state']='OPEN'; data(args[2]).write_text(json.dumps(d))
+elif args[:2] == ['pr', 'merge']:
+    # This API must never land a train commit again.
+    if '--disable-auto' not in args:
+        (p/'unsafe-merge-api').touch()
+    sys.exit(1)
 else:
     sys.exit(1)
 F
+export SID_TEST_REAL_GIT=$(command -v git)
+cat > "$t/bin/git" <<'F'
+#!/usr/bin/env python3
+import os, re, signal, subprocess, sys
+from pathlib import Path
+real=os.environ['SID_TEST_REAL_GIT']; args=sys.argv[1:]; p=Path(os.environ['T'])
+if args and args[0]=='push' and any(a.startswith('--force-with-lease=refs/heads/main:') for a in args):
+    oid=args[-1].split(':')[0]
+    message=subprocess.check_output([real,'show','-s','--format=%B',oid],text=True)
+    pr=re.search(r'^Sid-Train-PR: #(\d+) ',message,re.M)[1]
+    flip=p/f'red-on-refuse-{pr}'
+    if flip.exists():
+        import json
+        flip.unlink(); f=p/f'pr-{pr}.json'; d=json.loads(f.read_text()); d['statusCheckRollup']=[dict(name='ci',conclusion='FAILURE')]; f.write_text(json.dumps(d)); sys.exit(1)
+    count=p/f'refuse-count-{pr}'
+    if count.exists() and int(count.read_text()):
+        count.write_text(str(int(count.read_text())-1)); sys.exit(1)
+    if (p/'refuse-merge').exists(): sys.exit(1)
+    drift=p/f'drift-on-merge-{pr}'
+    if drift.exists():
+        subprocess.run([real,'--git-dir='+str(p/'origin.git'),'update-ref','refs/heads/main',drift.read_text().strip()],check=True)
+        drift.unlink()
+        (p/'stale-candidate').write_text(oid)
+    rc=subprocess.run([real,*args]).returncode
+    if rc: sys.exit(rc)
+    (p/f'merge-oid-{pr}').write_text(oid)
+    with (p/'merge-calls').open('a') as f: f.write(pr+'\n')
+    (p/f'message-{pr}').write_text(message)
+    with (p/'merge-args').open('a') as f: f.write(message)
+    if (p/'crash-after-merge').exists():
+        (p/'crash-after-merge').unlink(); os.kill(os.getppid(),signal.SIGKILL)
+    sys.exit(0)
+if args and args[0]=='push' and args[-1]==':refs/heads/work11' and (p/'advance-cleanup').exists():
+    import json
+    oid=(p/'advance-cleanup').read_text().strip(); (p/'advance-cleanup').unlink()
+    subprocess.run([real,'push','-q','origin',oid+':refs/heads/work11'],check=True)
+    f=p/'pr-11.json'; d=json.loads(f.read_text()); d['headRefOid']=oid; f.write_text(json.dumps(d))
+os.execv(real,[real,*args])
+F
+chmod +x "$t/bin/git"
 chmod +x "$t/bin/gh"; export T=$t SID_TRAIN_INLINE=1
 pr() { printf '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"","statusCheckRollup":%s,"headRefOid":"%s","headRefName":"work","baseRefName":"main","title":"t","body":"## Proof\\n%s 3 passed\\n## Review\\nAstra approved.\\n"}' "$1" "$head" "$head" > "$t/pr.json"; }
 merge() {
@@ -153,10 +163,15 @@ run_tests() {
   local name bad=0
   for name in "$@"; do
     [ -f "$name" ] || continue
+    local status=passed executed=1 skipped=0
     case "$(cat "$name")" in
-      fail) echo "$name" >> "$SID_FAILURES_OUT"; bad=1;;
+      fail) echo "$name" >> "$SID_FAILURES_OUT"; bad=1; status=failed;;
+      skip) status=skipped; executed=0; skipped=1;;
       flaky) [ -f "$T/ran-$name" ] || { touch "$T/ran-$name"; echo "$name" >> "$SID_FAILURES_OUT"; bad=1; };;
     esac
+    if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ] && [ ! -f "$T/no-receipts" ]; then
+      printf '{"identity":"%s","status":"%s","executed":%s,"skipped":%s}\n' "$name" "$status" "$executed" "$skipped" >> "$SID_EXECUTION_RECEIPTS_OUT"
+    fi
   done
   return "$bad"
 }
@@ -209,7 +224,7 @@ record_pr() {
   python3 - "$T/pr-$n.json" "$n" "$h" <<'PY'
 import json, sys
 p, n, h = sys.argv[1:]
-json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], headRefOid=h, headRefName='work'+n, baseRefName='main', title='change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nAstra approved.\n'), open(p, 'w'))
+json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], number=int(n), headRefOid=h, headRefName='work'+n, baseRefName='main', title='change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nAstra approved.\n'), open(p, 'w'))
 PY
 }
 queue_pr() { "$here/sid-merge.sh" --no-wait "$1" > "$T/out" 2>&1; }
@@ -225,15 +240,6 @@ p=sys.argv[1]; d=json.load(open(p)); d['autoMergeRequest']={'enabledAt':'now'}; 
 P
 queue_pr 11; ok "readiness refuses prearmed auto-merge" "$?" 1
 grep -q 'gh pr merge 11 --disable-auto' "$T/out"; ok "readiness names exact disarm command" "$?" 0
-for refusal in queued refused read; do
-  setup_train "armed-$refusal"; add_pr 11 a; queue_pr 11
-  if [ "$refusal" != refused ]; then touch "$T/queue-only-11"
-  else touch "$T/refuse-merge" "$T/arm-on-refuse"; fi
-  if [ "$refusal" = read ]; then touch "$T/auto-read-down"; else touch "$T/disable-fails"; fi
-  run_train
-  ok "$refusal armed merge returns failure" "$(code 11)" 1
-  grep -q 'gh pr merge 11 --disable-auto' "$q/result/11"; ok "$refusal failed disarm names exact command" "$?" 0
-done
 setup_train pinned-renames
 seq 1 100 > old; git add old; git commit -qm base; git push -q origin main
 base=$(git rev-parse HEAD)
@@ -854,77 +860,49 @@ queue_pr 11; queue_pr 12; run_train
 ok "compatible dependent squashes each get a gate" "$(count_gates)" 2
 ok "both compatible dependent members merge" "$(code 11) $(code 12)" '0 0'
 ok "dependent final squash matches the gated tree" "$(git rev-parse 'origin/main^{tree}')" "$(tail -n 1 "$T/gated-trees")"
-# A successful CLI exit can mean queued, or an unconfirmed completion.
-for outcome in queued state head commit fetch api; do
-  setup_train "unconfirmed-$outcome"
-  add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
-  git worktree add -q "$T/worker" work11
-  case "$outcome" in
-    queued) touch "$T/queue-only-11";;
-    state) echo '{"state":"OPEN"}' > "$T/unconfirmed-11";;
-    head) echo '{"headRefOid":"0000000000000000000000000000000000000000"}' > "$T/unconfirmed-11";;
-    commit) echo '{"mergeCommit":null}' > "$T/unconfirmed-11";;
-    fetch) echo '{"mergeCommit":{"oid":"ffffffffffffffffffffffffffffffffffffffff"}}' > "$T/unconfirmed-11";;
-    api) touch "$T/post-api-down-11";;
-  esac
-  run_train
-  expected_rc=1; expected_message='the merge did not complete; nothing was cleaned up'
-  if [ "$outcome" = fetch ]; then
-    expected_rc=5; expected_message='merged #11 as .*but the landed tree could not be verified'
-    sha=$(cat "$T/merge-oid-11")
-    grep -q '^pass full$' "$health/$sha"; ok "$outcome uncertain landing checks actual main" "$?" 0
-  fi
-  if [ "$outcome" = api ]; then
-    expected_message='gh pr merge 11 --disable-auto'
-  fi
-  if [ "$outcome" = queued ]; then
-    [ -f "$T/auto-disabled-11" ]; ok "queued auto-merge is disabled before refusal" "$?" 0
-  fi
-  ok "$outcome completion reports verification outcome" "$(code 11)" "$expected_rc"
-  grep -q "$expected_message" "$q/result/11"; ok "$outcome completion explains retained work" "$?" 0
-  [ -d "$T/worker" ]; ok "$outcome completion retains worktree" "$?" 0
-  git show-ref --verify --quiet refs/heads/work11; ok "$outcome completion retains local branch" "$?" 0
-  git ls-remote --exit-code origin refs/heads/work11 >/dev/null; ok "$outcome completion retains remote branch" "$?" 0
-  ok "$outcome completion rebuilds remaining member" "$(count_gates)" "$((expected_rc == 5 ? 3 : 2))"
-  ok "$outcome completion permits freshly gated remaining member" "$(code 12)" 0
-done
-# The server can move main after the caller's final base check, or land an unexpected tree.
-for mismatch in parent tree; do
-  setup_train "landed-$mismatch"
-  add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12
-  expected=$(git rev-parse origin/main)
-  if [ "$mismatch" = parent ]; then
-    git checkout -q -b outside origin/main; echo outside > outside; git add -A; git commit -qm outside; git push -q origin outside
-    git rev-parse HEAD > "$T/drift-on-merge-11"; git checkout -q main
-  else touch "$T/wrong-tree-11"; fi
-  run_train
-  ok "$mismatch mismatch after landing exits 5" "$(code 11)" 5
-  oid=$(cat "$T/merge-oid-11"); parent=$(git rev-parse "$oid^1")
-  grep -Fq "merged #11 as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})" "$q/result/11"
-  ok "$mismatch mismatch identifies the actual and gated bases" "$?" 0
-  ok "$mismatch mismatch regates the remaining member" "$(code 12)" 0
-  # Health checks the unexpected landing before the remainder is rebuilt.
-  sha=$oid
-  [ -f "$health/$sha" ] && grep -q '^pass full$' "$health/$sha" && grep -q "/health-$sha.log$" "$health/$sha"
-  ok "$mismatch mismatch starts detached full health on real main" "$?" 0
-  ok "$mismatch mismatch requires a fresh train and health gate" "$(count_gates)" 3
-done
-# A landing the train can't vouch for is reported, including after a crash.
-setup_train landed-after-prefix
-add_pr 11 a; add_pr 12 b; queue_pr 11; queue_pr 12; touch "$T/same-tree-drift-12"
+# A main move inside the push, after every client precheck, rejects the old commit.
+setup_train atomic-main-move
+add_pr 11 a; queue_pr 11
+expected=$(git rev-parse origin/main)
+git checkout -q -b outside origin/main; echo outside > outside; git add -A; git commit -qm outside; git push -q origin outside
+git rev-parse HEAD > "$T/drift-on-merge-11"; git checkout -q main
 run_train
-ok "checked prefix still reports success before later drift" "$(code 11)" 0
-ok "second-member parent drift reports exit 5" "$(code 12)" 5
-sha=$(cat "$T/merge-oid-12")
-grep -q "/health-$sha.log$" "$health/$sha"; ok "stopped train preserves actual health evidence" "$?" 0
-ok "second-member drift checks main after both gates" "$(count_gates)" 3
-setup_train recovered-unsafe-merge
-add_pr 11 a; queue_pr 11; touch "$T/same-tree-drift-11" "$T/crash-after-merge"
-run_train; run_train
-ok "crash recovery checks the original gated base" "$(code 11)" 5
-sha=$(cat "$T/merge-oid-11")
-grep -q "/health-$sha.log$" "$health/$sha"; ok "unsafe recovered merge starts full health" "$?" 0
-ok "unsafe recovery never merges twice" "$(cat "$T/merge-calls")" 11
+ok "atomic main race regates before landing" "$(count_gates)" 2
+ok "regated PR lands once" "$(cat "$T/merge-calls")" 11
+stale=$(cat "$T/stale-candidate")
+git merge-base --is-ancestor "$stale" origin/main; ok "rejected ungated candidate never reaches main" "$?" 1
+landed=$(cat "$T/merge-oid-11")
+grep -qx "$(git rev-parse "$landed^{tree}")" "$T/gated-trees"; ok "atomic landing uses a gated tree" "$?" 0
+[ ! -f "$T/unsafe-merge-api" ]; ok "no server squash API can substitute a newer main tree" "$?" 0
+# A failed PR close leaves a recoverable receipt; retry never gates or lands twice.
+setup_train close-recovery
+add_pr 11 a; queue_pr 11; touch "$T/close-fails"
+run_train; ok "close failure preserves pending recovery" "$?" 1
+[ -f "$q/queue/11.req" ]; ok "close failure retains request" "$?" 0
+rm "$T/close-fails"; run_train
+ok "receipt recovers already landed commit" "$(code 11)" 0
+ok "close recovery does not regate" "$(count_gates)" 1
+ok "close recovery never pushes twice" "$(cat "$T/merge-calls")" 11
+grep -q "$(cat "$T/merge-oid-11")" "$T/close-comment-11"; ok "closed PR names landing commit" "$?" 0
+# Board/Kanzo consume validated receipts before classifying CLOSED PRs as scrapped.
+python3 - "$here" "$T" <<'P'
+import importlib.util,json,subprocess,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]); spec=importlib.util.spec_from_file_location('board',Path(sys.argv[1])/'sid-board.py'); board=importlib.util.module_from_spec(spec); spec.loader.exec_module(board)
+p=Path(sys.argv[2]); pr=json.loads((p/'pr-11.json').read_text()); assert pr['state']=='CLOSED'
+def command(*args,**kw):
+    if args[:3]==('gh','pr','list'): return json.dumps([pr])
+    if args[:2]==('gh','api'): return '[]'
+    return subprocess.check_output(args,**{k:v for k,v in kw.items() if k=='cwd'},text=True).strip()
+board.command=command
+repo=board.gather_github(str(p/'repo'),{'nameWithOwner':'o/r','defaultBranchRef':{'name':'main'}},[])
+assert repo['prs'][0]['state']=='MERGED' and repo['prs'][0]['live']
+card=dict(key='process#600',title='Work',status='review',tags=['pr-11'],comments=[],repo=str(p/'repo'))
+actions,*_=board.reconcile(dict(cards=[card],projects=['process'],repos={str(p/'repo'):repo},threads=[]),{},2000000000)
+assert any(a['kind']=='update' and a['fields'].get('status')=='done' for a in actions), actions
+assert any(a['kind']=='comment' and 'Gate-Passed:' in a['body'] for a in actions), actions
+P
+ok "closed CAS PR is merged and done on Kanzo with gate proof" "$?" 0
 # Only failures the change causes fail it: failed tests run again, then on main alone.
 # Legacy requests cannot bypass declared dependencies after a failed parent.
 for kind in stacked declared; do
@@ -974,6 +952,24 @@ add_pr 11 a; queue_pr 11; run_train
 ok "main-red test blocks the unrelated PR" "$(code 11)" 4
 [ -f "$health/main-red" ]; ok "main-red tests are durable" "$?" 0
 queue_pr 11; ok "red main refuses unrelated admission" "$?" 4
+for outcome in delete skip no-receipts; do
+  case "$outcome" in delete) n=13;; skip) n=14;; no-receipts) n=15;; esac
+  add_pr "$n" other
+  git checkout -q work$n
+  if [ "$outcome" = delete ]; then git rm -q test-old
+  else echo skip > test-old; [ "$outcome" != no-receipts ] || echo fixed > test-old; fi
+  git add -A; git commit -qm "claimed fix $outcome"; git push -q origin work$n; record_pr "$n"; git checkout -q main
+  python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d['body'] += json.load(open(sys.argv[2]))['card']+' fix main\n'; json.dump(d,open(p,'w'))
+P
+  [ "$outcome" != no-receipts ] || touch "$T/no-receipts"
+  queue_pr "$n"; run_train
+  ok "$outcome cannot clear red main" "$(code "$n")" 4
+  [ -f "$health/main-red" ]; ok "$outcome retains the red block" "$?" 0
+  [ ! -f "$T/merge-calls" ]; ok "$outcome fix never lands" "$?" 0
+  rm -f "$T/no-receipts"
+done
 add_pr 12 test-old fixed
 python3 - "$T/pr-12.json" "$health/main-red" <<'P'
 import json,sys
@@ -1723,6 +1719,7 @@ PY
 ok "MCP reaper fixture cases (no host process signals)" "$?" 0
 # A reused health log cannot inherit a previous targeted rerun's failure list.
 setup_train stale-red-health
+echo fixed > test-old; git add -A; git commit -qm healthy; git push -q origin main
 sha=$(git rev-parse origin/main)
 mkdir -p "$health" .git/sid-gate/logs
 printf '{"card":"process#600","tests":["test-old"]}\n' > "$health/main-red"
@@ -1747,4 +1744,35 @@ import json,sys
 p=sys.argv[1]; d=json.load(open(p)); d['body'] += 'Depends-on: #12, #13\n'; json.dump(d,open(p,'w'))
 P
 queue_pr 11; ok "malformed dependency declaration blocks admission" "$?" 1
+setup_train dependency-cycles
+add_pr 11 a; add_pr 12 b; add_pr 13 c
+for cycle in self transitive; do
+  python3 - "$T" "$cycle" <<'P'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]); edges={11:11} if sys.argv[2]=='self' else {11:12,12:13,13:11}
+for n in (11,12,13):
+ f=p/f'pr-{n}.json'; d=json.load(f.open()); d['body']=d['body'].split('Depends-on:')[0] + (f'Depends-on: #{edges[n]}\n' if n in edges else ''); f.write_text(json.dumps(d))
+P
+  queue_pr 11; ok "$cycle cycle blocks admission" "$?" 1
+  if [ "$cycle" = self ]; then expected='#11 -> #11'; else expected='#11 -> #12 -> #13 -> #11'; fi
+  grep -q -- "$expected" "$T/out"; ok "$cycle reports cycle path" "$?" 0
+done
+# A branch advance after the close head read cannot be deleted by cleanup.
+for race in close cleanup; do
+  setup_train "branch-race-$race"
+  add_pr 11 a; queue_pr 11
+  git checkout -q work11; echo unlanded > unlanded; git add -A; git commit -qm unlanded
+  newhead=$(git rev-parse HEAD); git checkout -q main
+  printf '%s\n' "$newhead" > "$T/advance-$race"
+  run_train
+  ok "$race race preserves remote new head" "$(git ls-remote origin refs/heads/work11 | cut -f1)" "$newhead"
+  ok "$race race preserves local new head" "$(git rev-parse refs/heads/work11)" "$newhead"
+  python3 - "$T/pr-11.json" <<'P'
+import json,sys
+assert json.load(open(sys.argv[1]))['state']=='OPEN'
+P
+  ok "$race race leaves new PR work open" "$?" 0
+  git cat-file -e origin/main:unlanded 2>/dev/null; ok "$race race never lands new ungated work" "$?" 128
+done
 exit $fail

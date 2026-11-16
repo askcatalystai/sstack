@@ -7,7 +7,7 @@ ready() {
   # GitHub answers UNKNOWN until it has worked out mergeability, and a just-pushed head has checks still pending.
   for wait in 0 3 5 10 15 30 30 30; do
     sleep "$wait"
-    gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName,autoMergeRequest > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
+    gh pr view "$pr" --repo "$gh" --json number,state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName,autoMergeRequest > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
     if python3 -c 'import json,sys;sys.exit(not bool(json.load(open(sys.argv[1])).get("autoMergeRequest")))' "$tmp/pr.json"; then
       echo "#$pr has auto-merge armed; run gh pr merge $pr --disable-auto"
       exit 1

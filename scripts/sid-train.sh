@@ -2,7 +2,7 @@
 # sid-train: drain this repo's queue, gating and landing one PR at a time on current main.
 # Shares sid-gate's lock: trains and health must never build side by side.
 # Exit: 0 drained, 1 runner/setup failure. Per-PR codes live in train/result/<pr>;
-# 5 means merged onto an ungated tree (main moved or GitHub landed an unexpected tree).
+# Main moves are rejected atomically by an explicit lease; receipts recover interrupted pushes.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
@@ -50,12 +50,22 @@ result_for() {
   flock -u 8
 }
 cleanup_branch() {
-  local branch=$1 wt
+  local branch=$1 expected_head=$2 wt current
+  # A contributor may push after the final PR read or close. Never delete that head.
+  if ! git push -q --force-with-lease="refs/heads/$branch:$expected_head" origin ":refs/heads/$branch"; then
+    current=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+    if [ -n "$current" ] && [ "$current" != "$expected_head" ]; then
+      gh pr reopen "$pr" --repo "$gh" || true
+    fi
+    echo "kept $branch: remote head changed or deletion refused"; return
+  fi
   rm -f "$gate/${branch//\//_}.pass"
+  [ "$(git rev-parse "refs/heads/$branch" 2>/dev/null)" = "$expected_head" ] || return 0
   wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '/^worktree /{w=$2} $0=="branch "b{print w}')
-  if [ -n "$wt" ]; then git worktree remove "$wt" || echo "kept $wt: it has uncommitted or untracked files"; fi
-  git branch -qD "$branch" 2>/dev/null
-  git push -q origin --delete "$branch" 2>/dev/null
+  if [ -n "$wt" ] && ! git worktree remove "$wt"; then
+    echo "kept $wt: it has uncommitted or untracked files"; return
+  fi
+  git update-ref -d "refs/heads/$branch" "$expected_head" || echo "kept changed local branch $branch"
 }
 new_id() {
   id=$(cat "$train/sequence" 2>/dev/null || echo 0); id=$((id+1))
@@ -74,24 +84,6 @@ validate() (
   [ "$base" = "$default" ] || { echo "#$pr's base just changed to $base; run sid-merge again"; exit 1; }
   cp "$tmp/pr.json" "$train/active/$pr.json"
 )
-# A zero CLI exit can mean queued. Only GitHub's completed, matching head counts.
-merged_oid() {
-  python3 - "$train/active/$1.json" "$2" <<'PYTHON'
-import json, sys
-p = json.load(open(sys.argv[1]))
-if p['state'] != 'MERGED' or p['headRefOid'] != sys.argv[2]:
-    sys.exit(1)
-oid = (p.get('mergeCommit') or {}).get('oid')
-if not oid:
-    sys.exit(1)
-print(oid)
-PYTHON
-}
-landed_tree() {
-  git fetch -q origin "$oid" || return 1
-  parent=$(git rev-parse "$oid^1") || return 1
-  [ "$parent" = "$expected" ] && [ "$(git rev-parse "$oid^{tree}")" = "$member_tree" ] || return 5
-}
 start_health() {
   local health_pid
   # Run detached, but yield the shared gate until actual main is checked before rebuilding.
@@ -147,24 +139,14 @@ run_train() {
       # Check identity before readiness; only the queued head can be recovered or gated.
       if ! gh pr view "$pr" --repo "$gh" --json state,isDraft,baseRefName,headRefOid,headRefName,mergeCommit > "$train/active/$pr.json"; then result_for "$pr" 1 "could not read #$pr"; continue; fi
       # Recover a successful merge whose runner died before publishing its result.
-      if oid=$(merged_oid "$pr" "$head"); then
+      if oid=$(python3 "$here/train_landing.py" recover "$pr" "$head" "$default"); then
         branch=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["headRefName"])' "$train/active/$pr.json")
-        rc=1
-        if [ -f "$train/queue/$pr.merge" ]; then
-          { read -r expected; read -r member_tree; } < "$train/queue/$pr.merge"
-          landed_tree; rc=$?
+        if ! python3 "$here/train_landing.py" close "$pr" "$head" "$default" "$gh"; then
+          echo "landed #$pr as $oid; PR close pending, retry the train"; return 1
         fi
-        if [ "$rc" = 0 ]; then
-          result_for "$pr" 0 "merged #$pr: $oid (found already merged)"
-          if retarget_children "$branch"; then cleanup_branch "$branch"
-          else echo "kept $branch: could not retarget its children"; fi
-        elif [ "$rc" = 5 ]; then
-          result_for "$pr" 5 "merged #$pr as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})"
-          start_health
-        else
-          result_for "$pr" 5 "merged #$pr as $oid, but the landed tree could not be verified"
-          start_health
-        fi
+        result_for "$pr" 0 "merged #$pr: $oid (found already merged)"
+        if retarget_children "$branch"; then cleanup_branch "$branch" "$head"
+        else echo "kept $branch: could not retarget its children"; fi
         continue
       fi
       if ! python3 - "$train/active/$pr.json" "$head" "$default" <<'PY'
@@ -240,52 +222,30 @@ PY
           needs_rebuild=true; break
         fi
         branch=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["headRefName"])' "$train/active/$pr.json")
-        title=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["title"])' "$train/active/$pr.json")
-        body=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["body"])' "$train/active/$pr.json")
-        trailers=$(git log "$main..$head" --format='%(trailers:only,unfold)' | sed '/^$/d' | sort -u)
-        message=$(printf '%s\n\n%s\n%s\n' "$body" "$trailers" "$record")
-        # Persist the exact gated prefix before merging, including for crash recovery.
-        printf '%s\n%s\n' "$expected" "$member_tree" > "$train/queue/$pr.merge"
-        rc=1
-        gh pr merge "$pr" --repo "$gh" --squash --match-head-commit "$head" --subject "$title (#$pr)" --body "$message" >/dev/null && { rc=0; break; }
-        if ! message=$(disarm_auto "$pr"); then
-          result_for "$pr" 1 "$message"; needs_rebuild=true; break
+        oid=$(python3 "$here/train_landing.py" prepare "$pr" "$head" "$default" "$expected" "$member_tree" "$train/active/$pr.json" "$record") || return 1
+        if git push --no-verify --force-with-lease="refs/heads/$default:$expected" origin "$oid:refs/heads/$default"; then
+          rc=0; break
         fi
+        rc=1
+        # A transport error may follow a successful push. Confirm the exact planned
+        # commit by ancestry before retrying; otherwise a moved main needs a new gate.
+        if python3 "$here/train_landing.py" recover "$pr" "$head" "$default" >/dev/null; then rc=0; break; fi
+        if [ "$(git ls-remote origin "refs/heads/$default" | cut -f1)" != "$expected" ]; then needs_rebuild=true; break; fi
       done
       if [ "$needs_rebuild" = true ]; then
         [ ! -f "$train/queue/$pr.req" ] || remaining+=("$pr")
         continue
       fi
       if [ "$rc" != 0 ]; then result_for "$pr" 1 "merge refused for #$pr after retries"; needs_rebuild=true; continue; fi
-      gh pr view "$pr" --repo "$gh" --json state,headRefOid,mergeCommit,autoMergeRequest > "$train/active/$pr.json"; rc=$?
-      if [ "$rc" != 0 ] || ! oid=$(merged_oid "$pr" "$head"); then
-        if ! message=$(disarm_auto "$pr"); then
-          result_for "$pr" 1 "$message"; needs_rebuild=true; continue
-        fi
-        # A separate commit read can still confirm a landing after a failed status read.
-        oid=
-        if [ "$rc" != 0 ]; then
-          oid=$(gh pr view "$pr" --repo "$gh" --json mergeCommit -q '.mergeCommit.oid // empty') || oid=
-        fi
-        if [ -n "$oid" ]; then
-          result_for "$pr" 5 "merged #$pr as $oid, but the landed tree could not be verified"
-          start_health; unsafe=true
-        else
-          result_for "$pr" 1 'the merge did not complete; nothing was cleaned up'
-        fi
-        needs_rebuild=true; continue
+      if ! python3 "$here/train_landing.py" recover "$pr" "$head" "$default" >/dev/null; then
+        echo "cannot confirm pushed commit $oid; receipt retained for recovery"; return 1
       fi
-      landed_tree; rc=$?
-      if [ "$rc" = 5 ]; then
-        result_for "$pr" 5 "merged #$pr as $oid, but main now holds a tree no gate tested (landed on ${parent:0:8}, gated ${expected:0:8})"
-        start_health; unsafe=true; needs_rebuild=true; continue
-      elif [ "$rc" != 0 ]; then
-        result_for "$pr" 5 "merged #$pr as $oid, but the landed tree could not be verified"
-        start_health; unsafe=true; needs_rebuild=true; continue
+      if ! python3 "$here/train_landing.py" close "$pr" "$head" "$default" "$gh"; then
+        echo "landed #$pr as $oid; PR close pending, retry the train"; return 1
       fi
       result_for "$pr" 0 "merged #$pr: $oid" "$record"
       merged=$((merged+1)); expected=$oid
-      if retarget_children "$branch"; then cleanup_branch "$branch"
+      if retarget_children "$branch"; then cleanup_branch "$branch" "$head"
       else echo "kept $branch: could not retarget its children"; fi
     done
     # A main with failing tests of its own isn't healthy, so leave that one for the health check.

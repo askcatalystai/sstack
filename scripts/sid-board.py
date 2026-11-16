@@ -299,6 +299,8 @@ def gather_threads():
     return result
 
 
+from train_landing import overlay as overlay_landing
+
 PR_FIELDS = 'number,state,title,body,headRefName,headRefOid,mergedAt,mergeCommit,closedAt,updatedAt'
 
 
@@ -315,6 +317,12 @@ def gather_github(path, info, cards):
     for number in missing[:20]:
         prs.append(json.loads(command('gh', 'pr', 'view', str(number), '--repo', name,
                                       '--json', PR_FIELDS, cwd=path)))
+    branch = info['defaultBranchRef']['name']
+    if any(p['state'] != 'MERGED' for p in prs):
+        command('git', 'fetch', '--quiet', 'origin', branch, cwd=path)
+        common = command('git', 'rev-parse', '--path-format=absolute', '--git-common-dir', cwd=path)
+        for pr in prs:
+            overlay_landing(path, pr, branch, common)
     def deployments():
         deploys = json.loads(command('gh', 'api', f'repos/{name}/deployments?per_page=20', cwd=path))
         repo['no_deploy'] = not deploys
