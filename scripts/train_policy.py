@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pr_checks import section
 from train_landing import landed
+from gate_receipts import recovery_hint
 
 
 def gh(repo, *args):
@@ -32,15 +33,17 @@ def main():
         red = json.loads(Path(args[0]).read_text())
         review = section(json.loads(Path(path).read_text())['body'], 'Review')
         if not re.search(r'(?<![\w#])'+re.escape(red['card'])+r'(?!\d)', review):
-            sys.exit(f"main red: fix {red['card']} first; only its fix naming that card in ## Review may queue\n"+'\n'.join(red['tests']))
+            sys.exit(f"main red: fix {red['card']} first; only its fix naming that card in ## Review may queue\n"+'\n'.join(red['tests'])+'\n'+recovery_hint(args[0]))
         return
     repo, default = args
     if action == 'retarget':
-        # gh list is paginated; retarget each page until no child uses this base.
-        while children := gh(repo, 'list', '--state', 'open', '--base', path, '--json', 'number'):
+        for _ in range(5):
+            children = gh(repo, 'list', '--state', 'open', '--base', path, '--json', 'number')
+            if not children:
+                return
             for child in children:
                 subprocess.run(['gh', 'pr', 'edit', str(child['number']), '--repo', repo, '--base', default], check=True)
-        return
+        sys.exit('retargeting did not settle after 5 passes; retain parent branch '+path)
     pr = json.loads(Path(path).read_text())
     def dependencies(node):
         found = set()

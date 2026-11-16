@@ -3,7 +3,7 @@
 # --check stops at readiness and dependency admission; --cancel withdraws a request not yet gating.
 # --retry sends a commit that already failed the gate through once more; a second failure needs a new commit.
 # Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
-# Exit: 0 merged/ready/queued/cancelled, 1 not ready or the gate failed, 3 conflicts, 4 main red, 5 merged onto an ungated tree.
+# Exit: 0 merged/ready/queued/cancelled, 1 not ready or the gate failed, 3 conflicts, 4 main red.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"

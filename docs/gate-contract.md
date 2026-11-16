@@ -13,7 +13,7 @@ gate forwards them unchanged to the runner:
 | --- | --- | --- |
 | `SID_FAILURES_OUT` | `TEST_BATCHES_FAILURES_OUT` | UTF-8 retry receipts, one per line; safe Node/Vitest case selections, whole files for Bun/opaque failures, or `package:name`. Never comparison proof. |
 | `SID_FAILURE_IDENTITIES_OUT` | `TEST_BATCHES_FAILURE_IDENTITIES_OUT` | UTF-8 comparison identities, one per line. Required for every invocation. |
-| `SID_EXECUTION_RECEIPTS_OUT` | `TEST_BATCHES_EXECUTION_RECEIPTS_OUT` | JSONL execution receipts. Required when this nonempty variable is supplied for main-red verification; unused otherwise. |
+| `SID_EXECUTION_RECEIPTS_OUT` | `TEST_BATCHES_EXECUTION_RECEIPTS_OUT` | JSONL execution receipts. Required whenever this nonempty variable is supplied: retry recovery and main-red verification. |
 
 `SID_RERUN` is an input file. Ordinary retries/main-only diagnosis consume retry
 receipts. Main-red verification consumes recorded comparison identities: known
@@ -38,7 +38,9 @@ new   = all opaque candidate entries + (candidate known cases - main known cases
 
 Here candidate means the still-failing retry. Opaque entries always remain new,
 even if main emits the same string. There is no subset exception or filename
-fallback. Flaky counts include recovered known cases, never retry file counts.
+fallback. Flaky test counts include only recovered known cases. Recovered opaque
+files are counted separately as files in the gate note and squash record, never
+as named tests.
 
 ## Execution receipts
 
@@ -62,6 +64,15 @@ Required fields:
 - `executed`, `skipped`: nonnegative JSON integers counting actual tests, not
   selected files, suite headings or successful commands; booleans are invalid.
   Counts describe distinct tests in the final completed result, not retry attempts.
+
+To accept a successful retry, every identity in the original candidate failure
+sidecar needs exactly one `passed` execution receipt from that retry. An empty
+retry failure sidecar or process exit 0 does not prove anything ran. For partial
+recovery, every candidate identity absent from the still-failing retry must have
+the same passing proof before it can be counted as recovered; an opaque file
+requires a clean unfiltered whole-file receipt. Missing execution proof fails the
+gate and prevents landing. Main-only diagnosis does not require passing receipts
+for absent tests and cannot substitute for retry proof.
 
 To clear main-red, every recorded identity needs exactly one `passed` receipt
 with `skipped:0`. A case requires `executed:1`; a whole file/package requires
@@ -87,11 +98,31 @@ outputs, including execution receipts.
 A successful invocation has empty retry and comparison outputs. A nonzero test
 exit needs nonempty comparison identities for diagnosis; a missing/unsupported
 comparison sidecar, an empty identity file on nonzero exit, contradictory success outputs,
-or an infrastructure exit fails closed. Main-red additionally fails closed on
+or an infrastructure exit fails closed. Retry recovery and main-red additionally fail closed on
 missing/empty/malformed execution output, duplicate identities, wrong scopes,
-invalid counts, or any recorded identity lacking the required passed receipt.
+invalid counts, or any identity being forgiven/verified lacking the required passed receipt.
 
 Main-red stores comparison identities. Neither failure output alone nor runner
 logs/reports substitute for execution receipts. Existing #1010 retry receipts
 and comparison output remain unchanged; its producer change is forwarding and
 populating `TEST_BATCHES_EXECUTION_RECEIPTS_OUT` under the rules above.
+
+## Stale main-red recovery
+
+A missing identity on the candidate is not evidence that main is green. Sstack
+keeps the block and includes the marker path and recovery procedure in admission
+and gate-failure messages; it does not automatically prune recorded failures.
+
+If a recorded identity no longer exists on **current main**, pause the queue and
+runner first. Audit the current-main tests and the marker's log. Edit the marker
+to retain every valid failure; if a renamed or opaque failure still applies,
+replace the obsolete identity with its current identity or whole-file scope. Only
+remove an identity confirmed obsolete on current main, never one absent only on
+a proposed fix. If no valid failures remain, archive the marker while admission
+is paused. Run `sid-health.sh --wait` and require a green full gate of current main
+before resuming the queue. If that gate fails, restore/reconcile the blocking
+marker and fix main before resuming. This is an explicit audited manual escape,
+not permission for a candidate to clear a missing test automatically.
+
+Child retargeting is limited to five list/edit passes. Failure to settle retains
+the parent branch and reports the failure so children never lose their live base.

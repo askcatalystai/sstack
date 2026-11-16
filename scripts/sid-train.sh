@@ -84,17 +84,6 @@ validate() (
   [ "$base" = "$default" ] || { echo "#$pr's base just changed to $base; run sid-merge again"; exit 1; }
   cp "$tmp/pr.json" "$train/active/$pr.json"
 )
-start_health() {
-  local health_pid
-  # Run detached, but yield the shared gate until actual main is checked before rebuilding.
-  ( exec 7>&- 8>&- 9>&-
-    exec setsid -f -w "$here/sid-health.sh" --wait </dev/null >>"$train/health.log" 2>&1
-  ) &
-  health_pid=$!
-  flock -u 9
-  wait "$health_pid"
-  gate_lock
-}
 # The train's gate covers main when the landed tree is the gated one; record that so health doesn't run it again.
 stamp_main() {
   local gated_tree=$1 newmain
@@ -121,7 +110,7 @@ run_train() {
   local -a candidates=("$@") accepted=() remaining=()
   local -A trees=()
   local pr head branch out tree combined synthetic rc record oid expected parent member_tree trailers message title body mode_error noted
-  local id started lane main log members digest flaky known new_failures attempt merged retry needs_rebuild unsafe
+  local id started lane main log members digest flaky opaque_flaky known new_failures attempt merged retry needs_rebuild
   for attempt in 1 2 3; do
     [ "${#candidates[@]}" -gt 0 ] || return 0
     if ! mode_error=$("$here/sid-mode.sh" get lane 2>&1); then
@@ -189,7 +178,7 @@ PY
         else
           message=$(printf 'gate FAILED: %s\n' "$log"; tail -n 25 "$log")
           if grep -Eq '^(fail |main red$)' "$gate/health/$main" 2>/dev/null; then
-            rc=4; message="main is red at ${main:0:8}, see $(sed -n 2p "$gate/health/$main")"
+            rc=4; message=$(printf 'main is red at %s, see %s\n' "${main:0:8}" "$(sed -n 2p "$gate/health/$main")"; python3 "$here/gate_receipts.py" --recovery-hint "$gate/health/main-red")
           fi
         fi
         [ "$rc" = 4 ] || note_failure "$pr"
@@ -197,10 +186,11 @@ PY
       return
     fi
     state merging "${candidates[@]}"
-    expected=$main; merged=0; remaining=(); needs_rebuild=false; unsafe=false
+    expected=$main; merged=0; remaining=(); needs_rebuild=false
     record="Gate-Passed: train $id, $default ${main:0:8} + $(printf '#%s ' "${candidates[@]}" | sed 's/ $//'), lane $lane, log sha256 $digest"
     noted=
     [ "$flaky" = 0 ] || noted="$flaky flaky"
+    [ "$opaque_flaky" = 0 ] || noted="${noted:+$noted, }$opaque_flaky recovered opaque files"
     [ -z "$noted" ] || record="$record, tests passed over: $noted"
     for pr in "${candidates[@]}"; do
       if [ "$needs_rebuild" = true ]; then remaining+=("$pr"); continue; fi
@@ -248,8 +238,8 @@ PY
       if retarget_children "$branch"; then cleanup_branch "$branch" "$head"
       else echo "kept $branch: could not retarget its children"; fi
     done
-    # A main with failing tests of its own isn't healthy, so leave that one for the health check.
-    if [ "$merged" != 0 ] && [ "$unsafe" = false ] && [ "$known" = 0 ]; then stamp_main "$tree"; fi
+    # Stamp only after confirmed atomic landing of the gated tree.
+    if [ "$merged" != 0 ]; then stamp_main "$tree"; fi
     if [ "$needs_rebuild" = false ]; then history merged; return; fi
     history failed
     candidates=("${remaining[@]}")

@@ -58,10 +58,13 @@ elif args[:2] == ['pr', 'view']:
 elif args[:2] == ['pr', 'list']:
     rows = [json.loads(f.read_text()) | {'number': int(f.stem.split('-')[1])} for f in p.glob('pr-*.json')]
     if '--base' in args: rows = [d for d in rows if d['baseRefName'] == args[args.index('--base')+1] and d['state'] == 'OPEN']
+    if '--base' in args and (p/'stuck-retarget').exists(): rows = [json.loads(data('12').read_text())]
     if '--head' in args: rows = [d for d in rows if d['headRefName'] == args[args.index('--head')+1]]
     print(json.dumps(rows))
 elif args[:2] == ['pr', 'edit']:
     d = json.loads(data(args[2]).read_text()); d['baseRefName'] = args[args.index('--base')+1]; data(args[2]).write_text(json.dumps(d))
+    if (p/'stuck-retarget').exists():
+        with (p/'retarget-edits').open('a') as out: out.write(args[2]+'\n')
 elif args[:2] == ['pr', 'close']:
     pr=args[2]
     if (p/'close-fails').exists(): sys.exit(1)
@@ -175,10 +178,12 @@ run_tests() {
       fail) echo "$name" >> "$SID_FAILURES_OUT"; comparison_failure "$name"; bad=1; status=failed;;
       casefail) echo "$name" >> "$SID_FAILURES_OUT"; comparison_failure "$name::old%20case"; bad=1; status=failed;;
       skip) status=skipped; executed=0; skipped=1;;
+      opaque-flaky) [ -f "$T/ran-$name" ] || { touch "$T/ran-$name"; echo "$name" >> "$SID_FAILURES_OUT"; comparison_failure "$name"; bad=1; };;
       flaky) [ -f "$T/ran-$name" ] || { touch "$T/ran-$name"; echo "$name" >> "$SID_FAILURES_OUT"; comparison_failure "$name::flaky-case"; bad=1; };;
     esac
     if [ -n "${SID_EXECUTION_RECEIPTS_OUT:-}" ]; then
-      case_name='old case'; [ "$(cat "$name")" != wrongcase ] || case_name='different case'
+      case_name='old case'
+      case "$(cat "$name")" in wrongcase) case_name='different case';; flaky) case_name='flaky-case';; esac
       printf '{"file":"%s/%s","name":"%s","state":"%s"}\n' "$PWD" "$name" "$case_name" "$status" >> "$native_rows"
     fi
   done
@@ -214,6 +219,9 @@ E
   return "$bad"
 }
 if [ -n "${SID_RERUN:-}" ]; then
+  if [ -f "$T/vacuous-retry" ]; then
+    : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"; exit 0
+  fi
   echo rerun >> "$T/reruns"; run_tests $(cat "$SID_RERUN"); exit
 fi
 echo gate >> "$T/gates"
@@ -971,14 +979,6 @@ P
   run_train; ok "$kind child gets fresh gate and lands" "$(code 12)" 0
   ok "$kind parent and child each gated after repair" "$(count_gates)" 3
 done
-# Legacy batch file lists must count the named test, not 273 selected files.
-printf '✖ one flaky test (1.2ms)\n✖ one flaky test (1.2ms)\n== gate: running the 273 failed tests again\n' > "$T/count-log"
-seq 273 > "$T/count-failed"; : > "$T/count-again"
-ok "old batch output counts one flaky test" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 1
-printf 'no named log output\n' > "$T/count-log"
-printf 'file.ts::test one\nfile.ts::test two\nfile.ts::test one\n' > "$T/count-failed"
-printf 'file.ts::test two\n' > "$T/count-again"
-ok "per-test protocol counts recovered unique tests" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 1
 setup_train flaky
 add_pr 11 test-a flaky; queue_pr 11; run_train
 ok "a test that passes when run again doesn't fail the PR" "$(code 11)" 0
@@ -990,6 +990,7 @@ add_pr 11 a; queue_pr 11; run_train
 ok "main-red test blocks the unrelated PR" "$(code 11)" 4
 [ -f "$health/main-red" ]; ok "main-red tests are durable" "$?" 0
 queue_pr 11; ok "red main refuses unrelated admission" "$?" 4
+grep -q "sid-health.sh --wait" "$T/out"; ok "red admission names audited stale-identity recovery" "$?" 0
 for outcome in delete skip no-receipts wrong-case zero scope duplicate malformed incomplete; do
   case "$outcome" in delete) n=13;; skip) n=14;; no-receipts) n=15;; wrong-case) n=16;; zero) n=17;; scope) n=18;; duplicate) n=19;; malformed) n=20;; incomplete) n=21;; esac
   add_pr "$n" other
@@ -1006,6 +1007,7 @@ P
   case "$outcome" in no-receipts) touch "$T/no-receipts";; zero|scope|duplicate|malformed|incomplete) echo "$outcome" > "$T/bad-receipt";; esac
   queue_pr "$n"; run_train
   ok "$outcome cannot clear red main" "$(code "$n")" 4
+  grep -q "not merely absent from the candidate" "$q/result/$n"; ok "$outcome failure explains safe stale-marker escape" "$?" 0
   [ -f "$health/main-red" ]; ok "$outcome retains the red block" "$?" 0
   [ ! -f "$T/merge-calls" ]; ok "$outcome fix never lands" "$?" 0
   rm -f "$T/no-receipts" "$T/bad-receipt"
@@ -1051,6 +1053,8 @@ for protocol in opaque opaque-package different-case same-case mixed-opaque miss
   setup_train "failure-identity-$protocol"
   cat > .sidstack/gate.sh <<'G'
   if [ -z "${SID_RERUN:-}" ]; then echo gate >> "$T/gates"; fi
+  # These failures persist on retry: no identity is being recovered.
+  [ -z "${SID_EXECUTION_RECEIPTS_OUT:-}" ] || : > "$SID_EXECUTION_RECEIPTS_OUT"
   value=$(cat test-shared)
   stage=${SID_FAILURE_IDENTITIES_OUT##*.log.}; stage=${stage%.identities}
   if [ ! -f "$T/no-identities" ] && ! { [ -f "$T/no-main-identities" ] && [ "$stage" = main ]; } &&
@@ -1857,11 +1861,6 @@ printf 'fail full\nold-log\n' > "$health/$sha"
 "$here/sid-health.sh" > "$T/out" 2>&1
 ok "periodic health revisits red main and clears stale rerun failures" "$?" 0
 [ ! -f "$health/main-red" ]; ok "fresh green health clears main-red marker" "$?" 0
-printf '✖ apps/foo.test.ts\n== gate: running the 273 failed tests again\n' > "$T/count-log"
-printf 'apps/foo.test.ts\n' > "$T/count-failed"; : > "$T/count-again"
-ok "file-level log labels never count as flaky tests" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 0
-printf '✖ test one (1ms)\nFAIL unit foo.test.ts > test one\n== gate: running the 273 failed tests again\n' > "$T/count-log"
-ok "test detail and summary count once" "$(python3 "$here/gate_counts.py" "$T/count-log" "$T/count-failed" "$T/count-again")" 1
 printf '{broken' > "$health/main-red"
 "$here/sid-health.sh" > "$T/out" 2>&1
 ok "corrupt main-red evidence fails health closed" "$?" 1
@@ -1909,6 +1908,31 @@ setup_train partially-flaky
 echo casefail > test-old; git add -A; git commit -qm red; git push -q origin main
 add_pr 11 test-transient flaky; queue_pr 11; run_train
 ok "persistent known case still blocks partially flaky candidate" "$(code 11)" 4
-grep -q '1 flaky tests, 1 known cases failing on main' .git/sid-gate/logs/train-*.log
+grep -q '1 flaky tests, 0 recovered opaque files, 1 known cases failing on main' .git/sid-gate/logs/train-*.log
 ok "partial recovery counts named cases rather than retry files" "$?" 0
+# Red-first: success with no selected/executed test cannot forgive a failed case.
+setup_train vacuous-retry
+add_pr 11 test-a casefail; touch "$T/vacuous-retry"; queue_pr 11; run_train
+ok "vacuous retry fails the gate" "$(code 11)" 1
+[ ! -f "$T/merge-calls" ]; ok "vacuous retry never lands failed case" "$?" 0
+# An opaque file recovery is reported as a file, never as a named test.
+setup_train recovered-opaque
+add_pr 11 test-a opaque-flaky; queue_pr 11; run_train
+ok "opaque retry with whole-file execution proof lands" "$(code 11)" 0
+grep -q 'tests passed over: 1 recovered opaque files$' "$T/message-11"
+ok "opaque recovery note reports files separately from tests" "$?" 0
+# An API that keeps returning children must stop without deleting their base.
+setup_train retarget-bounded
+add_pr 11 a; add_pr 12 b
+python3 - "$T/pr-12.json" <<'P'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d['baseRefName']='work11'; json.dump(d,open(p,'w'))
+P
+touch "$T/stuck-retarget"; queue_pr 11; run_train
+ok "parent remains landed when child retarget API will not settle" "$(code 11)" 0
+ok "retarget attempts stop at five passes" "$(wc -l < "$T/retarget-edits" | tr -d ' ')" 5
+git ls-remote --exit-code origin refs/heads/work11 >/dev/null
+ok "retarget limit retains parent remote branch" "$?" 0
+grep -q 'retargeting did not settle after 5 passes' "$T/runner-out"
+ok "retarget exhaustion explains retained base" "$?" 0
 exit $fail

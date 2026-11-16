@@ -40,9 +40,6 @@ if __name__ == '__main__':
             else:
                 for entry in sorted(new):
                     print(entry)
-        elif mode == 'flaky':
-            before, after = identities(args[0], True), identities(args[1])
-            print(sum(known_case(entry) for entry in before - after))
         else:
             raise ValueError('unknown comparison operation')
     except (OSError, ValueError, IndexError) as error:

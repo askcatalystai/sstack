@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Shared gate mechanics; source this, then gate_repo and gate_tree <main> <tree> <log> <description>.
-# gate_tree returns 0 passed or 1 failed, leaving lane, digest, flaky, known and new_failures for its caller.
+# gate_tree returns 0 passed or 1 failed, leaving lane, digest, flaky, opaque_flaky, known and new_failures for its caller.
 #
-# Gate protocol: retry receipts, comparison identities and main-red execution receipts.
+# Gate protocol: retry receipts, comparison identities and execution receipts for retry recovery/main-red.
 #   SID_FAILURES_OUT=<file> retry receipts only; never use these for comparison.
 #   SID_FAILURE_IDENTITIES_OUT=<file> exact encoded cases or opaque identities, one per line.
 #   SID_RERUN=<file>         run only the tests listed, on the tree checked out, and report the same way.
 #                            Absent identities may pass only for baseline diagnosis.
-#   SID_EXECUTION_RECEIPTS_OUT=<file> runner JSONL evidence, required when verifying main-red fixes; see docs/gate-contract.md.
+#   SID_EXECUTION_RECEIPTS_OUT=<file> runner JSONL evidence, required for retry recovery and main-red fixes; see docs/gate-contract.md.
 set -u
 gate_worker=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gate_worker.py
 # merge_tree <args>: git merge-tree with the same settings GitHub uses, whatever the operator's config says.
-# The pinned rename settings are assumed to match GitHub squash merges; a mismatch yields exit 3 or 5, never an ungated landing.
+# The pinned rename settings are assumed to match GitHub squash merges; a mismatch fails closed before landing.
 # Only here: fetch and push still need the global config, which holds the credential helper for private repos.
 merge_tree() {
   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -c merge.renames=true -c merge.directoryRenames=conflict \
@@ -49,7 +49,7 @@ run_gate() {
 gate_attempt() {
   local log=$1 tag=$2 rc; shift 2
   local part=$log.$tag.log
-  rm -f "$log.$tag.identities" "$log.$tag.executions.jsonl"
+  rm -f "$log.$tag.identities" "$log.$tag.executions.jsonl" "$log.executed-$tag"
   : > "$part"
   run_gate "$part" SID_FAILURE_IDENTITIES_OUT="$log.$tag.identities" SID_EXECUTION_RECEIPTS_OUT= "$@"; rc=$?
   cat "$part" >> "$log"
@@ -57,7 +57,7 @@ gate_attempt() {
 }
 gate_tree() {
   local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main
-  lane=full; digest=; flaky=0; known=0; new_failures=
+  lane=full; digest=; flaky=0; opaque_flaky=0; known=0; new_failures=
   echo "== gate: $description" > "$log" || return 1
   rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again" "$log.red-fix.executions.jsonl" "$log.main.identities"
   # Never reuse an abandoned attempt's checkout, even if its workload escaped
@@ -81,13 +81,14 @@ gate_tree() {
   if [ "$candidate_proof" = true ] && [ "$rc" != 0 ] && [ -s "$failed" ] &&
       python3 "${gate_worker%/*}/gate_failures.py" check "$log.candidate.identities" "$rc" >> "$log" 2>&1; then
     echo "== gate: running the failed retry receipts again" >> "$log"
-    gate_attempt "$log" retry SID_RERUN="$failed" SID_FAILURES_OUT="$again"; rc=$?
-    if python3 "${gate_worker%/*}/gate_failures.py" check "$log.retry.identities" "$rc" >> "$log" 2>&1; then
-      flaky=$(python3 "${gate_worker%/*}/gate_failures.py" flaky "$log.candidate.identities" "$log.retry.identities") || flaky=0
-    fi
+    gate_attempt "$log" retry SID_RERUN="$failed" SID_FAILURES_OUT="$again" SID_EXECUTION_RECEIPTS_OUT="$log.executed-retry"; rc=$?
+    local recovered_counts=
     if ! python3 "${gate_worker%/*}/gate_failures.py" check "$log.retry.identities" "$rc" >> "$log" 2>&1; then
       rc=1
       new_failures='retry has no valid failure-identity evidence; no forgiveness'
+    elif ! recovered_counts=$(python3 "${gate_worker%/*}/gate_receipts.py" --recovered "$log.candidate.identities" "$log.retry.identities" "$log.executed-retry" 2>> "$log"); then
+      rc=1
+      new_failures='retry lacks passing execution receipts for recovered identities; no forgiveness'
     elif [ "$rc" = 0 ] && [ ! -s "$log.retry.identities" ] && [ ! -s "$again" ]; then
       rc=0
     elif [ "$rc" != 0 ]; then
@@ -108,7 +109,8 @@ gate_tree() {
     else
       rc=1; new_failures='successful retry reported failure outputs; no forgiveness'
     fi
-    echo "== gate: $flaky flaky tests, $known known cases failing on main" >> "$log"
+    if [ -n "$recovered_counts" ]; then read -r flaky opaque_flaky <<< "$recovered_counts"; fi
+    echo "== gate: $flaky flaky tests, $opaque_flaky recovered opaque files, $known known cases failing on main" >> "$log"
   fi
   if [ "$rc" = 0 ] && [ -f "$gate/health/main-red" ]; then
     if python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests"; then
