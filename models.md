@@ -11,7 +11,7 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 - implementer: codex / gpt-6.1-sol / high (logic: server, runtime, data and tests; visible UI goes to the ui builder)
 - ui builder: claudeAgent / claude-opus-5-5 / medium (writes everything a user can see, in its own worktree, to the `ui-lead` rules; user 2026-11-13: "yes opus for ui")
 - hardest tasks: codex / gpt-6.1-sol / xhigh
-- bug pass: cursor / composer-2.5 / fastMode=false (first, before any review; pstack poteto bug-fix playbook: reproduce, root-cause, minimal fix; user 2026-11-01)
+- bug pass: opencode / opencode-go/deepseek-v4.1-flash / high (TEMPORARY since 2026-11-17: Cursor Composer hit its weekly usage limit, resets ~2026-11-23; user chose DeepSeek. Risky PRs then take Muse or Sol as the extra family. Restore: cursor / composer-2.5 / fastMode=false)
 - review panel: none (user 2026-11-01: Sol → bug pass → Astra directly; Muse stays on the council)
 - reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; its approval of the head commit is the merge verdict since 2026-11-13; Claude takes the final call, the builder fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
 - ui lead: claudeAgent / claude-opus-5-5 / medium (the orchestrator: judges all visible UI before other review and does the final test; the ui builder writes it; user 2026-11-01; see the `ui-lead` skill)
