@@ -61,7 +61,10 @@ class Ready(unittest.TestCase):
             "Approved-Head: abcdef1 (Astra)",
             "Approved-Head: ABCDEF12 (Astra; final call Claude)",
             "  - Approved-Head: abcdef1234567890 (Claude)",
-            "* Approved-Head: abcdef12 Astra",
+            "* Approved-Head: abcdef12 (Astra)",
+            "Approved-Head: abcdef12 (~~Astra~~ Claude)",
+            "Approved-Head: abcdef12 (<!-- Astra --> Claude)",
+            "Approved-Head: abcdef12 (`Astra` Claude)",
             "Approved-Head: 9999999 (Muse)\nApproved-Head: abcdef12 (Astra)",
         ]:
             with self.subTest(review=review):
@@ -79,6 +82,9 @@ class Ready(unittest.TestCase):
             "Approved-Head: abcdef12z (Astra)",
             "Approved-Head: abcdef12", "Approved-Head: abcdef12   ",
             "Approved-Head: abcdef12\n(Astra)",
+            "Approved-Head: abcdef12 ()",
+            "Approved-Head: abcdef12 (123; !)",
+            "Approved-Head: abcdef12 Astra",
         ]:
             with self.subTest(review=review):
                 self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\n{review}\n")),
@@ -86,6 +92,10 @@ class Ready(unittest.TestCase):
 
     def test_hidden_approval_trailers_do_not_count(self):
         for review in [
+            "Approved-Head: abcdef12 (~~Astra~~)",
+            "Approved-Head: abcdef12 (<!-- Astra -->)",
+            "Approved-Head: abcdef12 (`Astra`)",
+            "Approved-Head: abcdef12 (``Astra``)",
             "<!-- Approved-Head: abcdef12 (Astra) -->",
             "<!--\nApproved-Head: abcdef12 (Astra)\n-->",
             "~~Approved-Head: abcdef12 (Astra)~~",

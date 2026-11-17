@@ -41,6 +41,18 @@ def review_text(body):
     return section(body, "Review")
 
 
+def approves_head(line, head):
+    match = APPROVED_HEAD.match(line)
+    if not match or not head.lower().startswith(match[1].lower()):
+        return False
+    approvers = re.fullmatch(r"\s*\((.*)\)\s*", match[2])
+    if not approvers:
+        return False
+    # Comments, strikethrough and fences were removed by review_text.
+    visible = re.sub(r"(`+).*?\1", " ", approvers[1])
+    return any(char.isalpha() for char in visible)
+
+
 def check_failures(rollup):
     bad = []
     for check in rollup:
@@ -69,9 +81,7 @@ def problems(pr, required=()):
     if head[:7] not in section(pr["body"], "Proof"):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
     review = review_text(pr["body"])
-    trailers = [APPROVED_HEAD.match(line) for line in review.splitlines()]
-    approved = any(match and head.lower().startswith(match[1].lower()) and match[2].strip()
-                   for match in trailers)
+    approved = any(approves_head(line, head) for line in review.splitlines())
     withdrawn = any(APPROVAL_WITHDRAWN.match(line) for line in review.splitlines())
     if withdrawn or not approved:
         found.append(f"## Review must contain `Approved-Head: {head[:8]}` naming who approved this head.")
