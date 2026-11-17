@@ -40,7 +40,7 @@ else
     fi
     exit 0
   fi
-  if grep -Eq '^(pass|fail) full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
+  if [ ! -f "$gate/health/main-red" ] && grep -Eq '^pass full$' "$gate/health/$main" 2>/dev/null; then exit 0; fi
   gate_lock -n || exit 0
 fi
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$gate/health.pid"
@@ -58,8 +58,15 @@ export SID_LANE=full
 setsid bash -c 'source "$1"; gate_repo; gate_tree "$2" "$2^{tree}" "$3" "health: $2"' bash "$here/sid-gate-lib.sh" "$main" "$log" &
 child=$!; wait "$child"; rc=$?; child=
 lane=$(sed -n 's/^gate: lane \([^[:space:]]*\)[[:space:]]*$/\1/p' "$log" | tail -n 1); lane=${lane:-full}
+# An existing block can only clear on full evidence, never a reported fast lane.
+if [ -f "$gate/health/main-red" ] && [ "$lane" != full ]; then rc=1; fi
 status=pass; [ "$rc" = 0 ] || status=fail
 printf '%s %s\n%s\n' "$status" "$lane" "$log" > "$gate/health/$main.tmp"
 mv "$gate/health/$main.tmp" "$gate/health/$main"
+if [ "$rc" = 0 ]; then
+  rm -f "$gate/health/main-red"
+else
+  python3 "$here/train_health.py" "$gate/health" "$repo" "$main" "$log" --full-check-required || exit 1
+fi
 echo "health: $repo ${main:0:8} $status $lane, $log"
 [ "$rc" = 0 ]

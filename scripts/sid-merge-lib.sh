@@ -7,7 +7,7 @@ ready() {
   # GitHub answers UNKNOWN until it has worked out mergeability, and a just-pushed head has checks still pending.
   for wait in 0 3 5 10 15 30 30 30; do
     sleep "$wait"
-    gh pr view "$pr" --repo "$gh" --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName,autoMergeRequest > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
+    gh pr view "$pr" --repo "$gh" --json number,state,isDraft,mergeable,reviewDecision,statusCheckRollup,body,title,headRefOid,headRefName,baseRefName,autoMergeRequest > "$tmp/pr.json" || { echo "could not read #$pr"; exit 1; }
     if python3 -c 'import json,sys;sys.exit(not bool(json.load(open(sys.argv[1])).get("autoMergeRequest")))' "$tmp/pr.json"; then
       echo "#$pr has auto-merge armed; run gh pr merge $pr --disable-auto"
       exit 1
@@ -52,4 +52,16 @@ disarm_auto() {
       echo "could not confirm auto-merge is off; run gh pr merge $pr --disable-auto"; return 1
     fi
   fi
+}
+
+# Admission and the final pre-merge read both enforce dependencies, even for old requests.
+dependencies_ready() {
+  python3 "$here/train_policy.py" dependencies "$tmp/pr.json" "$gh" "$default"
+}
+retarget_children() {
+  python3 "$here/train_policy.py" retarget "$1" "$gh" "$default"
+}
+main_ready() {
+  [ -f "$gate/health/main-red" ] || return 0
+  python3 "$here/train_policy.py" admission "$tmp/pr.json" "$gate/health/main-red"
 }

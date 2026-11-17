@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # sid-merge [--check] [--retry] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
-# --check stops at readiness (including stacked PRs); --cancel withdraws a request not yet gating.
+# --check stops at readiness and dependency admission; --cancel withdraws a request not yet gating.
 # --retry sends a commit that already failed the gate through once more; a second failure needs a new commit.
 # Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
-# Exit: 0 merged/ready/queued/cancelled, 1 not ready or the gate failed, 3 conflicts, 4 main red, 5 merged onto an ungated tree.
+# Exit: 0 merged/ready/queued/cancelled, 1 not ready or the gate failed, 3 conflicts, 4 main red.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
@@ -31,10 +31,11 @@ fi
 gh=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ready
-[ "$check" = true ] || [ "$base" = "$default" ] || { echo "#$pr is stacked on $base: land that first, rebase this onto $default, and set its base to $default"; exit 1; }
+dependencies_ready || exit 1
+main_ready || exit 4
 if [ "$check" = true ]; then
   retry_allowed || exit 1
-  if [ "$base" = "$default" ]; then echo "ready: #$pr ${head:0:8}"; else echo "ready, but stacked on $base: #$pr ${head:0:8}"; fi
+  echo "ready: #$pr ${head:0:8}"
   exit 0
 fi
 flock 8
