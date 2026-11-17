@@ -61,7 +61,7 @@ Verification swarms stay on `swarm workers`. Keep a panel's families distinct, s
 | --- | --- |
 | `architect` running `arena` as a matter of course (Feature step 2) | A single design sketch. Use `arena` only for a contested design or when the user asks; it's too heavy for this machine on small PRs. |
 | Bug fix step 5, committing the failing repro first | Sol doesn't commit. Put the failing-then-passing output in `## Proof`. Claude may commit the test first when it's cheap to split. |
-| Verifier swarm on each PR | One verdict per PR from an agent that didn't write it: Astra's review of the head commit, or the `ui lead` when it tests the local app before merge. It goes in the PR's `## Review` section, which `sid-merge.sh` requires. |
+| Verifier swarm on each PR | One verdict per PR from an agent that didn't write it: Astra's review of the head commit, or the `ui lead` when it tests the local app before merge. It goes in the PR's `## Review` section, which `sid-merge.sh` requires. `## Review` must name who approved and the exact head commit in the same sentence, e.g. "Astra approved <sha>". |
 
 ## Paths
 

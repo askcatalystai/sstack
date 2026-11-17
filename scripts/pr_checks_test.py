@@ -64,6 +64,56 @@ class Ready(unittest.TestCase):
         for head in ["abcdef1", "abcdef12", "abcdef1234567890"]:
             self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\nAstra approved {head}.\n")), [])
 
+    def test_approval_must_cover_the_head_in_the_same_sentence_or_line(self):
+        for review in [
+            "Astra approved the design. Repro log from abcdef12 passed.",
+            "Astra approved 9999999. Current head abcdef12.",
+            "Current head abcdef12! Astra approved the design.",
+            "Astra approved 9999999\nRepro log from abcdef12 passed.",
+            "~~Astra approved abcdef12~~",
+            "<!-- Astra approved abcdef12 -->",
+            "~~Astra approved~~ abcdef12",
+            "<!-- Astra approved --> abcdef12",
+            "Astra approved 0abcdef12.",
+            "Astra approved abcdef129.",
+            "Astra approved abcdef1234567890a.",
+            "Astra approved 9999999. <!-- Current head abcdef12 -->",
+        ]:
+            with self.subTest(review=review):
+                self.assertIn("## Review must say who approved this change",
+                              checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\n{review}\n")))
+
+    def test_valid_approval_forms(self):
+        for head, review in [
+            ("abcdef1234567890", "Approved by Claude for abcdef12"),
+            ("abcdef1234567890", "Astra APPROVED ABCDEF12"),
+            ("abcdef1234567890", "For `abcdef1234567890`, Astra approved."),
+            ("abcdef1234567890", "Astra approves abcdef1."),
+            ("abcdef1234567890", "~~Astra approved 9999999~~ Astra approved abcdef12."),
+            ("abcdef1234567890", "<!-- old approval --> Astra approved abcdef12."),
+            ("abcdef1234567890", "Astra approved abcdef12. Re-check completed."),
+            ("49c80949" + "0" * 32, "- **Final call:** approved by Claude (orchestrator) for 49c80949."),
+            ("fde675fd" + "0" * 32, "- **Astra:** APPROVED fde675fd …"),
+        ]:
+            with self.subTest(review=review):
+                self.assertEqual(checks.problems(pr(headRefOid=head, body=f"## Proof\n{head}\n## Review\n{review}\n")), [])
+
+    def test_pending_language_anywhere_in_the_body_vetoes_approval(self):
+        pending_phrases = [
+            "requires Astra re-check", "required a recheck", "require review",
+            "needs re-review", "needed another review", "need sign-off",
+            "await recheck", "awaits review", "awaiting signoff",
+            "waiting for Astra to review", "outstanding re-review", "pending review",
+            "requires Astra\nre-check", "waiting\nfor Astra to\nreview",
+            "not reviewed", "not yet reviewed", "not re-reviewed", "not yet rereviewed",
+            "does not cover this head", "approval retracted", "do not merge",
+            "DOES NOT\nCOVER this head", "NOT YET\nREVIEWED", "DO NOT\nMERGE",
+        ]
+        for pending in pending_phrases:
+            for body in [f"{GOOD}## Deploy\n{pending}\n", f"## Status\n{pending}\n{GOOD}"]:
+                with self.subTest(pending=pending, body=body):
+                    self.assertIn("## Review must say who approved this change", checks.problems(pr(body=body)))
+
     def test_pending_review_blocks_other_approval(self):
         for pending in ["requires Astra re-check", "requires a new re-check", "needs re-review",
                         "re-review pending", "not reviewed yet", "RE-REVIEW IS PENDING"]:

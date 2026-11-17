@@ -8,13 +8,15 @@ Whether the words are true is the reviewer's call, not this script's.
 """
 import json, re, sys
 
-APPROVED = re.compile(r"\bapprov(e|ed|es|al)\b", re.I)
+APPROVED = re.compile(r"\bapprov\w*", re.I)
 NOT_APPROVED = re.compile(r"\b(not|no|never|without|pending|awaiting)\s+(\w+\s+){0,2}approv\w*|\bapproval\s+(is\s+)?(pending|needed|required)\b", re.I)
 REVIEW_PENDING = re.compile(
-    r"\brequires?\b[^\n.!?]*\bre[- ](?:check|review)\b"
-    r"|\bneeds?\s+re[- ]review\b"
-    r"|\bre[- ]review\s+(?:is\s+)?pending\b"
-    r"|\bnot\s+reviewed\s+yet\b", re.I)
+    r"\b(?:require(?:s|d)?|need(?:s|ed)?|await(?:s|ing)?|waiting\s+for|outstanding|pending)\b"
+    r"[^.!?]*?\b(?:re-?check|re-?review|review|sign-?off)\b"
+    r"|\bre-?review\s+(?:is\s+)?pending\b"
+    r"|\bnot\s+(?:yet\s+)?(?:re-?)?reviewed\b"
+    r"|\bdoes\s+not\s+cover\b|\bretracted\b|\bdo\s+not\s+merge\b", re.I)
+HIDDEN = re.compile(r"<!--.*?-->|~~.*?~~", re.S)
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
@@ -50,10 +52,15 @@ def problems(pr, required=()):
     head = pr["headRefOid"]
     if head[:7] not in section(pr["body"], "Proof"):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
-    review = section(pr["body"], "Review")
-    if head[:7] not in review:
+    review = HIDDEN.sub(" ", section(pr["body"], "Review"))
+    # Match only actual prefixes of this head, never a substring of another SHA.
+    prefixes = "|".join(re.escape(head[:length]) for length in range(len(head), 6, -1))
+    approved_head = re.compile(rf"(?<![0-9a-f])(?:{prefixes})(?![0-9a-f])", re.I)
+    if not approved_head.search(review):
         found.append(f"## Review must name the approved head ({head[:8]})")
-    if REVIEW_PENDING.search(review) or not APPROVED.search(NOT_APPROVED.sub("", review)):
+    approval = any(APPROVED.search(sentence) and approved_head.search(sentence)
+                   for sentence in re.split(r"[.!?\n]+", NOT_APPROVED.sub("", review)))
+    if REVIEW_PENDING.search(pr["body"] or "") or not approval:
         found.append("## Review must say who approved this change")
     return found
 

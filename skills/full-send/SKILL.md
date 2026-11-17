@@ -105,8 +105,8 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    or ask); noise doesn't get code. On any PR, conflicts: merge the default branch in the
    worktree and run `sid-merge.sh` again.
 7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is ready (`## Proof` must
-   name the head commit, so a later push needs fresh proof, and `## Review` must say
-   who approved), then queues it for the
+   name the head commit, so a later push needs fresh proof, and `## Review` must name
+   who approved and the exact head commit in the same sentence, e.g. "Astra approved <sha>"), then queues it for the
    merge train and waits for the result. The train gates every queued PR together,
    once, on the latest main, squash-merges them in order using each PR body as the
    commit message, and removes the worktree and branch. Run it in the background and
