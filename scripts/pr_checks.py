@@ -7,9 +7,9 @@ The body needs two things: ## Proof naming the head commit, so it is renewed aft
 Whether the words are true is the reviewer's call, not this script's.
 """
 import json, re, sys
-from html.parser import HTMLParser
 
-APPROVED_HEAD = re.compile(r"^(?: {0,3}[-*] )?Approved-Head: *([0-9a-fA-F]{12,40})\b(.*)$")
+APPROVED_HEAD = re.compile(r"^(?:[-*] )?Approved-Head: ([0-9a-fA-F]{12,40}) \(([A-Za-z][A-Za-z0-9 ,;:.'/&+-]{2,})\)\s*$")
+REVIEW_FORMAT = "## Review must end with `Approved-Head: <12+ hex of head> (<who>)`"
 APPROVAL_WITHDRAWN = re.compile(r"^\s*(?:[-*]\s*)?Approval-Withdrawn:")
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
@@ -19,73 +19,51 @@ def section(body, name):
     return match[1].strip("\n") if match else ""
 
 
-class WithoutHTML(HTMLParser):
-    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=False)
-        self.tags = []
-        self.parts = []
-
-    def handle_starttag(self, tag, attrs):
-        self.handle_data(self.get_starttag_text(), hidden=True)
-        if tag not in self.VOID:
-            self.tags.append(tag)
-
-    def handle_endtag(self, tag):
-        if tag in self.tags:
-            del self.tags[len(self.tags) - 1 - self.tags[::-1].index(tag):]
-        self.handle_data(f"</{tag}>", hidden=True)
-
-    def handle_startendtag(self, tag, attrs):
-        self.handle_data(self.get_starttag_text(), hidden=True)
-
-    def handle_data(self, data, hidden=False):
-        self.parts.append(re.sub(r"[^\n]", " ", data) if hidden or self.tags else data)
-
-    def handle_entityref(self, name):
-        self.handle_data(f"&{name};")
-
-    def handle_charref(self, name):
-        self.handle_data(f"&#{name};")
-
-
-def review_text(body):
-    # Preserve line boundaries so removing hidden text cannot create a trailer.
-    def blank(match):
-        return re.sub(r"[^\n]", " ", match[0])
-
-    body = re.sub(r"<!--.*?(?:-->|\Z)", blank, body or "", flags=re.S)
-    visible = []
-    fence = None
-    for line in body.splitlines():
-        marker = re.match(r"^[ \t]*(`{3,}|~{3,})(.*)$", line)
-        if fence:
-            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
-                fence = None
-            visible.append("")
-        elif marker:
-            fence = marker[1]
-            visible.append("")
-        else:
-            visible.append(line)
-    body = re.sub(r"~~.*?~~", blank, "\n".join(visible), flags=re.S)
-    html = WithoutHTML()
-    html.feed(body)
-    html.close()
-    return section("".join(html.parts), "Review")
-
-
-def approves_head(line, head):
-    match = APPROVED_HEAD.match(line)
-    if not match or not head.lower().startswith(match[1].lower()):
-        return False
-    approvers = re.fullmatch(r"\s*\((.*)\)\s*", match[2])
-    if not approvers:
-        return False
-    # Comments, strikethrough and fences were removed by review_text.
-    visible = re.sub(r"(`+).*?\1", " ", approvers[1])
-    return any(len(word) >= 3 and word.isalpha() for word in re.findall(r"\w+", visible))
+def review_problems(body, head):
+    match = re.search(r"^## Review\b[^\n]*\n(.*?)(?=^## |\Z)", body or "", re.M | re.S)
+    review = match[1] if match else ""
+    lines = review.splitlines(keepends=True)
+    last = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip()), None)
+    trailer = APPROVED_HEAD.fullmatch(lines[last].rstrip("\r\n")) if last is not None else None
+    found = []
+    if not trailer or not head.lower().startswith(trailer[1].lower()) or not re.search(r"\b[A-Za-z]{3,}\b", trailer[2]):
+        found.append(REVIEW_FORMAT)
+    if any(APPROVAL_WITHDRAWN.match(line) for line in lines):
+        found.append("## Review contains Approval-Withdrawn:")
+    if last is None:
+        return found
+    before = "".join(lines[:last])
+    prefix = body[:match.start(1)] + before
+    fences = backticks = 0
+    for line in prefix.splitlines():
+        if re.match(r"^(?:```|~~~)", line):
+            fences += 1
+        elif fences % 2 == 0:
+            backticks += line.count("`")
+    if fences % 2:
+        found.append("## Review approval trailer is inside an unbalanced code fence")
+    if backticks % 2:
+        found.append("## Review approval trailer follows an unbalanced backtick")
+    outside_code = []
+    fence_count = 0
+    for line in before.splitlines(keepends=True):
+        if re.match(r"^(?:```|~~~)", line):
+            fence_count += 1
+        elif fence_count % 2 == 0:
+            outside_code.append(line)
+    html_before = "".join(outside_code)
+    comment_open = False
+    for marker in re.findall(r"<!--|-->", html_before):
+        comment_open = marker == "<!--"
+    if comment_open:
+        found.append("## Review approval trailer is inside an unclosed HTML comment")
+    # Count block HTML only: a tag mentioned within prose or inline code is not a block.
+    for tag in ("details", "div", "table", "pre"):
+        opens = len(re.findall(rf"^[ \t]*<{tag}\b", html_before, re.M | re.I))
+        closes = len(re.findall(rf"</{tag}\s*>", html_before, re.I))
+        if opens > closes:
+            found.append(f"## Review approval trailer is inside unclosed HTML <{tag}>")
+    return found
 
 
 def check_failures(rollup):
@@ -115,11 +93,7 @@ def problems(pr, required=()):
     head = pr["headRefOid"]
     if head[:7] not in section(pr["body"], "Proof"):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
-    review = review_text(pr["body"])
-    approved = any(approves_head(line, head) for line in review.splitlines())
-    withdrawn = any(APPROVAL_WITHDRAWN.match(line) for line in review.splitlines())
-    if withdrawn or not approved:
-        found.append(f"## Review must contain `Approved-Head: {head[:12]}` naming who approved this head.")
+    found += review_problems(pr["body"], head)
     return found
 
 

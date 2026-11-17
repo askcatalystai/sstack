@@ -126,7 +126,7 @@ os.execv(real,[real,*args])
 F
 chmod +x "$t/bin/git"
 chmod +x "$t/bin/gh"; export T=$t SID_TRAIN_INLINE=1
-pr() { printf '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"","statusCheckRollup":%s,"headRefOid":"%s","headRefName":"work","baseRefName":"main","title":"t","body":"## Proof\\n%s 3 passed\\n## Review\\nApproved-Head: %s (Astra)\\n"}' "$1" "$head" "$head" "$head" > "$t/pr.json"; }
+pr() { printf '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"","statusCheckRollup":%s,"headRefOid":"%s","headRefName":"work","baseRefName":"main","title":"t","body":"## Proof\\n%s 3 passed\\n## Review\\nApproved-Head: %s (Astra)\\n## Context\\n"}' "$1" "$head" "$head" "$head" > "$t/pr.json"; }
 merge() {
   PATH="$t/bin:$PATH" "$here/sid-merge.sh" --no-wait "$@" 5 >"$t/out" 2>&1; local rc=$?
   if [ "$rc" = 0 ] && [ -f .git/sid-gate/train/queue/5.req ]; then
@@ -270,7 +270,7 @@ record_pr() {
   python3 - "$T/pr-$n.json" "$n" "$h" <<'PY'
 import json, sys
 p, n, h = sys.argv[1:]
-json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], number=int(n), headRefOid=h, headRefName='work'+n, baseRefName='main', title='change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nApproved-Head: {h} (Astra)\n'), open(p, 'w'))
+json.dump(dict(state='OPEN', isDraft=False, mergeable='MERGEABLE', reviewDecision='', statusCheckRollup=[], number=int(n), headRefOid=h, headRefName='work'+n, baseRefName='main', title='change '+n, body=f'## Proof\n{h} 3 passed\n## Review\nApproved-Head: {h} (Astra)\n## Context\n'), open(p, 'w'))
 PY
 }
 queue_pr() { "$here/sid-merge.sh" --no-wait "$1" > "$T/out" 2>&1; }
@@ -393,7 +393,7 @@ push_fix() {
   python3 - "$T/pr-11.json" "$h" <<'PYTHON'
 import json, sys
 p = json.load(open(sys.argv[1])); p['headRefOid'] = sys.argv[2]
-p['body'] = f'## Proof\n{sys.argv[2]} 3 passed\n## Review\nApproved-Head: {sys.argv[2]} (Astra)\n'
+p['body'] = f'## Proof\n{sys.argv[2]} 3 passed\n## Review\nApproved-Head: {sys.argv[2]} (Astra)\n## Context\n'
 json.dump(p, open(sys.argv[1], 'w'))
 PYTHON
   git checkout -q main

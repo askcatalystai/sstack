@@ -87,7 +87,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    changes behaviour goes back to Astra for the changed code, and Claude verifies each
    fix. Skip the fix pass if Astra approved cleanly. Astra's approval is the merge
    verdict, with no separate verifier run and nothing to record: write it in the PR's
-   `## Review` section, followed by `Approved-Head: <sha> (<who>)` (12+ hex characters, e.g. `Approved-Head: d381a62361f3 (Astra)`), which `sid-merge.sh` reads. A later
+   `## Review` section, ending with `Approved-Head: <sha> (<who>)` (12+ hex characters, e.g. `Approved-Head: d381a62361f3 (Astra)`), as the last non-empty line of `## Review`, which `sid-merge.sh` reads. A later
    fix that changes behaviour goes back to Astra; one that doesn't (a rename, a deleted
    comment) needs fresh `## Proof` and a renewed `Approved-Head:` trailer for the new head after confirming the approval still covers it. If any step is skipped, `## Review` says so
    and why, and the PR counts as risky (step 6).
@@ -106,7 +106,7 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    worktree and run `sid-merge.sh` again.
 7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is ready (`## Proof` must
    name the head commit, so a later push needs fresh proof, and `## Review` must include
-   `Approved-Head: <sha> (<who>)` (12+ hex characters, e.g. `Approved-Head: d381a62361f3 (Astra)`) after the free-text review notes, naming the exact head commit and approvers), then queues it for the
+   `Approved-Head: <sha> (<who>)` (12+ hex characters, e.g. `Approved-Head: d381a62361f3 (Astra)`) as the last non-empty line of `## Review`, after the free-text review notes, naming the exact head commit and approvers), then queues it for the
    merge train and waits for the result. The train gates every queued PR together,
    once, on the latest main, squash-merges them in order using each PR body as the
    commit message, and removes the worktree and branch. Run it in the background and
