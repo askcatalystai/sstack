@@ -1006,7 +1006,7 @@ for outcome in delete skip no-receipts wrong-case zero scope duplicate malformed
   git add -A; git commit -qm "claimed fix $outcome"; git push -q origin work$n; record_pr "$n"; git checkout -q main
   python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
 import json,sys
-p=sys.argv[1]; d=json.load(open(p)); d['body'] += json.load(open(sys.argv[2]))['card']+' fix main\n'; json.dump(d,open(p,'w'))
+p=sys.argv[1]; d=json.load(open(p)); d['body'] = d['body'].replace('## Review\n', '## Review\n'+json.load(open(sys.argv[2]))['card']+' fix main\n', 1); json.dump(d,open(p,'w'))
 P
   case "$outcome" in no-receipts) touch "$T/no-receipts";; zero|scope|duplicate|malformed|incomplete) echo "$outcome" > "$T/bad-receipt";; esac
   queue_pr "$n"; run_train
@@ -1018,7 +1018,7 @@ done
 add_pr 12 test-old fixed
 python3 - "$T/pr-12.json" "$health/main-red" <<'P'
 import json,sys
-p=sys.argv[1]; d=json.load(open(p)); red=json.load(open(sys.argv[2])); d['body'] += red['card']+' fix main\n'; json.dump(d,open(p,'w'))
+p=sys.argv[1]; d=json.load(open(p)); red=json.load(open(sys.argv[2])); d['body'] = d['body'].replace('## Review\n', '## Review\n'+red['card']+' fix main\n', 1); json.dump(d,open(p,'w'))
 P
 queue_pr 12; ok "named main fix may queue" "$?" 0
 run_train; ok "named fix passes with unified encoded-case execution receipt" "$(code 12)" 0
@@ -1037,7 +1037,7 @@ for value in skip scope fixed; do
   add_pr "$n" test-old.test.ts "$content"
   python3 - "$T/pr-$n.json" "$health/main-red" <<'P'
 import json,sys
-p=sys.argv[1]; d=json.load(open(p)); d['body'] += json.load(open(sys.argv[2]))['card']+' fix main\n'; json.dump(d,open(p,'w'))
+p=sys.argv[1]; d=json.load(open(p)); d['body'] = d['body'].replace('## Review\n', '## Review\n'+json.load(open(sys.argv[2]))['card']+' fix main\n', 1); json.dump(d,open(p,'w'))
 P
   queue_pr "$n"; run_train
   if [ "$value" = fixed ]; then expected=0; else expected=4; fi
