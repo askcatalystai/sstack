@@ -21,7 +21,13 @@ def recovery_hint(marker):
 
 def execution_receipts(path):
     evidence = {}
-    for line in Path(path).read_text().splitlines():
+    try:
+        content = Path(path).read_text()
+    except FileNotFoundError:
+        raise ValueError('producer wrote no execution receipts; no forgiveness') from None
+    if not content.strip():
+        raise ValueError('producer wrote no execution receipts; no forgiveness')
+    for line in content.splitlines():
         row = json.loads(line)
         identity = row['identity']
         if (not isinstance(identity, str) or not identity.strip() or identity.startswith('/') or
@@ -61,7 +67,8 @@ def verify(marker, requested, receipts=None):
 
 def recovered(candidate, retry, receipts):
     recovered_ids = identities(candidate, True) - identities(retry)
-    require_passed(recovered_ids, execution_receipts(receipts))
+    if recovered_ids:
+        require_passed(recovered_ids, execution_receipts(receipts))
     return sum(known_case(t) for t in recovered_ids), sum(scope(t) == 'file' for t in recovered_ids)
 
 
