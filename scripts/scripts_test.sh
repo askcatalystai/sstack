@@ -213,16 +213,22 @@ elif mode=='duplicate': receipts += receipts[:1]
 elif mode=='incomplete':
  for row in receipts: row['status']='incomplete'
 output=Path(os.environ['SID_EXECUTION_RECEIPTS_OUT'])
-output.write_text('not-json\n' if mode=='malformed' else ''.join(json.dumps(row)+'\n' for row in receipts))
+output.write_text('' if mode=='empty' else 'not-json\n' if mode=='malformed' else ''.join(json.dumps(row)+'\n' for row in receipts))
 E
   fi
   return "$bad"
 }
 if [ -n "${SID_RERUN:-}" ]; then
+  if [ -f "$T/infra-retry" ]; then
+    : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"; : > "$SID_EXECUTION_RECEIPTS_OUT"; exit 124
+  fi
   if [ -f "$T/vacuous-retry" ]; then
     : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"; exit 0
   fi
   echo rerun >> "$T/reruns"; run_tests $(cat "$SID_RERUN"); exit
+fi
+if [ -f "$T/infra-candidate" ]; then
+  : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"; exit 124
 fi
 echo gate >> "$T/gates"
 git write-tree >> "$T/gated-trees"
@@ -1973,4 +1979,36 @@ sha=$(git rev-parse origin/main)
 ok "recovered health is verified green" "$(head -n 1 "$health/$sha")" 'pass full'
 [ ! -f "$health/main-red" ]; ok "verified green clears undiagnosed block" "$?" 0
 queue_pr 11; ok "verified green reopens admission" "$?" 0
+# No execution proof is needed when every candidate identity still fails.
+setup_train persistent-without-receipts
+echo casefail > test-old; git add -A; git commit -qm red; git push -q origin main
+add_pr 11 a; touch "$T/no-receipts"; queue_pr 11; run_train
+ok "persistent failures without execution receipts reach main-red diagnosis" "$(code 11)" 4
+[ -f "$health/main-red" ]; ok "receipt-less persistent diagnosis records main-red" "$?" 0
+grep -q '1 known cases failing on main' .git/sid-gate/logs/train-*.log
+ok "persistent comparison identifies the exact known main case" "$?" 0
+for receipt in missing empty; do
+  setup_train "recovered-$receipt-receipts"
+  add_pr 11 test-a flaky
+  if [ "$receipt" = missing ]; then touch "$T/no-receipts"; else echo empty > "$T/bad-receipt"; fi
+  queue_pr 11; run_train
+  ok "$receipt recovery proof fails closed" "$(code 11)" 1
+  [ ! -f "$T/merge-calls" ]; ok "$receipt proof never lands" "$?" 0
+  grep -q 'producer wrote no execution receipts; no forgiveness' "$q/result/11"
+  ok "$receipt execution proof failure is explained" "$?" 0
+  grep -Eq 'Errno|Traceback' "$q/result/11"; ok "$receipt proof has no filesystem traceback" "$?" 1
+done
+for stage in candidate retry; do
+  setup_train "infrastructure-$stage"
+  add_pr 11 test-a casefail; touch "$T/infra-$stage"; queue_pr 11; run_train
+  ok "$stage infrastructure uses compatible failure exit" "$(code 11)" 1
+  grep -q 'infrastructure' "$q/result/11"; ok "$stage timeout is reported as infrastructure" "$?" 0
+  [ ! -f "$q/failed/11" ]; ok "$stage timeout does not charge a failed-head retry" "$?" 0
+  [ ! -f "$T/merge-calls" ]; ok "$stage timeout never lands" "$?" 0
+  queue_pr 11; ok "$stage timeout permits a plain requeue" "$?" 0
+  "$here/sid-merge.sh" --retry --no-wait 11 > "$T/retry-out" 2>&1
+  ok "$stage timeout also leaves explicit retry available" "$?" 0
+  run_train
+  [ ! -f "$q/failed/11" ]; ok "$stage repeated infrastructure still does not charge retries" "$?" 0
+done
 exit $fail

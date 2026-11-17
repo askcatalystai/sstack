@@ -118,7 +118,7 @@ run_train() {
   local -a candidates=("$@") accepted=() remaining=()
   local -A trees=()
   local pr head branch out tree combined synthetic rc record oid expected parent member_tree trailers message title body mode_error noted
-  local id started lane main log members digest flaky opaque_flaky known new_failures attempt merged retry needs_rebuild
+  local id started lane main log members digest gate_outcome flaky opaque_flaky known new_failures attempt merged retry needs_rebuild
   for attempt in 1 2 3; do
     [ "${#candidates[@]}" -gt 0 ] || return 0
     if ! mode_error=$("$here/sid-mode.sh" get lane 2>&1); then
@@ -189,7 +189,11 @@ PY
             rc=4; message=$(printf 'main is red at %s, see %s\n' "${main:0:8}" "$(sed -n 2p "$gate/health/$main")"; python3 "$here/gate_receipts.py" --recovery-hint "$gate/health/main-red")
           fi
         fi
-        [ "$rc" = 4 ] || note_failure "$pr"
+        if [ "$gate_outcome" = infrastructure ]; then
+          rc=1; message=$(printf 'gate infrastructure failure: %s\n%s\n' "$log" "$new_failures"; tail -n 25 "$log")
+        elif [ "$rc" != 4 ]; then
+          note_failure "$pr"
+        fi
         result_for "$pr" "$rc" "$message"; history failed
       return
     fi

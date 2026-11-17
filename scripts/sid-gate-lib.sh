@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared gate mechanics; source this, then gate_repo and gate_tree <main> <tree> <log> <description>.
-# gate_tree returns 0 passed or 1 failed, leaving lane, digest, flaky, opaque_flaky, known and new_failures for its caller.
+# gate_tree returns 0 passed or 1 failed, leaving gate_outcome (passed/failed/infrastructure), lane, digest, flaky, opaque_flaky, known and new_failures for its caller.
 #
 # Gate protocol: retry receipts, comparison identities and execution receipts for retry recovery/main-red.
 #   SID_FAILURES_OUT=<file> retry receipts only; never use these for comparison.
@@ -57,7 +57,7 @@ gate_attempt() {
 }
 gate_tree() {
   local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main
-  lane=full; digest=; flaky=0; opaque_flaky=0; known=0; new_failures=
+  gate_outcome=failed; lane=full; digest=; flaky=0; opaque_flaky=0; known=0; new_failures=
   echo "== gate: $description" > "$log" || return 1
   rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again" "$log.red-fix.executions.jsonl" "$log.main.identities"
   local SID_LANE=${SID_LANE:-full} full_required=false
@@ -78,7 +78,10 @@ gate_tree() {
     }
   gate_attempt "$log" candidate SID_FAILURES_OUT="$failed"; rc=$?
   local candidate_proof=false
-  if python3 "${gate_worker%/*}/gate_failures.py" check "$log.candidate.identities" "$rc" >> "$log" 2>&1 &&
+  if [ "$rc" = 124 ]; then
+    gate_outcome=infrastructure; rc=1
+    new_failures='infrastructure: candidate timed out (exit 124); no forgiveness'
+  elif python3 "${gate_worker%/*}/gate_failures.py" check "$log.candidate.identities" "$rc" >> "$log" 2>&1 &&
       { [ "$rc" != 0 ] || [ ! -s "$failed" ]; }; then
     candidate_proof=true
   else
@@ -89,7 +92,10 @@ gate_tree() {
     echo "== gate: running the failed retry receipts again" >> "$log"
     gate_attempt "$log" retry SID_RERUN="$failed" SID_FAILURES_OUT="$again" SID_EXECUTION_RECEIPTS_OUT="$log.executed-retry"; rc=$?
     local recovered_counts=
-    if ! python3 "${gate_worker%/*}/gate_failures.py" check "$log.retry.identities" "$rc" >> "$log" 2>&1; then
+    if [ "$rc" = 124 ]; then
+      gate_outcome=infrastructure; rc=1
+      new_failures='infrastructure: retry timed out (exit 124); no forgiveness'
+    elif ! python3 "${gate_worker%/*}/gate_failures.py" check "$log.retry.identities" "$rc" >> "$log" 2>&1; then
       rc=1
       new_failures='retry has no valid failure-identity evidence; no forgiveness'
     elif ! recovered_counts=$(python3 "${gate_worker%/*}/gate_receipts.py" --recovered "$log.candidate.identities" "$log.retry.identities" "$log.executed-retry" 2>> "$log"); then
@@ -111,6 +117,10 @@ gate_tree() {
           python3 "${gate_worker%/*}/train_health.py" "$gate/health" "$repo" "$main" "$log" "$log.main.identities"
         fi
       fi
+      if [ "$base_rc" = 124 ]; then
+        gate_outcome=infrastructure
+        new_failures='infrastructure: main-only diagnosis timed out (exit 124); no forgiveness'
+      fi
       rc=1
     else
       rc=1; new_failures='successful retry reported failure outputs; no forgiveness'
@@ -122,6 +132,9 @@ gate_tree() {
     if python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests"; then
       if [ -s "$log.red-tests" ]; then
         gate_attempt "$log" red-fix SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again" SID_EXECUTION_RECEIPTS_OUT="$log.red-fix.executions.jsonl"; rc=$?
+        if [ "$rc" = 124 ]; then
+          gate_outcome=infrastructure; new_failures='infrastructure: main-red verification timed out (exit 124); no forgiveness'
+        fi
         [ ! -s "$log.red-again" ] || rc=1
         python3 "${gate_worker%/*}/gate_failures.py" check "$log.red-fix.identities" "$rc" >> "$log" 2>&1 || rc=1
         [ ! -s "$log.red-fix.identities" ] || rc=1
@@ -139,6 +152,7 @@ gate_tree() {
   digest=$(sha256sum "$log" | cut -d' ' -f1)
   # Keep failed logs too: train and health results refer to them.
   ls -1t "$gate/logs" | tail -n +101 | while IFS= read -r old; do rm -f "$gate/logs/$old"; done
+  [ "$rc" != 0 ] || gate_outcome=passed
   [ "$rc" = 0 ]
 }
 

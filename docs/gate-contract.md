@@ -157,3 +157,20 @@ full candidate gate is the proof. Admission still permits only a PR naming the
 card as its fix. The block clears only on a verified green full main-health run
 or when the exact full-gated fix tree lands. Failed health records are never
 cached as a reason to skip future periodic verification.
+
+## Receipt rollout and infrastructure outcomes (process#625)
+
+Compute recovered identities before reading execution receipts. If every candidate
+identity still fails on retry, no identity is forgiven and no execution sidecar
+is needed to continue main-only diagnosis. Whenever any identity disappears,
+passing execution proof remains mandatory; missing or empty execution output
+fails closed with `producer wrote no execution receipts; no forgiveness`.
+This does not enable forgiveness for producers that have not implemented receipts.
+
+The library exposes `gate_outcome=infrastructure` for exit 124 in candidate,
+retry, main-only diagnosis or recorded-main-red verification. It never lands
+such a tree. The train publishes a terminal result with the infrastructure label
+and keeps the existing exit 1 for caller compatibility, but does not increment
+the PR's failed-head count. Plain requeue remains possible; infrastructure does
+not consume the explicit retry allowance. Ordinary test/protocol failures retain
+the existing failed-head accounting, and main-red retains exit 4.
