@@ -3,26 +3,42 @@
 
   pr_checks.py <pr-json-file>
 The JSON comes from gh pr view. Exits 1 with the problems if it isn't ready. Anything missing or unknown counts as not ready.
-The body needs two things: ## Proof naming the head commit, so it is renewed after a push, and ## Review naming the approved head and saying who approved.
+The body needs two things: ## Proof naming the head commit, so it is renewed after a push, and ## Review recording approval with an Approved-Head: <sha> (<who>) trailer.
 Whether the words are true is the reviewer's call, not this script's.
 """
 import json, re, sys
 
-APPROVED = re.compile(r"\bapprov\w*", re.I)
-NOT_APPROVED = re.compile(r"\b(not|no|never|without|pending|awaiting)\s+(\w+\s+){0,2}approv\w*|\bapproval\s+(is\s+)?(pending|needed|required)\b", re.I)
-REVIEW_PENDING = re.compile(
-    r"\b(?:require(?:s|d)?|need(?:s|ed)?|await(?:s|ing)?|waiting\s+for|outstanding|pending)\b"
-    r"[^.!?]*?\b(?:re-?check|re-?review|review|sign-?off)\b"
-    r"|\bre-?review\s+(?:is\s+)?pending\b"
-    r"|\bnot\s+(?:yet\s+)?(?:re-?)?reviewed\b"
-    r"|\bdoes\s+not\s+cover\b|\bretracted\b|\bdo\s+not\s+merge\b", re.I)
-HIDDEN = re.compile(r"<!--.*?-->|~~.*?~~", re.S)
+APPROVED_HEAD = re.compile(r"^\s*(?:[-*]\s*)?Approved-Head:\s*([0-9a-fA-F]{7,40})\b(.*)$")
+APPROVAL_WITHDRAWN = re.compile(r"^\s*(?:[-*]\s*)?Approval-Withdrawn:")
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
 def section(body, name):
     match = re.search(rf"^## {name}\b[^\n]*\n(.*?)(?=^## |\Z)", body or "", re.M | re.S)
     return match[1].strip() if match else ""
+
+
+def review_text(body):
+    # Preserve line boundaries so removing hidden text cannot create a trailer.
+    def blank(match):
+        return re.sub(r"[^\n]", " ", match[0])
+
+    body = re.sub(r"<!--.*?(?:-->|\Z)", blank, body or "", flags=re.S)
+    visible = []
+    fence = None
+    for line in body.splitlines():
+        marker = re.match(r"^[ \t]*(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = None
+            visible.append("")
+        elif marker:
+            fence = marker[1]
+            visible.append("")
+        else:
+            visible.append(line)
+    body = re.sub(r"~~.*?~~", blank, "\n".join(visible), flags=re.S)
+    return section(body, "Review")
 
 
 def check_failures(rollup):
@@ -52,16 +68,13 @@ def problems(pr, required=()):
     head = pr["headRefOid"]
     if head[:7] not in section(pr["body"], "Proof"):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
-    review = HIDDEN.sub(" ", section(pr["body"], "Review"))
-    # Match only actual prefixes of this head, never a substring of another SHA.
-    prefixes = "|".join(re.escape(head[:length]) for length in range(len(head), 6, -1))
-    approved_head = re.compile(rf"(?<![0-9a-f])(?:{prefixes})(?![0-9a-f])", re.I)
-    if not approved_head.search(review):
-        found.append(f"## Review must name the approved head ({head[:8]})")
-    approval = any(APPROVED.search(sentence) and approved_head.search(sentence)
-                   for sentence in re.split(r"[.!?\n]+", NOT_APPROVED.sub("", review)))
-    if REVIEW_PENDING.search(pr["body"] or "") or not approval:
-        found.append("## Review must say who approved this change")
+    review = review_text(pr["body"])
+    trailers = [APPROVED_HEAD.match(line) for line in review.splitlines()]
+    approved = any(match and head.lower().startswith(match[1].lower()) and match[2].strip()
+                   for match in trailers)
+    withdrawn = any(APPROVAL_WITHDRAWN.match(line) for line in review.splitlines())
+    if withdrawn or not approved:
+        found.append(f"## Review must contain `Approved-Head: {head[:8]}` naming who approved this head.")
     return found
 
 

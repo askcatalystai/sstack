@@ -87,9 +87,9 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    changes behaviour goes back to Astra for the changed code, and Claude verifies each
    fix. Skip the fix pass if Astra approved cleanly. Astra's approval is the merge
    verdict, with no separate verifier run and nothing to record: write it in the PR's
-   `## Review` section ("Astra approved <commit>"), which `sid-merge.sh` reads. A later
+   `## Review` section, followed by `Approved-Head: <sha> (<who>)`, which `sid-merge.sh` reads. A later
    fix that changes behaviour goes back to Astra; one that doesn't (a rename, a deleted
-   comment) needs only fresh `## Proof`. If any step is skipped, `## Review` says so
+   comment) needs fresh `## Proof` and a renewed `Approved-Head:` trailer for the new head after confirming the approval still covers it. If any step is skipped, `## Review` says so
    and why, and the PR counts as risky (step 6).
 4. **Prove it.** Run the real thing (see "Proof"). The author doesn't verify its own
    work: Claude or the bug pass runs it on the real surface. The evidence goes in the
@@ -105,8 +105,8 @@ checks that shouldn't depend on judgment and queues the PR for the merge train.
    or ask); noise doesn't get code. On any PR, conflicts: merge the default branch in the
    worktree and run `sid-merge.sh` again.
 7. **Merge.** `sid-merge.sh <pr>` refuses until the PR is ready (`## Proof` must
-   name the head commit, so a later push needs fresh proof, and `## Review` must name
-   who approved and the exact head commit in the same sentence, e.g. "Astra approved <sha>"), then queues it for the
+   name the head commit, so a later push needs fresh proof, and `## Review` must include
+   `Approved-Head: <sha> (<who>)` after the free-text review notes, naming the exact head commit and approvers), then queues it for the
    merge train and waits for the result. The train gates every queued PR together,
    once, on the latest main, squash-merges them in order using each PR body as the
    commit message, and removes the worktree and branch. Run it in the background and
