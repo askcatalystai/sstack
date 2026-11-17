@@ -4,7 +4,7 @@ import importlib.util, os, unittest
 spec = importlib.util.spec_from_file_location("pr_checks", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pr_checks.py"))
 checks = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checks)
-GOOD = "## Why\nx\n## Proof\nGate on abcdef12 passed: 10 passed.\n## Review\nApproved-Head: abcdef12 (Astra)\n"
+GOOD = "## Why\nx\n## Proof\nGate on abcdef123456 passed: 10 passed.\n## Review\nApproved-Head: abcdef123456 (Astra)\n"
 
 REVIEW_1021 = """**Risky — updated head requires Astra re-check.** Astra and DeepSeek approved the earlier `e5f919fbb5f0e0237369850cbf86ed9ed7e6b53f` head; those approvals do not cover this merge resolution. Sid will arrange the re-check. Composer was unavailable due to its weekly usage limit.
 
@@ -53,69 +53,98 @@ class Ready(unittest.TestCase):
 
     def test_proof_must_name_the_head_commit(self):
         self.assertTrue(any("name the commit" in p for p in checks.problems(pr(headRefOid="9999999aaa"))))
-        for body in ["## Review\nApproved-Head: abcdef12 (Astra)\n", "## Proof\nran it, passed\n## Review\nApproved-Head: abcdef12 (Astra)\n"]:
+        for body in ["## Review\nApproved-Head: abcdef123456 (Astra)\n", "## Proof\nran it, passed\n## Review\nApproved-Head: abcdef123456 (Astra)\n"]:
             self.assertTrue(any("name the commit" in p for p in checks.problems(pr(body=body))), body)
 
     def test_matching_approval_trailers_pass(self):
         for review in [
-            "Approved-Head: abcdef1 (Astra)",
-            "Approved-Head: ABCDEF12 (Astra; final call Claude)",
+            "Approved-Head: abcdef123456 (Astra)",
+            "Approved-Head: ABCDEF123456 (Astra; final call Claude)",
             "  - Approved-Head: abcdef1234567890 (Claude)",
-            "* Approved-Head: abcdef12 (Astra)",
-            "Approved-Head: abcdef12 (~~Astra~~ Claude)",
-            "Approved-Head: abcdef12 (<!-- Astra --> Claude)",
-            "Approved-Head: abcdef12 (`Astra` Claude)",
-            "Approved-Head: 9999999 (Muse)\nApproved-Head: abcdef12 (Astra)",
+            "* Approved-Head: abcdef123456 (Astra)",
+            "Approved-Head: abcdef123456 (~~Astra~~ Claude)",
+            "Approved-Head: abcdef123456 (<!-- Astra --> Claude)",
+            "Approved-Head: abcdef123456 (`Astra` Claude)",
+            "Approved-Head: 999999999999 (Muse)\nApproved-Head: abcdef123456 (Astra)",
         ]:
             with self.subTest(review=review):
-                self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\n{review}\n")), [])
+                self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\n{review}\n")), [])
+
+    def test_indented_code_cannot_supply_approval(self):
+        for indent in ["    ", "        ", "\t", " \t", "    - ", "-  "]:
+            with self.subTest(indent=indent):
+                review = indent + "Approved-Head: abcdef123456 (Astra)"
+                for notes in ["", "Notes.\n\n"]:
+                    self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\n{notes}{review}\n")))
+        for indent in ["", "- ", "* ", "   - ", "   * "]:
+            review = indent + "Approved-Head: abcdef123456 (Astra)"
+            self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\n{review}\n")), [])
+
+    def test_html_elements_cannot_supply_approval(self):
+        for opening, closing in [("<details>", "</details>"), ("<div hidden>", "</div>"),
+                                 ('<div style="display:none">', "</div>"), ("<section>", "</section>"),
+                                 ("<div><div></div>", "</div>"), ("<div hidden></span>", "</div>"), ("<script>", "</script>")]:
+            with self.subTest(opening=opening):
+                review = f"{opening}\nApproved-Head: abcdef123456 (Astra)\n{closing}"
+                self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\n{review}\n")))
+        self.assertEqual(checks.problems(pr(body=GOOD + "<details>old review</details>")), [])
+
+    def test_short_prefix_cannot_approve_a_new_head(self):
+        for prefix in ["abcdef1", "abcdef12", "abcdef12345", "abcdef1234569"]:
+            with self.subTest(prefix=prefix):
+                self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\nApproved-Head: {prefix} (Astra)\n")))
+
+    def test_approvers_need_an_alphabetic_word_of_three_letters(self):
+        for name in ["x", ".", "\\", "Al", "A B C", "abc123"]:
+            with self.subTest(name=name):
+                self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\nApproved-Head: abcdef123456 ({name})\n")))
 
     def test_missing_stale_or_malformed_trailers_fail(self):
         for review in [
-            "", "Not reviewed yet", "Astra approved abcdef12",
-            "Astra approved 9999999; current head abcdef12",
-            "Approval for abcdef12 was not granted", "Review is pending.",
-            "Approved-Head: 9999999 (Astra)",
-            "Approved-Head: abcdef19 (Astra)",
+            "", "Not reviewed yet", "Astra approved abcdef123456",
+            "Astra approved 9999999; current head abcdef123456",
+            "Approval for abcdef123456 was not granted", "Review is pending.",
+            "Approved-Head: 999999999999 (Astra)",
+            "Approved-Head: abcdef1234569 (Astra)",
             "Approved-Head: abcdef1234567890a (Astra)",
             "Approved-Head: abcdef (Astra)",
-            "Approved-Head: abcdef12z (Astra)",
-            "Approved-Head: abcdef12", "Approved-Head: abcdef12   ",
-            "Approved-Head: abcdef12\n(Astra)",
-            "Approved-Head: abcdef12 ()",
-            "Approved-Head: abcdef12 (123; !)",
-            "Approved-Head: abcdef12 Astra",
+            "Approved-Head: abcdef123456z (Astra)",
+            "Approved-Head: abcdef123456", "Approved-Head: abcdef123456   ",
+            "Approved-Head: abcdef123456\n(Astra)",
+            "Approved-Head: abcdef123456 ()",
+            "Approved-Head: abcdef123456 (123; !)",
+            "Approved-Head: abcdef123456 Astra",
         ]:
             with self.subTest(review=review):
-                self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\n{review}\n")),
-                                 ["## Review must contain `Approved-Head: abcdef12` naming who approved this head."])
+                self.assertEqual(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\n{review}\n")),
+                                 ["## Review must contain `Approved-Head: abcdef123456` naming who approved this head."])
 
     def test_hidden_approval_trailers_do_not_count(self):
         for review in [
-            "Approved-Head: abcdef12 (~~Astra~~)",
-            "Approved-Head: abcdef12 (<!-- Astra -->)",
-            "Approved-Head: abcdef12 (`Astra`)",
-            "Approved-Head: abcdef12 (``Astra``)",
-            "<!-- Approved-Head: abcdef12 (Astra) -->",
-            "<!--\nApproved-Head: abcdef12 (Astra)\n-->",
-            "~~Approved-Head: abcdef12 (Astra)~~",
-            "~~\nApproved-Head: abcdef12 (Astra)\n~~",
-            "```text\nApproved-Head: abcdef12 (Astra)\n```",
-            "~~~\nApproved-Head: abcdef12 (Astra)\n~~~",
-            "````markdown\n```\nApproved-Head: abcdef12 (Astra)\n````",
-            "```\nApproved-Head: abcdef12 (Astra)",
+            "Approved-Head: abcdef123456 (~~Astra~~)",
+            "Approved-Head: abcdef123456 (<!-- Astra -->)",
+            "Approved-Head: abcdef123456 (`Astra`)",
+            "Approved-Head: abcdef123456 (``Astra``)",
+            "<!-- Approved-Head: abcdef123456 (Astra) -->",
+            "<!--\nApproved-Head: abcdef123456 (Astra)\n-->",
+            "~~Approved-Head: abcdef123456 (Astra)~~",
+            "~~\nApproved-Head: abcdef123456 (Astra)\n~~",
+            "```text\nApproved-Head: abcdef123456 (Astra)\n```",
+            "~~~\nApproved-Head: abcdef123456 (Astra)\n~~~",
+            "````markdown\n```\nApproved-Head: abcdef123456 (Astra)\n````",
+            "```\nApproved-Head: abcdef123456 (Astra)",
         ]:
             with self.subTest(review=review):
-                self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\n{review}\n")))
+                self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\n{review}\n")))
         # A Review heading in an example block cannot supply the real approval.
-        self.assertTrue(checks.problems(pr(body="## Proof\nabcdef12\n```\n## Review\nApproved-Head: abcdef12 (Astra)\n```")))
+        self.assertTrue(checks.problems(pr(body="## Proof\nabcdef123456\n```\n## Review\nApproved-Head: abcdef123456 (Astra)\n```")))
 
     def test_withdrawal_overrides_all_approval_trailers(self):
         for withdrawn in ["Approval-Withdrawn:", "- Approval-Withdrawn: Astra", "  * Approval-Withdrawn: superseded"]:
-            for review in [f"{withdrawn}\nApproved-Head: abcdef12 (Astra)",
-                           f"Approved-Head: abcdef12 (Astra)\n{withdrawn}"]:
+            for review in [f"{withdrawn}\nApproved-Head: abcdef123456 (Astra)",
+                           f"Approved-Head: abcdef123456 (Astra)\n{withdrawn}"]:
                 with self.subTest(review=review):
-                    self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef12\n## Review\n{review}\n")))
+                    self.assertTrue(checks.problems(pr(body=f"## Proof\nabcdef123456\n## Review\n{review}\n")))
         for hidden in ["<!-- Approval-Withdrawn: -->", "~~Approval-Withdrawn:~~", "```\nApproval-Withdrawn:\n```"]:
             self.assertEqual(checks.problems(pr(body=GOOD + hidden)), [])
         self.assertEqual(checks.problems(pr(body="## Status\nApproval-Withdrawn: example outside Review\n" + GOOD)), [])
@@ -123,7 +152,7 @@ class Ready(unittest.TestCase):
     def test_1021_review_without_a_trailer_fails(self):
         head = "3ed9f4f309a9da8f0954ac53271ca708b56e3b45"
         self.assertEqual(checks.problems(pr(headRefOid=head, body=f"## Proof\n{head}\n## Review\n{REVIEW_1021}\n")),
-                         ["## Review must contain `Approved-Head: 3ed9f4f3` naming who approved this head."])
+                         ["## Review must contain `Approved-Head: 3ed9f4f309a9` naming who approved this head."])
 
     def test_free_text_does_not_override_the_trailer(self):
         for notes in ['Quotes #1021: "requires Astra re-check".', "Validated pending orders.",

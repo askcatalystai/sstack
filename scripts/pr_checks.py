@@ -7,15 +7,47 @@ The body needs two things: ## Proof naming the head commit, so it is renewed aft
 Whether the words are true is the reviewer's call, not this script's.
 """
 import json, re, sys
+from html.parser import HTMLParser
 
-APPROVED_HEAD = re.compile(r"^\s*(?:[-*]\s*)?Approved-Head:\s*([0-9a-fA-F]{7,40})\b(.*)$")
+APPROVED_HEAD = re.compile(r"^(?: {0,3}[-*] )?Approved-Head: *([0-9a-fA-F]{12,40})\b(.*)$")
 APPROVAL_WITHDRAWN = re.compile(r"^\s*(?:[-*]\s*)?Approval-Withdrawn:")
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
 def section(body, name):
     match = re.search(rf"^## {name}\b[^\n]*\n(.*?)(?=^## |\Z)", body or "", re.M | re.S)
-    return match[1].strip() if match else ""
+    return match[1].strip("\n") if match else ""
+
+
+class WithoutHTML(HTMLParser):
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.tags = []
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        self.handle_data(self.get_starttag_text(), hidden=True)
+        if tag not in self.VOID:
+            self.tags.append(tag)
+
+    def handle_endtag(self, tag):
+        if tag in self.tags:
+            del self.tags[len(self.tags) - 1 - self.tags[::-1].index(tag):]
+        self.handle_data(f"</{tag}>", hidden=True)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_data(self.get_starttag_text(), hidden=True)
+
+    def handle_data(self, data, hidden=False):
+        self.parts.append(re.sub(r"[^\n]", " ", data) if hidden or self.tags else data)
+
+    def handle_entityref(self, name):
+        self.handle_data(f"&{name};")
+
+    def handle_charref(self, name):
+        self.handle_data(f"&#{name};")
 
 
 def review_text(body):
@@ -38,7 +70,10 @@ def review_text(body):
         else:
             visible.append(line)
     body = re.sub(r"~~.*?~~", blank, "\n".join(visible), flags=re.S)
-    return section(body, "Review")
+    html = WithoutHTML()
+    html.feed(body)
+    html.close()
+    return section("".join(html.parts), "Review")
 
 
 def approves_head(line, head):
@@ -50,7 +85,7 @@ def approves_head(line, head):
         return False
     # Comments, strikethrough and fences were removed by review_text.
     visible = re.sub(r"(`+).*?\1", " ", approvers[1])
-    return any(char.isalpha() for char in visible)
+    return any(len(word) >= 3 and word.isalpha() for word in re.findall(r"\w+", visible))
 
 
 def check_failures(rollup):
@@ -84,7 +119,7 @@ def problems(pr, required=()):
     approved = any(approves_head(line, head) for line in review.splitlines())
     withdrawn = any(APPROVAL_WITHDRAWN.match(line) for line in review.splitlines())
     if withdrawn or not approved:
-        found.append(f"## Review must contain `Approved-Head: {head[:8]}` naming who approved this head.")
+        found.append(f"## Review must contain `Approved-Head: {head[:12]}` naming who approved this head.")
     return found
 
 
