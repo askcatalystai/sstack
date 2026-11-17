@@ -29,7 +29,9 @@ The builder builds (Sol for logic, an Opus builder for visible UI) and the orche
 5. **Fixes get reviewed.** A fix that changes behaviour goes back to Astra with the original finding and the changed code only. The orchestrator verifies every fix (diff, a focused test, and the real-database tests for runtime/persistence changes; skipped DB tests are a blocker, not a footnote). Each finding and its outcome goes in the PR's `## Review` section.
 6. The PR is already open when shipping (`full-send` opens it before review). **Risky PRs get one more model.** For auth, payments, data, migrations, `commerce/`, the gate or merge scripts, or a PR that skipped a review step, add one review from the `risky review` line in `models.md`, a family that hasn't reviewed the PR yet, on the same commit as Astra (both only read it, so they can run together). A finding blocks the merge only when every model that reviewed the PR calls it risky; otherwise Claude decides and `## Review` says why (user 2026-11-13). There is no Codex bot: never comment `@codex review` or wait on it. Triage per `poteto-mode/references/bugbot-triage.md` (fix / dismiss with a concrete reason / ask); the builder fixes the accepted ones.
 
-If Astra approves with no blocker or should, steps 4 and 5 don't apply. Astra's APPROVE on the head commit is the merge verdict: write it in the PR's `## Review` section ("Astra approved <commit>") as soon as it returns. There is nothing else to record.
+If Astra approves with no blocker or should, steps 4 and 5 don't apply. Astra's APPROVE on the head commit is the merge verdict: write the free-text review notes in the PR's `## Review` section as soon as it returns, then add as the last non-empty line of `## Review`: `Approved-Head: <sha> (<who>)` (12+ hex characters, e.g. `Approved-Head: d381a62361f3 (Astra)`) naming the exact head commit and approvers. A withdrawn approval must be recorded with an `Approval-Withdrawn:` line; remove it only after renewed approval.
+
+Don't put `## Review` in examples or lone backticks before the trailer; the check fails closed on them.
 
 ## Rules
 
