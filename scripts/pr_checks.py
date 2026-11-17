@@ -3,13 +3,18 @@
 
   pr_checks.py <pr-json-file>
 The JSON comes from gh pr view. Exits 1 with the problems if it isn't ready. Anything missing or unknown counts as not ready.
-The body needs two things: ## Proof naming the head commit, so it is renewed after a push, and ## Review saying who approved.
+The body needs two things: ## Proof naming the head commit, so it is renewed after a push, and ## Review naming the approved head and saying who approved.
 Whether the words are true is the reviewer's call, not this script's.
 """
 import json, re, sys
 
 APPROVED = re.compile(r"\bapprov(e|ed|es|al)\b", re.I)
 NOT_APPROVED = re.compile(r"\b(not|no|never|without|pending|awaiting)\s+(\w+\s+){0,2}approv\w*|\bapproval\s+(is\s+)?(pending|needed|required)\b", re.I)
+REVIEW_PENDING = re.compile(
+    r"\brequires?\b[^\n.!?]*\bre[- ](?:check|review)\b"
+    r"|\bneeds?\s+re[- ]review\b"
+    r"|\bre[- ]review\s+(?:is\s+)?pending\b"
+    r"|\bnot\s+reviewed\s+yet\b", re.I)
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
@@ -45,7 +50,10 @@ def problems(pr, required=()):
     head = pr["headRefOid"]
     if head[:7] not in section(pr["body"], "Proof"):
         found.append(f"## Proof must name the commit it covers ({head[:8]}); after a push it needs renewing")
-    if not APPROVED.search(NOT_APPROVED.sub("", section(pr["body"], "Review"))):
+    review = section(pr["body"], "Review")
+    if head[:7] not in review:
+        found.append(f"## Review must name the approved head ({head[:8]})")
+    if REVIEW_PENDING.search(review) or not APPROVED.search(NOT_APPROVED.sub("", review)):
         found.append("## Review must say who approved this change")
     return found
 
