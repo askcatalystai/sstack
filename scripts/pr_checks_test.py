@@ -104,7 +104,7 @@ class Ready(unittest.TestCase):
 
     def test_unbalanced_code_before_trailer_fails(self):
         for prefix, error in [
-            ("```text\n", "unbalanced code fence"), ("~~~\n", "unbalanced code fence"),
+            ("```text\n", "trailer is inside a code fence"), ("~~~\n", "trailer is inside a code fence"),
             ("`multiline span\n", "unbalanced backtick"),
         ]:
             with self.subTest(prefix=prefix):
@@ -122,8 +122,43 @@ class Ready(unittest.TestCase):
     def test_withdrawal_anywhere_in_review_vetoes(self):
         for withdrawn in ["Approval-Withdrawn:", "- Approval-Withdrawn: Astra", "  * Approval-Withdrawn: superseded"]:
             body = f"## Proof\nabcdef123456\n## Review\n{withdrawn}\nApproved-Head: abcdef123456 (Astra)\n"
-            self.assertIn("## Review contains Approval-Withdrawn:", checks.problems(pr(body=body)))
-        self.assertEqual(checks.problems(pr(body="## Status\nApproval-Withdrawn: outside Review\n" + GOOD)), [])
+            self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body=body)))
+        self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body="## Status\nApproval-Withdrawn: outside Review\n" + GOOD)))
+
+    def test_fences_require_matching_character_length_and_indent(self):
+        for prefix in ["   ~~~\n", "```\n~~~\n", "````\n```\n", "~~~~\n~~~\n",
+                       "~~~\n~~~ not a closer\n"]:
+            with self.subTest(prefix=prefix):
+                body = GOOD.replace("## Review\n", "## Review\n" + prefix)
+                self.assertIn("trailer is inside a code fence", checks.problems(pr(body=body)))
+        for prefix in ["   ~~~\n`literal\n   ~~~~\n", "````\n~~~\n`````\n"]:
+            self.assertEqual(checks.problems(pr(body=GOOD.replace("## Review\n", "## Review\n" + prefix))), [])
+
+    def test_html_closers_cannot_cancel_future_or_code_hidden_openers(self):
+        for notes in ["</div>\n<div>\n", "```\n</div>\n```\n<div>\n",
+                      "`\n</div>\n`\n<div>\n"]:
+            with self.subTest(notes=notes):
+                self.assertTrue(any("unclosed HTML <div>" in p for p in checks.problems(pr(body=GOOD.replace("## Review\n", "## Review\n" + notes)))))
+        for notes in ["`\n<div>\n`\n", "``\n<div>\n``\n", "<div>\n</div>\n"]:
+            self.assertEqual(checks.problems(pr(body=GOOD.replace("## Review\n", "## Review\n" + notes))), [])
+
+    def test_duplicate_review_is_rejected(self):
+        self.assertIn("duplicate ## Review", checks.problems(pr(body=GOOD + "## Review\nNot reviewed yet\n")))
+
+    def test_setext_headings_are_section_boundaries(self):
+        for underline in ["---", "==="]:
+            with self.subTest(underline=underline):
+                body = GOOD.replace("Approved-Head:", f"Other section\n{underline}\nApproved-Head:")
+                self.assertIn("## Review must end with `Approved-Head: <12+ hex of head> (<who>)`", checks.problems(pr(body=body)))
+                self.assertEqual(checks.problems(pr(body=GOOD.replace("## Review", f"Review\n{underline}"))), [])
+                self.assertEqual(checks.problems(pr(body=GOOD + f"Other section\n{underline}\nNotes\n")), [])
+
+    def test_withdrawal_outside_review_is_visible_only_outside_code(self):
+        for prefix in ["Approval-Withdrawn: Astra\n", "## Status\nApproval-Withdrawn: Astra\n"]:
+            self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body=prefix + GOOD)))
+        for prefix in ["```\nApproval-Withdrawn: Astra\n```\n", "   ~~~\nApproval-Withdrawn: Astra\n   ~~~\n",
+                       "`\nApproval-Withdrawn: Astra\n`\n", "    Approval-Withdrawn: Astra\n"]:
+            self.assertEqual(checks.problems(pr(body=prefix + GOOD)), [])
 
     def test_1021_review_without_a_trailer_fails(self):
         head = "3ed9f4f309a9da8f0954ac53271ca708b56e3b45"
