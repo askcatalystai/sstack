@@ -31,6 +31,8 @@ The builder builds (Sol for logic, an Opus builder for visible UI) and the orche
 
 If Astra approves with no blocker or should, steps 4 and 5 don't apply. Astra's APPROVE on the head commit is the merge verdict: write the free-text review notes in the PR's `## Review` section as soon as it returns, then add as the last non-empty line of `## Review`: `Approved-Head: <sha> (<who>)` (12+ hex characters, e.g. `Approved-Head: d381a62361f3 (Astra)`) naming the exact head commit and approvers. A withdrawn approval must be recorded with an `Approval-Withdrawn:` line; remove it only after renewed approval.
 
+Don't put `## Review` in examples or lone backticks before the trailer; the check fails closed on them.
+
 ## Rules
 
 - **Every model runs as a subagent** (`delegate_task` in T3, target from `models.md`): Sol, Composer and Astra, one subagent per job, so each shows as its own thread. Never run a model from the terminal (`opencode run`, `codex exec`).

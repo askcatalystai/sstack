@@ -10,7 +10,7 @@ import json, re, sys
 
 APPROVED_HEAD = re.compile(r"^(?:[-*] )?Approved-Head: ([0-9a-fA-F]{12,40}) \(([A-Za-z][A-Za-z0-9 ,;:.'/&+-]{2,})\)\s*$")
 REVIEW_FORMAT = "## Review must end with `Approved-Head: <12+ hex of head> (<who>)`"
-APPROVAL_WITHDRAWN = re.compile(r"^\s*(?:[-*]\s*)?Approval-Withdrawn:")
+APPROVAL_WITHDRAWN = re.compile(r"^\s*(?:[-*]\s+)?Approval-Withdrawn:")
 PASSING = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
@@ -75,7 +75,7 @@ def code_context(lines):
                 else:
                     visible.append(line[i])
                     i += 1
-        # Indented code cannot supply visible withdrawal or HTML lines.
+        # Indented code cannot supply visible HTML lines.
         text = "".join(visible) if not re.match(r"^(?: {4}| *\t)", line) else ""
         contexts.append((in_fence, in_span, in_comment, backticks % 2, text))
     return contexts
@@ -88,8 +88,7 @@ def review_problems(body, head):
     if len(reviews) > 1:
         found.append("duplicate ## Review")
     contexts = code_context(lines)
-    if any(APPROVAL_WITHDRAWN.match(line) and APPROVAL_WITHDRAWN.match(context[-1])
-           for line, context in zip(lines, contexts)):
+    if any(APPROVAL_WITHDRAWN.match(line) for line in lines):
         found.append("PR contains Approval-Withdrawn:")
     start, end = reviews[0] if reviews else (0, 0)
     last = next((i for i in range(end - 1, start - 1, -1) if lines[i].strip()), None)

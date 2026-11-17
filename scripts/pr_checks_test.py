@@ -153,12 +153,27 @@ class Ready(unittest.TestCase):
                 self.assertEqual(checks.problems(pr(body=GOOD.replace("## Review", f"Review\n{underline}"))), [])
                 self.assertEqual(checks.problems(pr(body=GOOD + f"Other section\n{underline}\nNotes\n")), [])
 
-    def test_withdrawal_outside_review_is_visible_only_outside_code(self):
+    def test_raw_withdrawal_vetoes_even_inside_code(self):
         for prefix in ["Approval-Withdrawn: Astra\n", "## Status\nApproval-Withdrawn: Astra\n"]:
             self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body=prefix + GOOD)))
         for prefix in ["```\nApproval-Withdrawn: Astra\n```\n", "   ~~~\nApproval-Withdrawn: Astra\n   ~~~\n",
                        "`\nApproval-Withdrawn: Astra\n`\n", "    Approval-Withdrawn: Astra\n"]:
-            self.assertEqual(checks.problems(pr(body=prefix + GOOD)), [])
+            self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body=prefix + GOOD)))
+
+    def test_withdrawal_cannot_hide_behind_backticks(self):
+        prefix = "`\nApproval-Withdrawn: Astra `\n"
+        self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body=prefix + GOOD)))
+
+    def test_withdrawal_cannot_hide_behind_a_fence_in_a_comment(self):
+        prefix = "<!--\n```\n-->\nApproval-Withdrawn: Astra\n```\n-->\n"
+        self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body=prefix + GOOD)))
+        self.assertIn("PR contains Approval-Withdrawn:", checks.problems(pr(body="<!--\nApproval-Withdrawn: Astra\n-->\n" + GOOD)))
+
+    def test_known_false_rejects_remain_fail_closed(self):
+        body = "```markdown\n## Review\nexample\n```\n" + GOOD
+        self.assertIn("duplicate ## Review", checks.problems(pr(body=body)))
+        body = GOOD.replace("## Review\n", "## Review\n`` ` ``\n")
+        self.assertIn("## Review approval trailer follows an unbalanced backtick", checks.problems(pr(body=body)))
 
     def test_1021_review_without_a_trailer_fails(self):
         head = "3ed9f4f309a9da8f0954ac53271ca708b56e3b45"

@@ -144,6 +144,8 @@ the `#` is the `pr-<n>` tag. The board sets all of them; put none in the title. 
 that stops with unfinished work gets a "continue" from the watchdog
 (`sid-board.py nudge`), up to three times, and then the card is flagged for the user.
 
+Don't put `## Review` in examples or lone backticks before the trailer; the check fails closed on them.
+
 ## Proof
 
 Proof is evidence you observed yourself in this session: command output, a

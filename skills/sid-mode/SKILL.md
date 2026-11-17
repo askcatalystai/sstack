@@ -63,6 +63,8 @@ No playbook fits, or the work is large and cross-cutting → `figure-it-out`.
 6. `sid-merge.sh <pr>`: checks the PR body (`## Proof` names the head commit, `## Review` ends with a last non-empty line of `Approved-Head: <sha> (<who>)` (12+ hex characters, e.g. `Approved-Head: d381a62361f3 (Astra)`) naming the exact head commit and approvers), then queues the PR for the merge train. The train gates every queued PR together on the latest main, once, with the repo's `.sidstack/gate.sh` (which picks the fast or full lane and must include tests), squash-merges them in order, and removes the worktree and branch. Never merge any other way: "skip gates" means `sid-mode.sh set lane fast`.
 7. Check the change on prod once deployed, in the browser, signed in. Say what was not checked live.
 
+Don't put `## Review` in examples or lone backticks before the trailer; the check fails closed on them.
+
 ## Principles
 
 Apply pstack's principles; read the leaf skill (`principle-<name>`) before citing one. The ones that matter most here:
