@@ -126,3 +126,34 @@ not permission for a candidate to clear a missing test automatically.
 
 Child retargeting is limited to five list/edit passes. Failure to settle retains
 the parent branch and reports the failure so children never lose their live base.
+
+## Sstack's native producer
+
+`.sidstack/gate.sh` always runs the complete `scripts/check.sh` in the full lane.
+It initializes all requested sidecars to empty before running that workload.
+Success therefore supplies supported, empty comparison and retry outputs.
+Sstack does not currently produce per-case failure diagnosis or execution
+receipts: failure with empty comparison identities fails closed, and no sstack
+failure may be forgiven as flaky or known on main. This producer mode changes
+no openec contract and grants no exception in the gate library. The producer
+fixture uses the real wrapper with only the expensive check workload substituted;
+the complete check is also run through the real wrapper for shipping proof.
+
+## Undiagnosed main-health failures
+
+Every unsuccessful main-health gate persists a card-linked `main-red` marker,
+even when infrastructure fails or comparison/retry evidence is unavailable.
+The marker contains the existing `card`, `sha`, `log`, and `tests` fields, plus
+`full_check_required: true`. Known test identities are retained; an empty `tests`
+list is permitted only with that explicit flag and means diagnosis is unknown,
+not that main passed. The card/log describe the missing diagnosis. Kanzo being
+unreachable retains the durable fallback card reference and prints the failure.
+
+Such a marker forces `SID_LANE=full` and requires the producer's reported lane
+to be full. A successful candidate must still supply valid empty failure outputs;
+any retained known identities additionally require the usual passing execution
+receipts. With no identities, no empty filtered rerun is used as proof: the fresh
+full candidate gate is the proof. Admission still permits only a PR naming the
+card as its fix. The block clears only on a verified green full main-health run
+or when the exact full-gated fix tree lands. Failed health records are never
+cached as a reason to skip future periodic verification.

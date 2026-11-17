@@ -60,6 +60,12 @@ gate_tree() {
   lane=full; digest=; flaky=0; opaque_flaky=0; known=0; new_failures=
   echo "== gate: $description" > "$log" || return 1
   rm -f "$failed" "$again" "$base" "$log.red-tests" "$log.red-again" "$log.red-fix.executions.jsonl" "$log.main.identities"
+  local SID_LANE=${SID_LANE:-full} full_required=false
+  export SID_LANE
+  if [ -f "$gate/health/main-red" ]; then
+    full_required=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("full_check_required",False)).lower())' "$gate/health/main-red") || return 1
+    [ "$full_required" != true ] || SID_LANE=full
+  fi
   # Never reuse an abandoned attempt's checkout, even if its workload escaped
   # supervision. Git's common object store is shared; mutable indexes are not.
   verify=$(python3 "${gate_worker%/*}/gate_lease.py" prepare "$gate" "$repo" "$$" "$main") || return 1
@@ -114,11 +120,13 @@ gate_tree() {
   fi
   if [ "$rc" = 0 ] && [ -f "$gate/health/main-red" ]; then
     if python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests"; then
-      gate_attempt "$log" red-fix SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again" SID_EXECUTION_RECEIPTS_OUT="$log.red-fix.executions.jsonl"; rc=$?
-      [ ! -s "$log.red-again" ] || rc=1
-      python3 "${gate_worker%/*}/gate_failures.py" check "$log.red-fix.identities" "$rc" >> "$log" 2>&1 || rc=1
-      [ ! -s "$log.red-fix.identities" ] || rc=1
-      python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests" "$log.red-fix.executions.jsonl" >> "$log" 2>&1 || rc=1
+      if [ -s "$log.red-tests" ]; then
+        gate_attempt "$log" red-fix SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again" SID_EXECUTION_RECEIPTS_OUT="$log.red-fix.executions.jsonl"; rc=$?
+        [ ! -s "$log.red-again" ] || rc=1
+        python3 "${gate_worker%/*}/gate_failures.py" check "$log.red-fix.identities" "$rc" >> "$log" 2>&1 || rc=1
+        [ ! -s "$log.red-fix.identities" ] || rc=1
+        python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests" "$log.red-fix.executions.jsonl" >> "$log" 2>&1 || rc=1
+      fi
     else
       rc=1
     fi
@@ -127,6 +135,7 @@ gate_tree() {
   git -C "$verify" clean -qfd
   python3 "${gate_worker%/*}/gate_lease.py" remove "$manifest" "$repo" || return 1
   lane=$(sed -n 's/^gate: lane \([^[:space:]]*\)[[:space:]]*$/\1/p' "$log" | tail -n 1); lane=${lane:-full}
+  if [ "$full_required" = true ] && [ "$lane" != full ]; then rc=1; new_failures="main health recovery requires a verified full lane"; fi
   digest=$(sha256sum "$log" | cut -d' ' -f1)
   # Keep failed logs too: train and health results refer to them.
   ls -1t "$gate/logs" | tail -n +101 | while IFS= read -r old; do rm -f "$gate/logs/$old"; done

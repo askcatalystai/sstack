@@ -48,12 +48,13 @@ def require_passed(tests, evidence):
 
 
 def verify(marker, requested, receipts=None):
-    tests = json.loads(Path(marker).read_text())['tests']
-    if not isinstance(tests, list) or not tests or any(not isinstance(t, str) or not t.strip() for t in tests):
+    red = json.loads(Path(marker).read_text())
+    tests = red['tests']
+    if not isinstance(tests, list) or (not tests and red.get('full_check_required') is not True) or any(not isinstance(t, str) or not t.strip() for t in tests):
         raise ValueError('invalid main-red test identities')
     opaque = {test for test in tests if not known_case(test)}
     rerun = sorted({test for test in tests if not known_case(test) or test.partition('::')[0] not in opaque})
-    Path(requested).write_text('\n'.join(rerun)+'\n')
+    Path(requested).write_text('\n'.join(rerun)+('\n' if rerun else ''))
     if receipts is not None:
         require_passed(tests, execution_receipts(receipts))
 

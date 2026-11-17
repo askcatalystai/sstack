@@ -848,7 +848,8 @@ setup_train health-red
 "$here/sid-health.sh" > "$T/out"; ok "missing health runs gate" "$(count_gates)" 1
 touch "$T/always-fail"; sha=$(git rev-parse origin/main); rm "$health/$sha"; "$here/sid-health.sh" > "$T/out"
 ok "failing health exits 1" "$?" 1; ok "failing full health recorded" "$(head -n 1 "$health/$sha")" 'fail full'
-before=$(count_gates); "$here/sid-health.sh" > "$T/out"; ok "known full failure skips" "$(count_gates)" "$before"
+before=$(count_gates); "$here/sid-health.sh" > "$T/out"; ok "failed full health is checked again" "$(count_gates)" "$((before+1))"
+setup_train invalid-candidate
 add_pr 11 bad; queue_pr 11; run_train; ok "empty failure identities never earn main-red forgiveness" "$(code 11)" 1
 grep -q "candidate identity evidence" "$q/result/11"; ok "infrastructure result explains missing comparison proof" "$?" 0
 queue_pr 11; ok "unproven infrastructure failure requires an explicit retry" "$?" 1
@@ -925,6 +926,9 @@ setup_train close-recovery
 add_pr 11 a; queue_pr 11; touch "$T/close-fails"
 run_train; ok "close failure preserves pending recovery" "$?" 1
 [ -f "$q/queue/11.req" ]; ok "close failure retains request" "$?" 0
+timeout 5 "$here/sid-merge.sh" 11 > "$T/close-wait-out" 2>&1
+ok "close pending returns to waiting caller without hanging" "$?" 1
+ok "close pending publishes a terminal result" "$(code 11)" 1
 rm "$T/close-fails"; run_train
 ok "receipt recovers already landed commit" "$(code 11)" 0
 ok "close recovery does not regate" "$(count_gates)" 1
@@ -1007,7 +1011,6 @@ P
   case "$outcome" in no-receipts) touch "$T/no-receipts";; zero|scope|duplicate|malformed|incomplete) echo "$outcome" > "$T/bad-receipt";; esac
   queue_pr "$n"; run_train
   ok "$outcome cannot clear red main" "$(code "$n")" 4
-  grep -q "not merely absent from the candidate" "$q/result/$n"; ok "$outcome failure explains safe stale-marker escape" "$?" 0
   [ -f "$health/main-red" ]; ok "$outcome retains the red block" "$?" 0
   [ ! -f "$T/merge-calls" ]; ok "$outcome fix never lands" "$?" 0
   rm -f "$T/no-receipts" "$T/bad-receipt"
@@ -1935,4 +1938,39 @@ git ls-remote --exit-code origin refs/heads/work11 >/dev/null
 ok "retarget limit retains parent remote branch" "$?" 0
 grep -q 'retargeting did not settle after 5 passes' "$T/runner-out"
 ok "retarget exhaustion explains retained base" "$?" 0
+# Exercise the real producer wrapper; only its check workload is substituted.
+setup_train native-producer
+cp "$here/../.sidstack/gate.sh" .sidstack/gate.sh
+mkdir scripts; printf 'exit 0\n' > scripts/check.sh
+SID_FAILURE_IDENTITIES_OUT="$T/native.identities" SID_FAILURES_OUT="$T/native.retry" SID_EXECUTION_RECEIPTS_OUT="$T/native.executed" bash .sidstack/gate.sh
+ok "real sstack producer succeeds" "$?" 0
+[ -f "$T/native.identities" ] && [ ! -s "$T/native.identities" ]; ok "real sstack producer supplies empty success identities" "$?" 0
+git add -A; git commit -qm native-producer; git push -q origin main
+add_pr 11 a; queue_pr 11; run_train
+ok "real sstack gate path is accepted by train protocol" "$(code 11)" 0
+# A failed full health check must block even when no diagnosis is possible.
+setup_train undiagnosed-health
+add_pr 11 a; touch "$T/no-identities" "$T/always-fail"
+"$here/sid-health.sh" > "$T/out" 2>&1
+ok "undiagnosed main health fails" "$?" 1
+[ -f "$health/main-red" ]; ok "undiagnosed health persists admission block" "$?" 0
+python3 - "$health/main-red" <<'P'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]); assert p.exists() and json.loads(p.read_text())['card']
+P
+ok "undiagnosed health links a repair card" "$?" 0
+queue_pr 11; ok "undiagnosed health refuses unrelated PR" "$?" 4
+rm "$T/no-identities" "$T/always-fail"
+echo fast > "$T/reported-lane"
+"$here/sid-health.sh" > "$T/fast-out" 2>&1
+ok "fast evidence cannot clear undiagnosed full-health block" "$?" 1
+[ -f "$health/main-red" ]; ok "incomplete recovery retains admission block" "$?" 0
+rm "$T/reported-lane"
+"$here/sid-health.sh" > "$T/green-out" 2>&1
+ok "periodic health verifies recovered main" "$?" 0
+sha=$(git rev-parse origin/main)
+ok "recovered health is verified green" "$(head -n 1 "$health/$sha")" 'pass full'
+[ ! -f "$health/main-red" ]; ok "verified green clears undiagnosed block" "$?" 0
+queue_pr 11; ok "verified green reopens admission" "$?" 0
 exit $fail

@@ -49,6 +49,14 @@ result_for() {
   [ "$rc" != 0 ] || rm -f "$train/failed/$pr"
   flock -u 8
 }
+# Return a terminal caller result while retaining the durable close request.
+close_pending() {
+  local pr=$1 oid=$2
+  flock 8
+  printf '1\nlanded #%s as %s; close pending, re-run the train\n' "$pr" "$oid" > "$train/result/$pr.tmp"
+  mv "$train/result/$pr.tmp" "$train/result/$pr"
+  flock -u 8
+}
 cleanup_branch() {
   local branch=$1 expected_head=$2 wt current
   # A contributor may push after the final PR read or close. Never delete that head.
@@ -131,7 +139,7 @@ run_train() {
       if oid=$(python3 "$here/train_landing.py" recover "$pr" "$head" "$default"); then
         branch=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["headRefName"])' "$train/active/$pr.json")
         if ! python3 "$here/train_landing.py" close "$pr" "$head" "$default" "$gh"; then
-          echo "landed #$pr as $oid; PR close pending, retry the train"; return 1
+          close_pending "$pr" "$oid"; return 1
         fi
         result_for "$pr" 0 "merged #$pr: $oid (found already merged)"
         if retarget_children "$branch"; then cleanup_branch "$branch" "$head"
@@ -231,7 +239,7 @@ PY
         echo "cannot confirm pushed commit $oid; receipt retained for recovery"; return 1
       fi
       if ! python3 "$here/train_landing.py" close "$pr" "$head" "$default" "$gh"; then
-        echo "landed #$pr as $oid; PR close pending, retry the train"; return 1
+        close_pending "$pr" "$oid"; return 1
       fi
       result_for "$pr" 0 "merged #$pr: $oid" "$record"
       merged=$((merged+1)); expected=$oid

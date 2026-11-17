@@ -7,10 +7,14 @@ from pathlib import Path
 import kanzo_client as kanzo
 
 
-def record(directory, repo, sha, log, tests):
+def record(directory, repo, sha, log, tests, full_check_required=False):
     health = Path(directory)
     marker = health / 'main-red'
-    old = json.loads(marker.read_text()) if marker.exists() else {}
+    try:
+        old = json.loads(marker.read_text()) if marker.exists() else {}
+    except (ValueError, OSError):
+        old = {}
+        full_check_required = True
     try:
         name = subprocess.check_output(['gh', 'repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], text=True).strip().split('/')[-1]
     except (OSError, subprocess.CalledProcessError):
@@ -18,7 +22,8 @@ def record(directory, repo, sha, log, tests):
     title = f'Main is red: {name}'
     card = old.get('card', f'main-red:{Path(repo).name}')
     tests = sorted(set(old.get('tests', [])) | set(tests))
-    data = dict(card=card, sha=sha, log=log, tests=tests)
+    data = dict(card=card, sha=sha, log=log, tests=tests,
+                full_check_required=full_check_required or old.get('full_check_required', False))
     def save():
         temporary = marker.with_suffix('.tmp')
         temporary.write_text(json.dumps(data)+'\n')
@@ -29,6 +34,8 @@ def record(directory, repo, sha, log, tests):
         kanzo.connect()
         existing = next((t for t in kanzo.tasks().values() if t['title'] == title), None)
         body = f'Main red at {sha}. Log: {log}\n'+'\n'.join(tests)
+        if data['full_check_required']:
+            body += '\nDiagnosis unavailable or incomplete; a fresh verified full gate is required.'
         if existing:
             card = existing['key']
             kanzo.update(card, description=body, status='todo')
@@ -42,4 +49,7 @@ def record(directory, repo, sha, log, tests):
 
 
 if __name__ == '__main__':
-    record(*sys.argv[1:5], Path(sys.argv[5]).read_text().splitlines())
+    if sys.argv[5] == '--full-check-required':
+        record(*sys.argv[1:5], [], full_check_required=True)
+    else:
+        record(*sys.argv[1:5], Path(sys.argv[5]).read_text().splitlines())
