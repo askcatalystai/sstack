@@ -2017,14 +2017,41 @@ for infra_code in 124 137; do
     run_train
     "$here/sid-merge.sh" --retry --no-wait 11 > "$T/retry-out" 2>&1
     ok "$stage second infrastructure leaves explicit retry available" "$?" 0
+    cp "$q/queue/11.req" "$T/surviving.req"
     run_train
     queue_pr 11; ok "$stage third infrastructure refuses same head" "$?" 1
     grep -q 'push a new commit.*--retry-infrastructure' "$T/out"; ok "cap explains new commit and override" "$?" 0
     "$here/sid-merge.sh" --retry --no-wait 11 > "$T/retry-out" 2>&1
     ok "ordinary retry cannot bypass infrastructure cap" "$?" 1
+    cp "$q/infrastructure/11" "$T/cap-record"
+    for damaged in empty missing-count nonnumeric directory; do
+      rm -f "$q/infrastructure/11"
+      case "$damaged" in
+        empty) : > "$q/infrastructure/11";;
+        missing-count) cut -d ' ' -f1 "$T/cap-record" > "$q/infrastructure/11";;
+        nonnumeric) sed 's/ 3 / invalid /' "$T/cap-record" > "$q/infrastructure/11";;
+        directory) mkdir "$q/infrastructure/11";;
+      esac
+      "$here/sid-merge.sh" --check 11 > "$T/damaged-out" 2>&1
+      ok "$damaged cap record refuses readiness" "$?" 1
+      grep -q 'unreadable infrastructure record' "$T/damaged-out"
+      ok "$damaged cap record explains refusal" "$?" 0
+      [ "$damaged" != directory ] || rmdir "$q/infrastructure/11"
+    done
+    cp "$T/cap-record" "$q/infrastructure/11"
+    cp "$T/surviving.req" "$q/queue/11.req"
+    queue_pr 11; ok "surviving request cannot bypass cap on requeue" "$?" 1
+    run_train
+    grep -q 'infrastructure cap' "$q/result/11"
+    ok "train refuses surviving capped request before gating" "$?" 0
+    cp "$T/surviving.req" "$q/queue/11.req"
     "$here/sid-merge.sh" --retry-infrastructure --no-wait 11 > "$T/retry-out" 2>&1
     ok "explicit infrastructure override queues capped head" "$?" 0
     run_train
+    grep -q -- 'infrastructure override: --retry-infrastructure' "$q/result/11"
+    ok "override is visible in terminal train result" "$?" 0
+    tail -n 1 "$q/history.tsv" | grep -q -- '--retry-infrastructure'
+    ok "override is visible in train history" "$?" 0
     queue_pr 11; ok "override does not erase cap" "$?" 1
     git checkout -q work11; echo new > new; git add new; git commit -qm new-head
     git push -q origin work11; record_pr 11; git checkout -q main
@@ -2055,6 +2082,16 @@ for infra_code in 124 137; do
       ) > "$T/gate-out" 2>&1
       expected=infrastructure; [ "$evidence" != populated ] || expected=failed
       ok "$stage exit $infra_code with $evidence identities" "$(cat "$T/outcome")" "1 $expected"
+      if [ "$evidence" = populated ] && [ "$stage" = main ]; then
+        python3 - "$health/main-red" <<'P'
+import json,sys
+assert json.load(open(sys.argv[1]))['tests'] == ['test-a::old%20case']
+P
+        ok "main exit $infra_code with identities records diagnosed main-red tests" "$?" 0
+      elif [ "$evidence" = populated ] && [ "$stage" = red-fix ]; then
+        grep -q 'producer wrote no execution receipts; no forgiveness' .git/sid-gate/logs/interrupt.log
+        ok "red-fix exit $infra_code with identities reaches execution receipt validation" "$?" 0
+      fi
       if [ "$evidence" = populated ] && { [ "$stage" = candidate ] || [ "$stage" = retry ]; }; then
         queue_pr 11; run_train
         queue_pr 11; ok "$stage populated interruption requires explicit retry" "$?" 1
@@ -2064,7 +2101,7 @@ for infra_code in 124 137; do
         "$here/sid-merge.sh" --retry-infrastructure --retry --no-wait 11 > "$T/retry-out" 2>&1
         ok "$stage populated interruption spends retry despite infrastructure override" "$?" 1
         grep -q 'running retry receipts on .* alone' .git/sid-gate/logs/train-*.log
-        ok "$stage populated interruption reaches main diagnosis" "$?" 0
+        ok "$stage exit $infra_code with identities runs main-only diagnosis" "$?" 0
       fi
     done
   done

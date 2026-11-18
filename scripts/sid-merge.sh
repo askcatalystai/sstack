@@ -34,27 +34,38 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ready
 dependencies_ready || exit 1
 main_ready || exit 4
+flock 8
+retry_allowed || exit 1
 if [ "$check" = true ]; then
-  retry_allowed || exit 1
   echo "ready: #$pr ${head:0:8}"
   exit 0
 fi
-flock 8
 queued_head=
 if [ -f "$train/queue/$pr.req" ]; then
   queued_head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || exit 1
 fi
 if [ ! -f "$train/queue/$pr.req" ] || { [ ! -f "$train/active/$pr" ] && [ "$queued_head" != "$head" ]; }; then
-  retry_allowed || exit 1
   rm -f "$train/result/$pr" "$train/queue/$pr.merge"
-  python3 - "$train/queue/$pr.req" "$head" <<'PY'
+  python3 - "$train/queue/$pr.req" "$head" "$retry_infrastructure" <<'PY'
 import json, os, sys, time
-path, head = sys.argv[1:]
+path, head, override = sys.argv[1:]
 with open(path+'.tmp', 'w') as f:
-    json.dump(dict(head=head, queued=time.time_ns()), f)
+    json.dump(dict(head=head, queued=time.time_ns(), retry_infrastructure=override == "true"), f)
 os.replace(path+'.tmp', path)
 PY
   [ "$?" = 0 ] || { echo "could not queue #$pr"; exit 1; }
+elif [ "$retry_infrastructure" = true ]; then
+  python3 - "$train/queue/$pr.req" <<'PY_OVERRIDE'
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    request = json.load(f)
+request['retry_infrastructure'] = True
+with open(path+'.tmp', 'w') as f:
+    json.dump(request, f)
+os.replace(path+'.tmp', path)
+PY_OVERRIDE
+  [ "$?" = 0 ] || exit 1
 fi
 flock -u 8
 start_runner

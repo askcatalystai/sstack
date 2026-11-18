@@ -141,10 +141,13 @@ gate_tree() {
         if gate_infrastructure "$rc" "$log.red-fix.identities"; then
           gate_outcome=infrastructure; new_failures="infrastructure: main-red verification interrupted (exit $rc); no forgiveness"
         fi
-        [ ! -s "$log.red-again" ] || rc=1
-        python3 "${gate_worker%/*}/gate_failures.py" check "$log.red-fix.identities" "$rc" >> "$log" 2>&1 || rc=1
-        [ ! -s "$log.red-fix.identities" ] || rc=1
-        python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests" "$log.red-fix.executions.jsonl" >> "$log" 2>&1 || rc=1
+        if python3 "${gate_worker%/*}/gate_failures.py" check "$log.red-fix.identities" "$rc" >> "$log" 2>&1; then
+          [ ! -s "$log.red-again" ] || rc=1
+          [ ! -s "$log.red-fix.identities" ] || rc=1
+          python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests" "$log.red-fix.executions.jsonl" >> "$log" 2>&1 || rc=1
+        else
+          rc=1
+        fi
       fi
     else
       rc=1
