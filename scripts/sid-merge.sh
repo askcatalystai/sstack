@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# sid-merge [--check] [--retry] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
+# sid-merge [--check] [--retry] [--retry-infrastructure] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
 # --check stops at readiness and dependency admission; --cancel withdraws a request not yet gating.
 # --retry sends a commit that already failed the gate through once more; a second failure needs a new commit.
+# --retry-infrastructure explicitly bypasses the cap of three infrastructure outcomes per head.
 # Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
-# Exit: 0 merged/ready/queued/cancelled, 1 not ready, gate failed or infrastructure (plain requeue allowed for infrastructure), 3 conflicts, 4 main red.
+# Exit: 0 merged/ready/queued/cancelled, 1 not ready, gate failed or infrastructure (infrastructure allows plain requeue below the cap), 3 conflicts, 4 main red.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
 source "$here/sid-merge-lib.sh"
-check=false; retry=false; no_wait=false; cancel=false
+check=false; retry=false; retry_infrastructure=false; no_wait=false; cancel=false
 while [[ ${1:-} == --* ]]; do
-  case "$1" in --check) check=true;; --retry) retry=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
+  case "$1" in --check) check=true;; --retry) retry=true;; --retry-infrastructure) retry_infrastructure=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
   shift
 done
-pr=${1:?usage: sid-merge [--check] [--retry] [--no-wait] [--cancel] <pr>}
+pr=${1:?usage: sid-merge [--check] [--retry] [--retry-infrastructure] [--no-wait] [--cancel] <pr>}
 [[ $pr =~ ^[0-9]+$ ]] || { echo 'PR must be a number'; exit 1; }
 gate_repo || exit 1
 cd "$repo" || exit 1
@@ -33,27 +34,38 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ready
 dependencies_ready || exit 1
 main_ready || exit 4
+flock 8
+retry_allowed || exit 1
 if [ "$check" = true ]; then
-  retry_allowed || exit 1
   echo "ready: #$pr ${head:0:8}"
   exit 0
 fi
-flock 8
 queued_head=
 if [ -f "$train/queue/$pr.req" ]; then
   queued_head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || exit 1
 fi
 if [ ! -f "$train/queue/$pr.req" ] || { [ ! -f "$train/active/$pr" ] && [ "$queued_head" != "$head" ]; }; then
-  retry_allowed || exit 1
   rm -f "$train/result/$pr" "$train/queue/$pr.merge"
-  python3 - "$train/queue/$pr.req" "$head" <<'PY'
+  python3 - "$train/queue/$pr.req" "$head" "$retry_infrastructure" <<'PY'
 import json, os, sys, time
-path, head = sys.argv[1:]
+path, head, override = sys.argv[1:]
 with open(path+'.tmp', 'w') as f:
-    json.dump(dict(head=head, queued=time.time_ns()), f)
+    json.dump(dict(head=head, queued=time.time_ns(), retry_infrastructure=override == "true"), f)
 os.replace(path+'.tmp', path)
 PY
   [ "$?" = 0 ] || { echo "could not queue #$pr"; exit 1; }
+elif [ "$retry_infrastructure" = true ]; then
+  python3 - "$train/queue/$pr.req" <<'PY_OVERRIDE'
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    request = json.load(f)
+request['retry_infrastructure'] = True
+with open(path+'.tmp', 'w') as f:
+    json.dump(request, f)
+os.replace(path+'.tmp', path)
+PY_OVERRIDE
+  [ "$?" = 0 ] || exit 1
 fi
 flock -u 8
 start_runner

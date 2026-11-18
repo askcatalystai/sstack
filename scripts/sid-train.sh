@@ -43,10 +43,13 @@ trap 'exit 1' TERM INT
 result_for() {
   local pr=$1 rc=$2; shift 2
   flock 8
+  if [ -f "$train/queue/$pr.req" ] && python3 -c 'import json,sys;sys.exit(json.load(open(sys.argv[1])).get("retry_infrastructure") is not True)' "$train/queue/$pr.req"; then
+    set -- "$@" 'infrastructure override: --retry-infrastructure'
+  fi
   printf '%s\n' "$rc" "$@" > "$train/result/$pr.tmp"
   mv "$train/result/$pr.tmp" "$train/result/$pr"
   rm -f "$train/queue/$pr.req" "$train/queue/$pr.merge" "$train/active/$pr"
-  [ "$rc" != 0 ] || rm -f "$train/failed/$pr"
+  [ "$rc" != 0 ] || rm -f "$train/failed/$pr" "$train/infrastructure/$pr"
   flock -u 8
 }
 # Return a terminal caller result while retaining the durable close request.
@@ -80,7 +83,7 @@ new_id() {
   echo "$id" > "$train/sequence"
   started=$(date -u +%FT%TZ); lane=
 }
-history() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$started" "$(date -u +%FT%TZ)" "$members" "$lane" "$1" >> "$train/history.tsv"; }
+history() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$started" "$(date -u +%FT%TZ)" "$members" "$lane" "$1${infrastructure_override:+; --retry-infrastructure}" >> "$train/history.tsv"; }
 # Save a fresh readiness snapshot; any failed check stays fail-closed.
 validate() (
   local pr=$1 queued_head=$2
@@ -90,6 +93,14 @@ validate() (
   main_ready || exit 4
   [ "$head" = "$queued_head" ] || { echo "#$pr head changed since queueing; run sid-merge again"; exit 1; }
   [ "$base" = "$default" ] || { echo "#$pr's base just changed to $base; run sid-merge again"; exit 1; }
+  (
+    flock 8
+    retry=true
+    retry_infrastructure=$(python3 -c 'import json,sys;print(str(json.load(open(sys.argv[1])).get("retry_infrastructure",False)).lower())' "$train/queue/$pr.req") || exit 1
+    retry_allowed; rc=$?
+    flock -u 8
+    exit "$rc"
+  ) || exit 1
   cp "$tmp/pr.json" "$train/active/$pr.json"
 )
 # The train's gate covers main when the landed tree is the gated one; record that so health doesn't run it again.
@@ -104,13 +115,20 @@ stamp_main() {
 }
 # One more failure of this commit on the record; sid-merge reads it before queueing the commit again.
 note_failure() {
-  local pr=$1 head failed_head failures=0
-  head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || return
-  if [ -f "$train/failed/$pr" ]; then
-    read -r failed_head failures _ < "$train/failed/$pr"
-    [ "$failed_head" = "$head" ] || failures=0
+  local pr=$1 kind=${2:-failed} head failed_head failures=0 rc
+  flock 8
+  head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || { flock -u 8; return 1; }
+  if [ -e "$train/$kind/$pr" ]; then
+    if ! read -r failed_head failures _ < "$train/$kind/$pr" || ! [[ ${failures:-} =~ ^[0-9]{1,9}$ ]]; then
+      failures=3
+    elif [ "$failed_head" != "$head" ]; then failures=0
+    fi
   fi
-  printf '%s %s %s\n' "$head" "$((failures+1))" "$log" > "$train/failed/$pr"
+  printf '%s %s %s\n' "$head" "$((10#$failures+1))" "$log" > "$train/$kind/$pr.tmp" &&
+    mv "$train/$kind/$pr.tmp" "$train/$kind/$pr"
+  rc=$?
+  flock -u 8
+  return "$rc"
 }
 run_train() {
   [ "$#" = 1 ] || { echo "serial train requires exactly one PR"; return 1; }
@@ -118,6 +136,7 @@ run_train() {
   local -a candidates=("$@") accepted=() remaining=()
   local -A trees=()
   local pr head branch out tree combined synthetic rc record oid expected parent member_tree trailers message title body mode_error noted
+  local infrastructure_override=
   local id started lane main log members digest gate_outcome flaky opaque_flaky known new_failures attempt merged retry needs_rebuild
   for attempt in 1 2 3; do
     [ "${#candidates[@]}" -gt 0 ] || return 0
@@ -133,6 +152,7 @@ run_train() {
     main=$(git rev-parse "origin/$default"); combined=$main; accepted=(); trees=()
     for pr in "${candidates[@]}"; do
       head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req")
+      infrastructure_override=$(python3 -c 'import json,sys;print("used" if json.load(open(sys.argv[1])).get("retry_infrastructure") is True else "")' "$train/queue/$pr.req")
       # Check identity before readiness; only the queued head can be recovered or gated.
       if ! gh pr view "$pr" --repo "$gh" --json state,isDraft,baseRefName,headRefOid,headRefName,mergeCommit > "$train/active/$pr.json"; then result_for "$pr" 1 "could not read #$pr"; continue; fi
       # Recover a successful merge whose runner died before publishing its result.
@@ -190,6 +210,7 @@ PY
           fi
         fi
         if [ "$gate_outcome" = infrastructure ]; then
+          note_failure "$pr" infrastructure
           rc=1; message=$(printf 'gate infrastructure failure: %s\n%s\n' "$log" "$new_failures"; tail -n 25 "$log")
         elif [ "$rc" != 4 ]; then
           note_failure "$pr"

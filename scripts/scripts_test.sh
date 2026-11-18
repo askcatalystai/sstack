@@ -218,17 +218,22 @@ E
   fi
   return "$bad"
 }
-if [ -n "${SID_RERUN:-}" ]; then
-  if [ -f "$T/infra-retry" ]; then
-    : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"; : > "$SID_EXECUTION_RECEIPTS_OUT"; exit 124
+stage=${SID_FAILURE_IDENTITIES_OUT##*.log.}; stage=${stage%.identities}
+if [ -f "$T/infra-$stage" ]; then
+  : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"
+  [ -z "${SID_EXECUTION_RECEIPTS_OUT:-}" ] || : > "$SID_EXECUTION_RECEIPTS_OUT"
+  if [ -f "$T/infra-identities" ]; then
+    echo 'test-a::old%20case' > "$SID_FAILURE_IDENTITIES_OUT"
+    echo test-a > "$SID_FAILURES_OUT"
   fi
+  [ ! -f "$T/infra-missing" ] || rm "$SID_FAILURE_IDENTITIES_OUT"
+  exit "$(cat "$T/infra-code" 2>/dev/null || echo 124)"
+fi
+if [ -n "${SID_RERUN:-}" ]; then
   if [ -f "$T/vacuous-retry" ]; then
     : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"; exit 0
   fi
   echo rerun >> "$T/reruns"; run_tests $(cat "$SID_RERUN"); exit
-fi
-if [ -f "$T/infra-candidate" ]; then
-  : > "$SID_FAILURE_IDENTITIES_OUT"; : > "$SID_FAILURES_OUT"; exit 124
 fi
 echo gate >> "$T/gates"
 git write-tree >> "$T/gated-trees"
@@ -1074,7 +1079,7 @@ for protocol in opaque opaque-package different-case same-case mixed-opaque miss
   # All retry receipts deliberately remain whole-file, even for safe known identities.
   echo test-shared >> "$SID_FAILURES_OUT"
   if [ -f "$T/infra-populated" ] && [ "$stage" = candidate ]; then
-    echo test-shared::old%20case >> "$SID_FAILURE_IDENTITIES_OUT"; exit 124
+    echo test-shared::new%20case >> "$SID_FAILURE_IDENTITIES_OUT"; exit 124
   fi
   if [ -f "$T/infra-main" ] && [ "$stage" = main ]; then
     : > "$SID_FAILURE_IDENTITIES_OUT"; exit 124
@@ -1102,7 +1107,7 @@ G
     missing-retry) touch "$T/no-retry-identities";;
     empty-sidecar) touch "$T/empty-identities";;
     infrastructure) touch "$T/infra-main";;
-    infrastructure-populated) touch "$T/infra-populated";;
+    infrastructure-populated) candidate=new; touch "$T/infra-populated";;
     unsupported-green) touch "$T/no-identities" "$T/unsupported-green";;
   esac
   printf '%s\n' "$baseline" > test-shared
@@ -1129,6 +1134,7 @@ done
 setup_train new-test-file
 add_pr 11 test-new fail; queue_pr 11; run_train
 ok "a failing test the PR adds can't pass as missing on main" "$(code 11)" 1
+[ ! -f "$health/main-red" ]; ok "missing added test does not mark main red" "$?" 0
 setup_train unreported
 add_pr 11 test-a fail
 sed -i 's|^run_tests \$(ls.*|run_tests $(ls \| grep "^test-") \|\| { : > "$SID_FAILURES_OUT"; exit 1; }|' .sidstack/gate.sh; git add -A; git commit -qm quiet; git push -q origin main
@@ -1998,17 +2004,106 @@ for receipt in missing empty; do
   ok "$receipt execution proof failure is explained" "$?" 0
   grep -Eq 'Errno|Traceback' "$q/result/11"; ok "$receipt proof has no filesystem traceback" "$?" 1
 done
-for stage in candidate retry; do
-  setup_train "infrastructure-$stage"
-  add_pr 11 test-a casefail; touch "$T/infra-$stage"; queue_pr 11; run_train
-  ok "$stage infrastructure uses compatible failure exit" "$(code 11)" 1
-  grep -q 'infrastructure' "$q/result/11"; ok "$stage timeout is reported as infrastructure" "$?" 0
-  [ ! -f "$q/failed/11" ]; ok "$stage timeout does not charge a failed-head retry" "$?" 0
-  [ ! -f "$T/merge-calls" ]; ok "$stage timeout never lands" "$?" 0
-  queue_pr 11; ok "$stage timeout permits a plain requeue" "$?" 0
-  "$here/sid-merge.sh" --retry --no-wait 11 > "$T/retry-out" 2>&1
-  ok "$stage timeout also leaves explicit retry available" "$?" 0
-  run_train
-  [ ! -f "$q/failed/11" ]; ok "$stage repeated infrastructure still does not charge retries" "$?" 0
+for infra_code in 124 137; do
+  for stage in candidate retry; do
+    setup_train "infrastructure-$stage-$infra_code"
+    add_pr 11 test-a casefail; touch "$T/infra-$stage"; echo "$infra_code" > "$T/infra-code"
+    queue_pr 11; run_train
+    ok "$stage exit $infra_code uses compatible failure exit" "$(code 11)" 1
+    grep -q 'gate infrastructure failure' "$q/result/11"; ok "$stage exit $infra_code is infrastructure" "$?" 0
+    [ ! -f "$q/failed/11" ]; ok "$stage infrastructure does not charge a retry" "$?" 0
+    [ ! -f "$T/merge-calls" ]; ok "$stage infrastructure never lands" "$?" 0
+    queue_pr 11; ok "$stage infrastructure permits a plain requeue" "$?" 0
+    run_train
+    "$here/sid-merge.sh" --retry --no-wait 11 > "$T/retry-out" 2>&1
+    ok "$stage second infrastructure leaves explicit retry available" "$?" 0
+    cp "$q/queue/11.req" "$T/surviving.req"
+    run_train
+    queue_pr 11; ok "$stage third infrastructure refuses same head" "$?" 1
+    grep -q 'push a new commit.*--retry-infrastructure' "$T/out"; ok "cap explains new commit and override" "$?" 0
+    "$here/sid-merge.sh" --retry --no-wait 11 > "$T/retry-out" 2>&1
+    ok "ordinary retry cannot bypass infrastructure cap" "$?" 1
+    cp "$q/infrastructure/11" "$T/cap-record"
+    for damaged in empty missing-count nonnumeric directory; do
+      rm -f "$q/infrastructure/11"
+      case "$damaged" in
+        empty) : > "$q/infrastructure/11";;
+        missing-count) cut -d ' ' -f1 "$T/cap-record" > "$q/infrastructure/11";;
+        nonnumeric) sed 's/ 3 / invalid /' "$T/cap-record" > "$q/infrastructure/11";;
+        directory) mkdir "$q/infrastructure/11";;
+      esac
+      "$here/sid-merge.sh" --check 11 > "$T/damaged-out" 2>&1
+      ok "$damaged cap record refuses readiness" "$?" 1
+      grep -q 'unreadable infrastructure record' "$T/damaged-out"
+      ok "$damaged cap record explains refusal" "$?" 0
+      [ "$damaged" != directory ] || rmdir "$q/infrastructure/11"
+    done
+    cp "$T/cap-record" "$q/infrastructure/11"
+    cp "$T/surviving.req" "$q/queue/11.req"
+    queue_pr 11; ok "surviving request cannot bypass cap on requeue" "$?" 1
+    run_train
+    grep -q 'infrastructure cap' "$q/result/11"
+    ok "train refuses surviving capped request before gating" "$?" 0
+    cp "$T/surviving.req" "$q/queue/11.req"
+    "$here/sid-merge.sh" --retry-infrastructure --no-wait 11 > "$T/retry-out" 2>&1
+    ok "explicit infrastructure override queues capped head" "$?" 0
+    run_train
+    grep -q -- 'infrastructure override: --retry-infrastructure' "$q/result/11"
+    ok "override is visible in terminal train result" "$?" 0
+    tail -n 1 "$q/history.tsv" | grep -q -- '--retry-infrastructure'
+    ok "override is visible in train history" "$?" 0
+    queue_pr 11; ok "override does not erase cap" "$?" 1
+    git checkout -q work11; echo new > new; git add new; git commit -qm new-head
+    git push -q origin work11; record_pr 11; git checkout -q main
+    queue_pr 11; ok "new head is accepted after infrastructure cap" "$?" 0
+    run_train
+    queue_pr 11; ok "new head gets its own infrastructure budget" "$?" 0
+    "$here/sid-merge.sh" --cancel 11 >/dev/null
+  done
+  for stage in candidate retry main red-fix; do
+    for evidence in empty missing populated; do
+      setup_train "interrupted-$stage-$infra_code-$evidence"
+      add_pr 11 test-a casefail
+      if [ "$stage" = red-fix ]; then
+        git checkout -q work11; echo fixed > test-a; git add test-a; git commit -qm fix
+        git push -q origin work11; record_pr 11; git checkout -q main
+        mkdir -p "$health"
+        printf '{"tests":["test-a::old%%20case"]}\n' > "$health/main-red"
+      fi
+      touch "$T/infra-$stage"; echo "$infra_code" > "$T/infra-code"
+      [ "$evidence" != populated ] || touch "$T/infra-identities"
+      [ "$evidence" != missing ] || touch "$T/infra-missing"
+      # Exercise the library's public outcome; main/red-fix need no admission fixture.
+      (
+        source "$here/sid-gate-lib.sh"; gate_repo
+        exec 9>"$gate/lock"; gate_lock
+        gate_tree "$(git rev-parse origin/main)" "$(git rev-parse 'work11^{tree}')" "$gate/logs/interrupt.log" interrupted
+        echo "$? $gate_outcome" > "$T/outcome"
+      ) > "$T/gate-out" 2>&1
+      expected=infrastructure; [ "$evidence" != populated ] || expected=failed
+      ok "$stage exit $infra_code with $evidence identities" "$(cat "$T/outcome")" "1 $expected"
+      if [ "$evidence" = populated ] && [ "$stage" = main ]; then
+        python3 - "$health/main-red" <<'P'
+import json,sys
+assert json.load(open(sys.argv[1]))['tests'] == ['test-a::old%20case']
+P
+        ok "main exit $infra_code with identities records diagnosed main-red tests" "$?" 0
+      elif [ "$evidence" = populated ] && [ "$stage" = red-fix ]; then
+        grep -q 'producer wrote no execution receipts; no forgiveness' .git/sid-gate/logs/interrupt.log
+        ok "red-fix exit $infra_code with identities reaches execution receipt validation" "$?" 0
+      fi
+      if [ "$evidence" = populated ] && { [ "$stage" = candidate ] || [ "$stage" = retry ]; }; then
+        queue_pr 11; run_train
+        queue_pr 11; ok "$stage populated interruption requires explicit retry" "$?" 1
+        "$here/sid-merge.sh" --retry --no-wait 11 > "$T/retry-out" 2>&1
+        ok "$stage populated interruption allows one retry" "$?" 0
+        run_train
+        "$here/sid-merge.sh" --retry-infrastructure --retry --no-wait 11 > "$T/retry-out" 2>&1
+        ok "$stage populated interruption spends retry despite infrastructure override" "$?" 1
+        grep -q 'running retry receipts on .* alone' .git/sid-gate/logs/train-*.log
+        ok "$stage exit $infra_code with identities runs main-only diagnosis" "$?" 0
+      fi
+    done
+  done
 done
 exit $fail
