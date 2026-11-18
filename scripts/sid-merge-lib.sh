@@ -27,6 +27,13 @@ ready() {
 # A commit that failed the gate goes back once, with --retry; after a second failure only a new commit does.
 retry_allowed() {
   local failed_head failures log
+  if [ -f "$train/infrastructure/$pr" ]; then
+    read -r failed_head failures log < "$train/infrastructure/$pr"
+    if [ "$failed_head" = "$head" ] && [ "$failures" -ge 3 ] && [ "${retry_infrastructure:-false}" != true ]; then
+      echo "${head:0:8} has reached the infrastructure cap (3 per head): read $log; push a new commit or use sid-merge --retry-infrastructure $pr"
+      return 1
+    fi
+  fi
   [ -f "$train/failed/$pr" ] && read -r failed_head failures log < "$train/failed/$pr" || return 0
   [ "$failed_head" = "$head" ] || return 0
   if [ "$failures" -ge 2 ]; then

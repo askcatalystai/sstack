@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# sid-merge [--check] [--retry] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
+# sid-merge [--check] [--retry] [--retry-infrastructure] [--no-wait] [--cancel] <pr>: check readiness, then join the repo's merge train.
 # --check stops at readiness and dependency admission; --cancel withdraws a request not yet gating.
 # --retry sends a commit that already failed the gate through once more; a second failure needs a new commit.
+# --retry-infrastructure explicitly bypasses the cap of three infrastructure outcomes per head.
 # Requests survive their caller. SID_TRAIN_INLINE=1 queues only; tests run the train themselves.
-# Exit: 0 merged/ready/queued/cancelled, 1 not ready, gate failed or infrastructure (plain requeue allowed for infrastructure), 3 conflicts, 4 main red.
+# Exit: 0 merged/ready/queued/cancelled, 1 not ready, gate failed or infrastructure (infrastructure allows plain requeue below the cap), 3 conflicts, 4 main red.
 set -u
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 source "$here/sid-gate-lib.sh"
 source "$here/sid-merge-lib.sh"
-check=false; retry=false; no_wait=false; cancel=false
+check=false; retry=false; retry_infrastructure=false; no_wait=false; cancel=false
 while [[ ${1:-} == --* ]]; do
-  case "$1" in --check) check=true;; --retry) retry=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
+  case "$1" in --check) check=true;; --retry) retry=true;; --retry-infrastructure) retry_infrastructure=true;; --no-wait) no_wait=true;; --cancel) cancel=true;; *) echo "unknown option: $1"; exit 1;; esac
   shift
 done
-pr=${1:?usage: sid-merge [--check] [--retry] [--no-wait] [--cancel] <pr>}
+pr=${1:?usage: sid-merge [--check] [--retry] [--retry-infrastructure] [--no-wait] [--cancel] <pr>}
 [[ $pr =~ ^[0-9]+$ ]] || { echo 'PR must be a number'; exit 1; }
 gate_repo || exit 1
 cd "$repo" || exit 1

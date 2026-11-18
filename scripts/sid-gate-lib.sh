@@ -24,7 +24,7 @@ gate_repo() {
   default=$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
   default=${default#origin/}; default=${default:-main}
   verify=$repo-wt/verify; gate=$common/sid-gate; train=$gate/train
-  mkdir -p "$gate/logs" "$gate/health" "$train/queue" "$train/result" "$train/active" "$train/failed"
+  mkdir -p "$gate/logs" "$gate/health" "$train/queue" "$train/result" "$train/active" "$train/failed" "$train/infrastructure"
 }
 # Every flock acquisition must reconcile a lease left by a killed holder.
 gate_lock() {
@@ -41,7 +41,8 @@ run_gate() {
   wait "$worker" || rc=$?
   # A killed supervisor cannot vouch for body shutdown. Stop before tree cleanup;
   # the lease holder retains the gate lock until cleanup and expiry.
-  if [ "$rc" -ge 128 ]; then exit "$rc"; fi
+  # A completed body may return 137 after the supervisor has retired its lease.
+  if [ "$rc" -ge 128 ] && { [ "$rc" != 137 ] || [ -e "$gate/lease.json" ]; }; then exit "$rc"; fi
   return "$rc"
 }
 # Each invocation gets its own log and fresh comparison sidecar. Never initialize
@@ -53,7 +54,12 @@ gate_attempt() {
   : > "$part"
   run_gate "$part" SID_FAILURE_IDENTITIES_OUT="$log.$tag.identities" SID_EXECUTION_RECEIPTS_OUT= "$@"; rc=$?
   cat "$part" >> "$log"
+  # Recorded failures still need retry and baseline diagnosis after interruption.
+  if { [ "$rc" = 124 ] || [ "$rc" = 137 ]; } && [ -s "$log.$tag.identities" ]; then rc=1; fi
   return "$rc"
+}
+gate_infrastructure() {
+  { [ "$1" = 124 ] || [ "$1" = 137 ]; } && [ ! -s "$2" ]
 }
 gate_tree() {
   local main=$1 tree=$2 log=$3 description=$4 rc failed=$3.failed again=$3.again base=$3.main
@@ -78,9 +84,9 @@ gate_tree() {
     }
   gate_attempt "$log" candidate SID_FAILURES_OUT="$failed"; rc=$?
   local candidate_proof=false
-  if [ "$rc" = 124 ]; then
-    gate_outcome=infrastructure; rc=1
-    new_failures='infrastructure: candidate timed out (exit 124); no forgiveness'
+  if gate_infrastructure "$rc" "$log.candidate.identities"; then
+    gate_outcome=infrastructure
+    new_failures="infrastructure: candidate interrupted (exit $rc); no forgiveness"; rc=1
   elif python3 "${gate_worker%/*}/gate_failures.py" check "$log.candidate.identities" "$rc" >> "$log" 2>&1 &&
       { [ "$rc" != 0 ] || [ ! -s "$failed" ]; }; then
     candidate_proof=true
@@ -92,9 +98,9 @@ gate_tree() {
     echo "== gate: running the failed retry receipts again" >> "$log"
     gate_attempt "$log" retry SID_RERUN="$failed" SID_FAILURES_OUT="$again" SID_EXECUTION_RECEIPTS_OUT="$log.executed-retry"; rc=$?
     local recovered_counts=
-    if [ "$rc" = 124 ]; then
-      gate_outcome=infrastructure; rc=1
-      new_failures='infrastructure: retry timed out (exit 124); no forgiveness'
+    if gate_infrastructure "$rc" "$log.retry.identities"; then
+      gate_outcome=infrastructure
+      new_failures="infrastructure: retry interrupted (exit $rc); no forgiveness"; rc=1
     elif ! python3 "${gate_worker%/*}/gate_failures.py" check "$log.retry.identities" "$rc" >> "$log" 2>&1; then
       rc=1
       new_failures='retry has no valid failure-identity evidence; no forgiveness'
@@ -117,9 +123,9 @@ gate_tree() {
           python3 "${gate_worker%/*}/train_health.py" "$gate/health" "$repo" "$main" "$log" "$log.main.identities"
         fi
       fi
-      if [ "$base_rc" = 124 ]; then
+      if gate_infrastructure "$base_rc" "$log.main.identities"; then
         gate_outcome=infrastructure
-        new_failures='infrastructure: main-only diagnosis timed out (exit 124); no forgiveness'
+        new_failures="infrastructure: main-only diagnosis interrupted (exit $base_rc); no forgiveness"
       fi
       rc=1
     else
@@ -132,8 +138,8 @@ gate_tree() {
     if python3 "${gate_worker%/*}/gate_receipts.py" "$gate/health/main-red" "$log.red-tests"; then
       if [ -s "$log.red-tests" ]; then
         gate_attempt "$log" red-fix SID_RERUN="$log.red-tests" SID_FAILURES_OUT="$log.red-again" SID_EXECUTION_RECEIPTS_OUT="$log.red-fix.executions.jsonl"; rc=$?
-        if [ "$rc" = 124 ]; then
-          gate_outcome=infrastructure; new_failures='infrastructure: main-red verification timed out (exit 124); no forgiveness'
+        if gate_infrastructure "$rc" "$log.red-fix.identities"; then
+          gate_outcome=infrastructure; new_failures="infrastructure: main-red verification interrupted (exit $rc); no forgiveness"
         fi
         [ ! -s "$log.red-again" ] || rc=1
         python3 "${gate_worker%/*}/gate_failures.py" check "$log.red-fix.identities" "$rc" >> "$log" 2>&1 || rc=1

@@ -46,7 +46,7 @@ result_for() {
   printf '%s\n' "$rc" "$@" > "$train/result/$pr.tmp"
   mv "$train/result/$pr.tmp" "$train/result/$pr"
   rm -f "$train/queue/$pr.req" "$train/queue/$pr.merge" "$train/active/$pr"
-  [ "$rc" != 0 ] || rm -f "$train/failed/$pr"
+  [ "$rc" != 0 ] || rm -f "$train/failed/$pr" "$train/infrastructure/$pr"
   flock -u 8
 }
 # Return a terminal caller result while retaining the durable close request.
@@ -104,13 +104,13 @@ stamp_main() {
 }
 # One more failure of this commit on the record; sid-merge reads it before queueing the commit again.
 note_failure() {
-  local pr=$1 head failed_head failures=0
+  local pr=$1 kind=${2:-failed} head failed_head failures=0
   head=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$train/queue/$pr.req") || return
-  if [ -f "$train/failed/$pr" ]; then
-    read -r failed_head failures _ < "$train/failed/$pr"
+  if [ -f "$train/$kind/$pr" ]; then
+    read -r failed_head failures _ < "$train/$kind/$pr"
     [ "$failed_head" = "$head" ] || failures=0
   fi
-  printf '%s %s %s\n' "$head" "$((failures+1))" "$log" > "$train/failed/$pr"
+  printf '%s %s %s\n' "$head" "$((failures+1))" "$log" > "$train/$kind/$pr"
 }
 run_train() {
   [ "$#" = 1 ] || { echo "serial train requires exactly one PR"; return 1; }
@@ -190,6 +190,7 @@ PY
           fi
         fi
         if [ "$gate_outcome" = infrastructure ]; then
+          note_failure "$pr" infrastructure
           rc=1; message=$(printf 'gate infrastructure failure: %s\n%s\n' "$log" "$new_failures"; tail -n 25 "$log")
         elif [ "$rc" != 4 ]; then
           note_failure "$pr"
