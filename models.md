@@ -8,12 +8,12 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 
 - orchestrator: claudeAgent / claude-opus-5-5 / medium
 - claude fallback: claudeAgent_claude_2 / claude-opus-5-5 / medium (only after a usage or rate limit on the orchestrator's instance; same model, never a different one; not set up in T3 as of 2026-11-13: `orchestrator_capabilities` lists `claudeAgent` only)
-- implementer: codex / gpt-6.1-sol / high (logic: server, runtime, data and tests; visible UI goes to the ui builder)
+- implementer: codex / gpt-6.2-sol / high (user 2026-11-24: 6.2 Sol for all workers, 6.2 Astra for review; logic: server, runtime, data and tests; visible UI goes to the ui builder)
 - ui builder: claudeAgent / claude-opus-5-5 / medium (writes everything a user can see, in its own worktree, to the `ui-lead` rules; user 2026-11-13: "yes opus for ui")
-- hardest tasks: codex / gpt-6.1-sol / xhigh
+- hardest tasks: codex / gpt-6.2-sol / xhigh
 - bug pass: opencode / opencode-go/deepseek-v4.1-flash / high (TEMPORARY since 2026-11-17: Cursor Composer hit its weekly usage limit, resets ~2026-11-23; user chose DeepSeek. Risky PRs then take Muse or Sol as the extra family. Restore: cursor / composer-2.5 / fastMode=false)
 - review panel: none (user 2026-11-01: Sol → bug pass → Astra directly; Muse stays on the council)
-- reviewer: codex / gpt-6-astra / medium (after the bug pass, with its report; returns one list; its approval of the head commit is the merge verdict since 2026-11-13; Claude takes the final call, the builder fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
+- reviewer: codex / gpt-6.2-astra / medium (after the bug pass, with its report; returns one list; its approval of the head commit is the merge verdict since 2026-11-13; Claude takes the final call, the builder fixes once; a fix that changes behaviour goes back to Astra, user 2026-11-01)
 - ui lead: claudeAgent / claude-opus-5-5 / medium (the orchestrator: judges all visible UI before other review and does the final test; the ui builder writes it; user 2026-11-01; see the `ui-lead` skill)
 - screenshots: codex / gpt-6.1-terra / medium (low stopped after two shots and posted nothing, 2026-11-01; before and after shots in T3's in-app browser, posted on the Kanzo card; user 2026-11-01)
 - risky review: opencode / opencode-go/deepseek-v4.1-flash / low; cursor / composer-2.5 / fastMode=false (one extra review on risky PRs: auth, payments, data, migrations, `commerce/`, the merge scripts, or a PR that skipped a review step. Pick a family that hasn't reviewed the PR yet. A finding blocks the merge only when every model that reviewed the PR calls it risky; otherwise the orchestrator decides and writes why in `## Review`. Replaces the Codex GitHub bot: no `@codex review`; user 2026-11-13)
@@ -21,11 +21,11 @@ Format: `role: provider / model / effort`. `provider` is the T3 `providerInstanc
 
 ## Panels (one subagent per entry)
 
-- council: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; codex / gpt-6-astra / medium; codex / gpt-6.1-terra / high; cursor / composer-2.5 / fastMode=false; opencode / opencode-go/muse-spark-1.3-contributor / high; opencode / opencode-go/deepseek-v4.1-flash / high (seven seats, user 2026-11-01; every seat plans the whole brief, no per-seat categories; the orchestrator synthesises and leads UI and UX itself)
-- council small: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high; cursor / composer-2.5 / fastMode=false (smaller plans, user 2026-11-01)
-- interrogate reviewers: opencode / opencode-go/deepseek-v4.1-flash / low; opencode / opencode-go/muse-spark-1.3-contributor / high; codex / gpt-6.1-sol / high
-- arena runners: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
-- architect runners: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.1-sol / high
+- council: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.2-sol / high; codex / gpt-6.2-astra / medium; codex / gpt-6.1-terra / high; cursor / composer-2.5 / fastMode=false; opencode / opencode-go/muse-spark-1.3-contributor / high; opencode / opencode-go/deepseek-v4.1-flash / high (seven seats, user 2026-11-01; every seat plans the whole brief, no per-seat categories; the orchestrator synthesises and leads UI and UX itself)
+- council small: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.2-sol / high; cursor / composer-2.5 / fastMode=false (smaller plans, user 2026-11-01)
+- interrogate reviewers: opencode / opencode-go/deepseek-v4.1-flash / low; opencode / opencode-go/muse-spark-1.3-contributor / high; codex / gpt-6.2-sol / high
+- arena runners: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.2-sol / high
+- architect runners: claudeAgent / claude-opus-5-5 / medium; codex / gpt-6.2-sol / high
 
 ## Workers
 
